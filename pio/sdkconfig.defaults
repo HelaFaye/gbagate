@@ -1,0 +1,47 @@
+# Applied to every image. Per-image overrides go in sdkconfig.defaults.<env>.
+
+# --- the reason this project needs care -------------------------------------
+# Core 1 runs the link timing and nothing else. Core 0 takes WiFi, BLE, USB and
+# the display. A flash write suspends the instruction cache, so anything the
+# link task touches must live in IRAM.
+CONFIG_FREERTOS_UNICORE=n
+CONFIG_ESP_INT_WDT=y
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=800
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# The link task busy-waits on clock edges by design, so it must not be
+# preempted by the scheduler tick more than necessary.
+CONFIG_FREERTOS_HZ=1000
+
+# Let a flash operation on core 0 continue without stalling core 1's cache.
+# This is the single most important setting here: without it, saving a folder
+# corrupts whatever frame is in flight.
+CONFIG_SPI_FLASH_AUTO_SUSPEND=y
+
+# --- memory -----------------------------------------------------------------
+# S3FH4R2: quad PSRAM, shares the flash bus, leaves GPIO 33..37 free.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+# The 32 KB framebuffer stays in internal SRAM: PSRAM reads go through the
+# cache a flash write suspends, and DMA from PSRAM is slower.
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+
+# --- usb --------------------------------------------------------------------
+CONFIG_TINYUSB_MSC_ENABLED=y
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_CDC_COUNT=1
+
+# --- storage ----------------------------------------------------------------
+CONFIG_WL_SECTOR_SIZE_4096=y
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=64
+# FAT written by desktops uses long names; without LFN the drive shows
+# mangled 8.3 names and rom_catalog cannot match extensions reliably.
+
+# --- size -------------------------------------------------------------------
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

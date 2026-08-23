@@ -1,0 +1,9 @@
+.reference/
+.*/
+*.obj
+*.a
+*.bin
+*.elf
+*.obj
+*.out
+build/

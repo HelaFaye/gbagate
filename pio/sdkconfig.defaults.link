@@ -1,0 +1,5 @@
+# The link image has no storage and no chip databases, so it can drop the
+# filesystem entirely and give the space back to the app partition.
+CONFIG_TINYUSB_MSC_ENABLED=n
+CONFIG_FATFS_LFN_NONE=y
+CONFIG_FATFS_LFN_HEAP=n

@@ -1,0 +1,14 @@
+# ESP32-S3FH4R2: 4 MB flash.
+#
+# app        2 MB   firmware, fonts, chip databases (72 KB of it)
+# storage  1.5 MB   FAT volume exposed over USB, about 6 full 256 KB programs
+#                   or many more once trailing padding is stripped
+#
+# No OTA partition: a single factory app leaves the storage volume as large as
+# possible, and this device is reflashed over USB anyway.
+#
+# Name,     Type, SubType, Offset,  Size,   Flags
+nvs,        data, nvs,     ,        0x6000,
+phy_init,   data, phy,     ,        0x1000,
+factory,    app,  factory, ,        2M,
+storage,    data, fat,     ,        1500K,
