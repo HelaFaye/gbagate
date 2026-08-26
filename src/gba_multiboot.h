@@ -39,10 +39,19 @@ extern "C" {
 #endif
 
 /* EWRAM is 256 KB and the program is loaded at 0x02000000. */
-#define MB_MAX_SIZE   0x40000
 #define MB_LOAD_ADDR  0x02000000
 #define MB_HEADER     0xC0    /* cartridge header, sent in the clear */
-#define MB_MIN_SIZE   0x1A0   /* header plus enough payload to be meaningful */
+
+/*
+ * GBATEK, SWI 25h: "The transfer length (excluding header data) should be a
+ * multiple of 10h, minimum length 100h, max 3FF40h". Both bounds below are
+ * that payload range plus the 0xC0 header, since mb_send() takes a whole-image
+ * size. The floor matters on hardware: the BIOS computes its own word count as
+ * length/4-34h, so a short image is not merely unusual, it is out of the range
+ * the download routine is specified for.
+ */
+#define MB_MIN_SIZE   (MB_HEADER + 0x100)    /* 0x1C0 */
+#define MB_MAX_SIZE   (MB_HEADER + 0x3FF40)  /* 0x40000 */
 
 #define MB_KEY_MULT   0x6F646573u
 #define MB_KEY_XOR    0x43202F2Fu

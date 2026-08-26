@@ -108,15 +108,30 @@ No silicon in a chip. Reader = drive the common pad low, read the rest with
 pull-ups, sample twice ~20 ms apart. Put the 11 lines behind an MCP23017 or a
 74HC165 rather than spending 11 GPIOs.
 
+**This number — the pads — is the wire ID, and it is what slot 5 of the gate
+rotation must carry.** It is not the chip table's index, and the two are not
+interchangeable; assuming they were cost 418 chips their correct identity until
+it was measured. See the wire-ID section below and `AUDIT.md` D7.
+
 ## Build order
 
-1. Host harnesses. Done.
+1. Host harnesses. **Done.**
 2. **GBE+ over TCP** — its chip gate is socket-driven, so a WiFi client proves
-   your chip IDs and UI against a real game with no PHY at all.
-3. **mGBA bridge** — add an SIO driver alongside `GBASIODolphin`, which is
-   already a TCP-based driver bridging to another emulator. Upstream issue
-   #2379 asks for networked link support and has no implementation.
-4. **Real hardware** — only now does the PHY timing matter.
+   your chip IDs and UI against a real game with no PHY at all. *Skipped:
+   overtaken by 3.*
+3. **mGBA bridge. Done, by a different route than planned.** The plan was an
+   SIO driver alongside `GBASIODolphin`, upstream. What actually works is a Lua
+   script inside mGBA plus `qemu/broker.py`, which needs no mGBA patch and no
+   upstream cooperation — and the firmware on the other end runs in QEMU on real
+   Xtensa rather than on a host. An upstream driver is still the tidier long-term
+   answer (issue #2379 asks for it and has no implementation), but it is no
+   longer on the critical path.
+4. **Firmware under QEMU. Done, and it earned its place.** Not in the original
+   plan. It is the tier that first put the gate in front of a real game, and it
+   found a live correctness bug the host suites could not — see `AUDIT.md` D7.
+   `qemu/README.md` covers it.
+5. **Real hardware** — only now does the PHY timing matter. Nothing above
+   removes a single item from that list; QEMU models no peripheral.
 
 ## Still unmeasured
 
@@ -260,10 +275,41 @@ Unmapped IDs are left unmapped rather than guessed. Most of BN6's 185 are above
 id 320 or in ranges the Gregar table leaves blank, so there is nothing to map
 them to.
 
+**The identity column is load-bearing, and nothing ever read it.** Subtract
+it from `mapped` and you get the number of chips whose wire ID is *not* their
+table index: 203 for BN4, 4 for BN5, 2 for BN6 — 418 across the six databases.
+For most of the project's life `gate_app.c` sent `chip_record_t.index` in slot 5
+of the rotation regardless, so those 418 chips announced themselves to the game
+as a different chip than the one on screen. In BN4 that was 71% of everything
+sendable. The builder had measured the divergence honestly and printed it in
+this very table; nothing connected the table to the consumer.
+
+The lesson is not about chip IDs. It is that a fact verified in one module and
+recorded in a document is not thereby true of the module that consumes it — and
+that the failure was invisible precisely because the wrong value was
+structurally plausible. See `AUDIT.md` D7.
+
 `chipdb.{h,c}` reads the blob in place out of flash — no parsing, no copying,
-fixed 16-byte records. `chipdb_slot_for_id()` answers the reader's actual
-question. `chipdb_open()` validates every section offset, because a truncated
-flash write should fail at open rather than surface later as garbage names.
+fixed 16-byte records. `chipdb_slot_for_id()` answers the reader's question —
+pads to record — and `chipdb_id_for_slot()` the gate's, which is the inverse:
+given the record the user picked, the wire ID that names it. They are separate
+calls because they are separate questions, and conflating them was D7.
+`build_chipdb.py` guards both sides of each assignment with a `used` set, so the
+map is injective and the inverse is unambiguous; `test_chipdb` round-trips every
+mapped ID to keep it that way. `chipdb_open()` validates every section offset,
+because a truncated flash write should fail at open rather than surface later as
+garbage names.
+
+Records with no wire ID cannot be sent at all, and the gate now refuses rather
+than substituting a plausible number: roughly 30% of each database, most of them
+chips no physical Battle Chip ever encoded.
+
+```
+python3 tools/check_wire_ids.py --list
+```
+
+reports the map for every database and fails only on a genuinely broken one —
+two wire IDs claiming one record, or a record slot past the table.
 
 ```
 make run-chipdb

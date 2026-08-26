@@ -24,6 +24,7 @@ extern "C" {
 #define CHIPDB_MAGIC   "CHDB"
 #define CHIPDB_VERSION 2
 #define CHIPDB_NO_RECORD 0xFFFFu
+#define CHIPDB_NO_ID     0xFFFFu
 
 typedef enum {
     CHIP_ELEM_NONE = 0, CHIP_ELEM_FIRE, CHIP_ELEM_AQUA,
@@ -88,6 +89,27 @@ const char *chipdb_name(const chipdb_t *db, uint16_t slot);
  * Returns CHIPDB_NO_RECORD when the ID is outside the map or unmapped.
  */
 uint16_t chipdb_slot_for_id(const chipdb_t *db, uint16_t chip_id);
+
+/*
+ * The inverse: given a record slot, the wire ID that resolves to it.
+ *
+ * This is the value the gate must put in slot 5 of the rotation. It is NOT
+ * chip_record_t.index -- that is the chip table's "ID Sort" key, a different
+ * numbering that happens to agree with the wire ID for some chips and not
+ * others, so sending it looks plausible while naming the wrong chip.
+ *
+ * build_chipdb.py assigns each table entry to at most one wire ID (the `used`
+ * set enforces exclusivity), so the map is injective and this inverse is
+ * unambiguous. It is a linear scan of at most max_id + 1 entries, which is a
+ * few hundred, and it runs once when the user slots a chip in -- not on the
+ * link's hot path.
+ *
+ * Returns CHIPDB_NO_ID when no wire ID maps to this slot. That is a real case:
+ * a database carries more records than the reader has IDs for, and those chips
+ * simply cannot be put on the wire. Refusing is correct; sending some other
+ * number is not.
+ */
+uint16_t chipdb_id_for_slot(const chipdb_t *db, uint16_t slot);
 
 /* Convenience: wire ID straight to a record. */
 bool chipdb_get_by_id(const chipdb_t *db, uint16_t chip_id, chip_record_t *out);

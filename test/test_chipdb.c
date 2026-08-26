@@ -122,6 +122,54 @@ int main(int argc, char **argv) {
     }
     check("something mapped", mapped > 200, 1);
 
+    /* The inverse map -- the number the gate actually puts in slot 5. Every
+     * mapped ID must round-trip. That is the correctness check for
+     * chipdb_id_for_slot(), and because each ID lands on a distinct slot it is
+     * also a proof that the builder's map is injective, which is what makes the
+     * inverse well defined in the first place. */
+    printf("wire ID round trip\n");
+    unsigned round_tripped = 0, diverged = 0;
+    for (uint32_t id = 0; id <= db.max_id; id++) {
+        uint16_t slot = chipdb_slot_for_id(&db, (uint16_t)id);
+        if (slot == CHIPDB_NO_RECORD) {
+            continue;
+        }
+        uint16_t back = chipdb_id_for_slot(&db, slot);
+        if (back != id) {
+            printf("  FAIL id %u -> slot %u -> id %u\n", id, slot, back);
+            g_fail++;
+            break;
+        }
+        round_tripped++;
+        if (chipdb_get(&db, slot, &rec) && rec.index != id) {
+            diverged++;   /* what the old gate_app.c would have sent instead */
+        }
+    }
+    check("every mapped ID round trips", round_tripped, mapped);
+    printf("  %u of %u would have gone out as the wrong chip via rec.index\n",
+           diverged, round_tripped);
+
+    /* A record no physical chip can address must say so rather than invent an
+     * ID -- refusing is correct, sending a plausible wrong number is not. */
+    unsigned no_id = 0;
+    for (uint16_t s = 0; s < chipdb_count(&db); s++) {
+        if (chipdb_id_for_slot(&db, s) == CHIPDB_NO_ID) {
+            no_id++;
+        }
+    }
+    printf("  %u of %u records have no wire ID and cannot be sent\n",
+           no_id, chipdb_count(&db));
+    check("round tripped + unsendable == records",
+          round_tripped + no_id, chipdb_count(&db));
+    check("out of range slot has no ID",
+          chipdb_id_for_slot(&db, 60000), CHIPDB_NO_ID);
+    if (is_bn6g) {
+        /* Cross-checks against tools/check_wire_ids.py: it reports bn6g as
+         * 285 mapped of 411 records with 2 diverging. */
+        check("bn6g records with no wire ID", no_id, 411 - 285);
+        check("bn6g IDs rec.index would misname", diverged, 2);
+    }
+
     /* Every record must be readable and self-consistent. */
     for (uint16_t s = 0; s < chipdb_count(&db); s++) {
         if (!chipdb_get(&db, s, &rec) || !chipdb_name(&db, s)) {

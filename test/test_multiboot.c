@@ -110,11 +110,24 @@ static uint32_t sim_xfer(void *ctx, uint32_t w) {
         return 0x00000000u;
 
     case SIM_KEY2: {
-        /* second 0x63D1: hand over the chosen client byte */
+        /*
+         * Second 0x63D1: hand over the chosen client byte, and build our copy
+         * of the session key.
+         *
+         * GBATEK: m = dword(pp,cc,cc,cc), packed least-significant byte first,
+         * where pp is the palette byte the master just sent us as 63pp and the
+         * two absent slaves on a Normal-mode link read back as FFh.
+         *
+         * This is derived from the spec rather than copied from the master's
+         * expression on purpose: a slave that mirrors the master's arithmetic
+         * agrees with it even when the arithmetic is wrong, which makes the
+         * whole round-trip test vacuous for exactly the bugs it should catch.
+         */
         g->state = SIM_KEY3;
-        uint32_t r = ((uint32_t)g->client << 16) | 0x000063D1u;
-        g->m = ((r & 0x00FF0000u) >> 8) + 0xFFFF00D1u;
-        return r;
+        uint32_t pp = w & 0xFFu;
+        g->m = 0xFFFF0000u | ((uint32_t)g->client << 8) | pp;
+        /* Normal mode: high half is the slave's word, low half echoes ours. */
+        return ((uint32_t)g->client << 16) | (w & 0xFFFFu);
     }
 
     case SIM_KEY3:
@@ -124,12 +137,22 @@ static uint32_t sim_xfer(void *ctx, uint32_t w) {
 
     case SIM_LEN: {
         g->payload_words = w;
-        uint32_t h = (uint32_t)g->client + 0x0F;
-        g->f = ((((uint32_t)g->client << 16) & 0x00FF0000u) >> 8);
-        g->f = (g->f + h) | 0xFFFF0000u;
+        /*
+         * GBATEK: f = dword(hh,rr,rr,rr), packed least-significant byte first,
+         * where hh = 11h + client_data[1] + client_data[2] + client_data[3]
+         * and the two absent slaves contribute FFh apiece. hh is a byte-wide
+         * field -- it goes out on the wire as the low half of 64hh -- so it is
+         * masked before packing. rr is the random byte we return below.
+         *
+         * Spelled out in GBATEK's terms rather than reduced, so the mask is
+         * visibly a consequence of the spec and not of the master's code.
+         */
+        uint32_t hh = ((uint32_t)g->client + 0x11u + 0xFFu + 0xFFu) & 0xFFu;
+        uint32_t rr = g->client;
+        g->f = 0xFFFF0000u | (rr << 8) | hh;
         g->state = SIM_DATA;
         g->offset = MB_HEADER;
-        return ((uint32_t)g->client << 16) | 0x00000000u;
+        return rr << 16;
     }
 
     case SIM_DATA: {
@@ -262,9 +285,16 @@ static void test_full_transfer(void) {
     /* The header must have arrived verbatim. */
     check("header intact", memcmp(gba.header, g_rom, MB_HEADER), 0);
 
-    /* And the payload must decrypt to exactly the original bytes. This is the
-     * assertion that actually validates the crypto: a wrong multiplier, xor or
-     * address term all show up right here. */
+    /*
+     * And the payload must decrypt to exactly the original bytes.
+     *
+     * Be precise about what that proves. The slave calls the same
+     * mb_key_next/mb_word_mask/mb_crc_step as the master, so a wrong value for
+     * MB_KEY_MULT or MB_KEY_XOR cancels out and still passes here -- only the
+     * literal pins in test_primitives() catch those. What this does catch is
+     * the two sides *disagreeing*: a mis-stepped key, a mis-tracked offset, or
+     * a handshake word packed differently at each end.
+     */
     check("payload decrypts byte-identically",
           memcmp(gba.ewram + MB_HEADER, g_rom + MB_HEADER, size - MB_HEADER), 0);
 
@@ -277,9 +307,10 @@ static void test_full_transfer(void) {
 static void test_padding(void) {
     printf("unaligned ROM\n");
 
-    /* 0x1A5 is not a multiple of 16, so the tail must be zero padded rather
-     * than reading past the caller's buffer. */
-    const size_t size = 0x1A5;
+    /* 0x1C5 is not a multiple of 16, so the tail must be zero padded rather
+     * than reading past the caller's buffer. (It is also the smallest such
+     * size at or above MB_MIN_SIZE.) */
+    const size_t size = 0x1C5;
     make_rom(size);
 
     sim_gba_t gba;
@@ -298,6 +329,54 @@ static void test_padding(void) {
     }
     check("padding is zeros", nonzero, 0);
     check("padded to 16", (long)(padded % 16), 0);
+}
+
+/*
+ * The client byte is chosen at random by the GBA, so any bug whose trigger is
+ * a property of that byte shows up as an intermittent failure on hardware and
+ * as a pass in any test that happens to pick a friendly value.
+ *
+ * Both the session key and the final checksum word are assembled from it as
+ * packed bytes. hh = 11h+cc+FFh+FFh overflows a byte once cc > F0h, so a master
+ * that assembles f by addition rather than by packing corrupts the neighbouring
+ * rr byte for 14 of the 254 legal client values -- about 5% of real transfers,
+ * each failing at the very last word with MB_ERR_CRC and nothing to point at.
+ *
+ * Sweeping the whole legal range costs a few milliseconds and removes the luck.
+ */
+static void test_client_byte_range(void) {
+    printf("client byte range\n");
+
+    const size_t size = 0x400;
+    make_rom(size);
+
+    int bad_result = 0, bad_payload = 0, bad_crc = 0;
+    unsigned first_bad = 0;
+
+    for (unsigned cc = 0x01; cc <= 0xFEu; cc++) {
+        sim_gba_t gba;
+        sim_init(&gba, (uint8_t)cc);
+        mb_session_t s;
+        mb_init(&s, sim_xfer_top, &gba);
+
+        int ok = 1;
+        if (mb_send(&s, g_rom, size) != MB_OK) { bad_result++;  ok = 0; }
+        if (memcmp(gba.ewram + MB_HEADER, g_rom + MB_HEADER, size - MB_HEADER)) {
+            bad_payload++; ok = 0;
+        }
+        if (s.crc_expected != s.crc_received) { bad_crc++; ok = 0; }
+
+        if (!ok && !first_bad) {
+            first_bad = cc;
+            printf("  first failing client byte: 0x%02X "
+                   "(master crc 0x%04X, slave crc 0x%04X)\n",
+                   cc, s.crc_expected, s.crc_received);
+        }
+    }
+
+    check("every client byte transfers", bad_result, 0);
+    check("every client byte decrypts", bad_payload, 0);
+    check("every client byte agrees on the checksum", bad_crc, 0);
 }
 
 static void test_failures(void) {
@@ -340,13 +419,29 @@ static void test_failures(void) {
     check("stall detected", mb_send(&s, g_rom, 0x400), MB_ERR_STALLED);
     check("aborted early", s.words_sent < 200, 1);
 
-    /* Argument checking. */
+    /* Argument checking. The bounds are GBATEK's, quoted in the header: a
+     * payload -- excluding the 0xC0 header -- of 0x100 to 0x3FF40 bytes. */
     sim_gba_t ok;
     sim_init(&ok, 0xD1);
     mb_init(&s, sim_xfer_top, &ok);
     check("null rom", mb_send(&s, NULL, 0x400), MB_ERR_ARGS);
     check("too small", mb_send(&s, g_rom, 0x40), MB_ERR_ARGS);
+    check("one byte under the floor",
+          mb_send(&s, g_rom, MB_MIN_SIZE - 1), MB_ERR_ARGS);
     check("too big", mb_send(&s, g_rom, MB_MAX_SIZE + 4), MB_ERR_ARGS);
+    /* Pinned as literals, not as MB_HEADER+0x100: comparing a macro against
+     * its own definition asserts nothing. These are the numbers GBATEK's
+     * payload range works out to for a whole image. */
+    check("floor is GBATEK's 0x100 payload", MB_MIN_SIZE, 0x1C0);
+    check("ceiling is GBATEK's 0x3FF40 payload", MB_MAX_SIZE, 0x40000);
+
+    /* And the floor itself must still transfer, not just be accepted. */
+    sim_gba_t smallest;
+    sim_init(&smallest, 0xD1);
+    mb_init(&s, sim_xfer_top, &smallest);
+    make_rom(MB_MIN_SIZE);
+    check("the floor itself transfers",
+          mb_send(&s, g_rom, MB_MIN_SIZE), MB_OK);
 }
 
 static void test_progress(void) {
@@ -366,6 +461,7 @@ int main(void) {
     test_primitives();
     test_full_transfer();
     test_padding();
+    test_client_byte_range();
     test_failures();
     test_progress();
     printf("\n%s\n", g_fail ? "FAILURES" : "all checks passed");

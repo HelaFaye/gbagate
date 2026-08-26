@@ -5,38 +5,58 @@ gbagate/
   Makefile              host test suites: make, make strict
   README.md             design notes, decisions and their reasons
   PROJECT_STATUS.md     what works, what does not, what is next
-  AUDIT.md              mechanical audit: 6 defects found and fixed
+  AUDIT.md              two audit rounds: 9 defects found and fixed
   MANIFEST.md           this file
 
   src/        19 modules   portable, host-tested, no hardware dependencies
-  test/       14 suites    618 assertions
-  port/esp32s3/ 6 files    ESP-IDF glue. UNTESTED -- see AUDIT.md
+  test/       15 suites    4455 lines against src/'s 5751  (modes: never run)
+  port/esp32s3/ 9 files    ESP-IDF glue. No hardware run yet -- see AUDIT.md
   pio/                     PlatformIO: three images, ESP-IDF framework
+  qemu/       19 files     emulation lab: QEMU, mGBA, broker, tester ROM
   data/chipdb/ 6 blobs     packed chip databases, 72 KB
-  tools/       5 tools     database builder, header repair, font generator,
-                           mGBA-on-Android build, RAM dump script
+  tools/       6 tools     database builder, header repair, font generator,
+                           mGBA-on-Android build, RAM dump script,
+                           wire-ID checker
+  rom/                     tester ROM sources (built by make rom)
   doc/                     rendered screens
 ```
 
 ## Start here
 
 ```
-make            build and run all fourteen suites          (no hardware)
+make            build and run all fifteen suites           (no hardware)
 make strict     every suite at -O0, -O2, -O3 -flto, ASan   (56 combinations)
 ```
 
-Then `PROJECT_STATUS.md` for what is proven and what is not, and `AUDIT.md` for
-where the risk sits.
+Two more that need only `cc` and `python3` — no ESP-IDF, no emulator — and both
+cover ground the fourteen suites do not:
+
+```
+python3 qemu/test_rom_selftest.py     the ROM handshake and chip injection
+                                      driven against the real chipgate.c
+python3 tools/check_wire_ids.py --list every database's wire-ID map
+```
+
+Then `PROJECT_STATUS.md` for what is proven and what is not, `AUDIT.md` for
+where the risk sits, and `qemu/README.md` for running the firmware under
+emulation.
 
 ## The split that matters
 
-`src/` is 5412 lines with 4042 lines of tests against it and no hardware
+`src/` is 5458 lines with 4090 lines of tests against it and no hardware
 dependencies at all — every protocol, every state machine, every piece of
 arithmetic runs on the machine you are sitting at.
 
-`port/esp32s3/` is 1909 lines that cannot be host-tested. Every defect the audit
-found was in that quarter. It is thin on purpose, and the Makefile deliberately
-does not pretend to build it.
+`port/esp32s3/` is 2170 lines that cannot be host-tested, and `pio/src/` a
+further 717. **Every defect either audit round found in the firmware was in that
+layer** — seven of seven, across two rounds using completely different methods.
+It is thin on purpose, and the Makefile deliberately does not pretend to build
+it. (The other two defects were in the lab's own shell scripts.)
+
+The emulation lab in `qemu/` narrows that gap without closing it: the firmware
+boots and links on real Xtensa, which is how the second audit round found a
+correctness bug that inspection had missed. It still models no peripheral, so
+the PHY, the SPI panel and USB remain unverified. See `PROJECT_STATUS.md` §3.
 
 ## Modules
 
@@ -51,6 +71,7 @@ does not pretend to build it.
 | `ui_list` | 128×128 list model: scroll, wrap, paging, scrollbar |
 | `ui_chipview` | tabs, sort, favourites, Slot-In/Move |
 | `ui_shell` | mode picker, gated by detected hardware |
+| `app_modes` | mode dispatch: joins a shell choice to a handler ⚠️ never compiled |
 | `ui_render` | chip screen into an RGB565 buffer |
 | `ui_font` | 5×7 bitmap font (generated, original) |
 | `st7735_panel` | panel geometry and hardware vertical scroll |
@@ -64,16 +85,39 @@ does not pretend to build it.
 | `rom_catalog` | USB drive listing, validation, RAM staging |
 | `variant` | the three images, dependency-checked |
 
-### port/esp32s3/ — untested
+### port/esp32s3/ — no hardware run yet
 
 | file | purpose |
 |---|---|
 | `gba_link_esp32s3.c` | Multi-Play PHY, parent and child. **Timing unmeasured** |
-| `st7735_esp32s3.c` | SPI, DMA flush, scroll path |
-| `transport_esp32s3.c` | USB CDC and ESP-NOW backends |
+| `st7735_esp32s3.c` | SPI, DMA flush, scroll path. Not reachable under QEMU |
+| `transport_esp32s3.c` | USB CDC and ESP-NOW backends. Neither is emulated |
 | `usb_msc_esp32s3.c` | FAT over USB MSC, `rom_io_t` over FATFS |
 | `mb_spi_esp32s3.c` | Normal 32-bit SIO master |
-| `cg_phy_esp32s3.c` | superseded; kept only to diff early assumptions |
+| `cg_phy_esp32s3.c` | superseded; kept only to diff early assumptions. `cg_phy_slot_chip()` has no callers |
+| `transport_uart.c` | the same `link_bridge` over UART instead of CDC. **Exercised under QEMU** |
+| `st7735_qemu.c` | QEMU stand-in for the panel: keeps the real framebuffer, streams it out a UART |
+| `input_qemu.c` | QEMU stand-in for the encoder: keystrokes on the same UART |
+
+The last three are how the emulation lab reaches the firmware. `transport_uart.c`
+is the only file in this directory with any evidence behind it.
+
+### qemu/ — the emulation lab
+
+| file | purpose |
+|---|---|
+| `build.sh`, `run.sh`, `setup.sh` | build an image, boot it, install Espressif's QEMU |
+| `lab.sh` | the whole stack at once: QEMU, broker, mGBA, viewer |
+| `broker.py` | joins the firmware's UART link to mGBA's socket |
+| `viewer.py`, `fbgrab.py` | live framebuffer window; single-shot PPM capture |
+| `mgba_tester.lua`, `mgba_link.lua` | drive the tester ROM and the link from inside mGBA |
+| `gate_sim.c` | the gate without an emulator, for fast iteration |
+| `test_rom_selftest.py` | the ROM handshake and chip injection against the real `chipgate.c` |
+| `uart2check.sh` | which UARTs this QEMU actually wires — see `AUDIT.md` E1 |
+| `rawtap.py` | raw bytes off a link or framebuffer port |
+
+`qemu/README.md` covers running all of it, including what to do when the screen
+stays blank.
 
 ## Regenerating the databases
 

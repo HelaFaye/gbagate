@@ -59,8 +59,9 @@ TITLE = 0xA0
 FIXED_BYTE = 0xB2
 CHECK_BYTE = 0xBD
 
-MB_MIN = 0x1A0
-MB_MAX = 0x40000
+# GBATEK, SWI 25h: payload (excluding header) of 100h..3FF40h bytes.
+MB_MIN = HEADER_LEN + 0x100      # 0x1C0
+MB_MAX = HEADER_LEN + 0x3FF40    # 0x40000
 
 
 def header_checksum(header: bytes) -> int:

@@ -7,3 +7,9 @@
 *.obj
 *.out
 build/
+rom/tester.gba
+rom/tester.mb
+rom/*.o
+rom/*.map
+rom/*.bak
+rom/tester.sav

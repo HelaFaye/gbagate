@@ -118,15 +118,35 @@ mb_result_t mb_send(mb_session_t *s, const uint8_t *rom, size_t size) {
         return MB_ERR_HANDSHAKE;
     }
 
-    uint32_t m = ((r & 0x00FF0000u) >> 8) + 0xFFFF00D1u;
-    uint32_t h = client + 0x0F;
+    /*
+     * GBATEK builds both magic words as four packed bytes, least significant
+     * first (see "Pseudo Code for SWI 25h", m=dword(pp,cc,cc,cc)):
+     *
+     *   m = pp | cc1<<8 | cc2<<16 | cc3<<24    pp = palette byte we just sent
+     *   f = hh | rr1<<8 | rr2<<16 | rr3<<24    rr = each slave's random byte
+     *
+     * Only one slave sits on a Normal-mode link, and GBATEK specifies that the
+     * client and random bytes of absent slaves read back as FFh -- hence the
+     * constant 0xFFFF high half on both.
+     *
+     * hh is handshake_data = 11h + client_data[1] + client_data[2] +
+     * client_data[3] = cc + 0x20F, and it occupies a single byte (it goes out
+     * as the low half of 64hh). It MUST be masked to 8 bits before it is
+     * packed: otherwise the carry out of byte 0 lands in the rr byte, and f --
+     * which is folded into the final checksum -- is wrong for every client
+     * byte above F0h. The transfer then completes and fails the CRC with no
+     * indication of the cause, which is exactly the failure this file's header
+     * comment warns about.
+     */
+    uint32_t m = 0xFFFF0000u | (client << 8) | (KEY_REQUEST & 0xFFu);
+    uint32_t h = (client + 0x0Fu) & 0xFFu;
 
-    r = xfer(s, ((client + 0x0F) & 0xFFu) | 0x00006400u);
+    r = xfer(s, h | 0x00006400u);
 
     uint32_t payload_words = (uint32_t)((padded - 0x190u) / 4u);
     r = xfer(s, payload_words);
 
-    uint32_t f = (((r & 0x00FF0000u) >> 8) + h) | 0xFFFF0000u;
+    uint32_t f = 0xFFFF0000u | ((r & 0x00FF0000u) >> 8) | h;
     uint32_t crc = MB_CRC_SEED;
 
     /* ---- 4. encrypted payload ---------------------------------------- */

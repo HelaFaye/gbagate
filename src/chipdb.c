@@ -106,6 +106,18 @@ uint16_t chipdb_slot_for_id(const chipdb_t *db, uint16_t chip_id) {
     return slot < db->count ? slot : CHIPDB_NO_RECORD;
 }
 
+uint16_t chipdb_id_for_slot(const chipdb_t *db, uint16_t slot) {
+    if (!db->base || !db->idmap || slot >= db->count) {
+        return CHIPDB_NO_ID;
+    }
+    for (uint32_t id = 0; id <= db->max_id; id++) {
+        if (db->idmap[id] == slot) {
+            return (uint16_t)id;
+        }
+    }
+    return CHIPDB_NO_ID;
+}
+
 bool chipdb_get_by_id(const chipdb_t *db, uint16_t chip_id, chip_record_t *out) {
     uint16_t slot = chipdb_slot_for_id(db, chip_id);
     if (slot == CHIPDB_NO_RECORD) {

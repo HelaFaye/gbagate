@@ -3,6 +3,7 @@
 # build.sh -- build one firmware image for QEMU and assemble a flash image.
 #
 #   ./qemu/build.sh gate
+#   ./qemu/build.sh gate --aux-uart 0    for a QEMU that only wires two UARTs
 #
 # QEMU boots from a flash image, not from an application binary. That is the
 # single most common mistake here: `-kernel firmware.bin` is a Linux option and
@@ -13,19 +14,45 @@
 set -eu
 
 VARIANT="${1:-gate}"
+if [ $# -gt 0 ]; then shift; fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build/qemu-$VARIANT"
 
+# Checked before the options are parsed so that omitting the variant entirely
+# ("build.sh --aux-uart 0") reports the missing variant, rather than the first
+# option being mistaken for one and the *next* word blamed as unknown.
 case "$VARIANT" in
     link|gate|full) ;;
-    *) echo "usage: $0 {link|gate|full}" >&2; exit 1 ;;
+    *) echo "usage: $0 {link|gate|full} [--aux-uart 0|1|2]" >&2; exit 1 ;;
+esac
+
+# Which UART st7735_qemu.c streams the framebuffer out of, and input_qemu.c
+# reads keys back on. See the long note in the top-level CMakeLists.txt; the
+# short version is that 2 is correct but needs a QEMU that actually wires three
+# UARTs to the esp32s3 machine, and ./qemu/uart2check.sh says whether this one
+# does. The value has to match the -serial ordering run.sh/lab.sh use, so pass
+# the same --aux-uart to both.
+AUX_UART="${AUX_UART:-2}"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --aux-uart)
+            [ $# -ge 2 ] || { echo "--aux-uart needs a value (0, 1 or 2)" >&2; exit 1; }
+            AUX_UART="$2"; shift 2 ;;
+        *) echo "unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+case "$AUX_UART" in
+    0|1|2) ;;
+    *) echo "--aux-uart must be 0, 1 or 2 (got '$AUX_UART')" >&2; exit 1 ;;
 esac
 
 [ -n "${IDF_PATH:-}" ] || { echo "source \$IDF_PATH/export.sh first" >&2; exit 1; }
 
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 
-say "building the $VARIANT image"
+say "building the $VARIANT image (framebuffer/input on UART$AUX_UART)"
 
 # QEMU-specific configuration on top of the normal defaults.
 SDKCONFIG="$BUILD/sdkconfig.qemu"
@@ -57,10 +84,16 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="pio/partitions.csv"
 CFG
 
+# QEMU_AUX_UART is passed on every build, never only when --aux-uart is given.
+# CMake would otherwise cache it in $BUILD: building once with --aux-uart 0 and
+# then plainly would silently keep 0, producing an image whose UART does not
+# match the -serial layout run.sh sets up -- which looks exactly like the blank
+# screen this option exists to fix. Always passing it makes the default win.
 idf.py -B "$BUILD" \
        -D SDKCONFIG_DEFAULTS="$ROOT/pio/sdkconfig.defaults;$SDKCONFIG" \
        -D VARIANT="$VARIANT" \
        -D IDF_TARGET=esp32s3 \
+       -D QEMU_AUX_UART="$AUX_UART" \
        build
 
 say "assembling the flash image"
@@ -100,4 +133,11 @@ if ! $ESPTOOL --chip esp32s3 merge_bin \
 fi
 
 say "flash image: $BUILD/flash.bin ($(du -h "$BUILD/flash.bin" | cut -f1))"
-say "run it:  ./qemu/run.sh $VARIANT"
+if [ "$AUX_UART" = 2 ]; then
+    say "run it:  ./qemu/run.sh $VARIANT"
+else
+    # The -serial ordering has to match what this image was compiled for, so
+    # hand back the exact command rather than the default one.
+    say "run it:  ./qemu/run.sh $VARIANT --aux-uart $AUX_UART"
+    say "     or: ./qemu/lab.sh --aux-uart $AUX_UART"
+fi

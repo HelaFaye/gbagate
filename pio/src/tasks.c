@@ -93,6 +93,22 @@ static void qemu_feed_word(void *ctx, uint16_t seq, uint16_t word) {
  */
 static volatile uint32_t s_ui_events_dropped;
 
+/*
+ * From a task, not an ISR. Blocks briefly rather than dropping: a keypress the
+ * user made must not vanish because the UI was mid-redraw, and the caller is
+ * never the link task.
+ */
+bool tasks_post_ui_event(const ui_event_t *e) {
+    if (!s_ui_events) {
+        return false;
+    }
+    if (xQueueSend(s_ui_events, e, pdMS_TO_TICKS(20)) != pdTRUE) {
+        s_ui_events_dropped++;
+        return false;
+    }
+    return true;
+}
+
 bool tasks_post_ui_event_from_link(const ui_event_t *e) {
     BaseType_t woken = pdFALSE;
     if (xQueueSendFromISR(s_ui_events, e, &woken) != pdTRUE) {
@@ -180,6 +196,18 @@ void tasks_start(uint32_t features) {
     if (features & (FEAT_ESPNOW | FEAT_USB_CDC)) {
         xTaskCreatePinnedToCore(transport_task, "transport", 4096, NULL,
                                 PRIO_TRANSPORT, NULL, CORE_APP);
+    }
+#endif
+
+#if defined(GBAGATE_QEMU)
+    /*
+     * No encoder exists under emulation, so keyboard bytes from the viewer
+     * stand in. They arrive as the same ui_event_t the encoder would produce,
+     * so nothing above this line is emulation-aware.
+     */
+    if (features & FEAT_DISPLAY) {
+        extern void input_qemu_start(void);
+        input_qemu_start();
     }
 #endif
 

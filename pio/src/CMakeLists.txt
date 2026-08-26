@@ -21,9 +21,10 @@ set(APP
     link_source.c
 )
 
-set(GLUE
-    ../../port/esp32s3/st7735_esp32s3.c
-)
+# The display glue is chosen below by whether this is a QEMU build: under
+# emulation there is no SPI panel, so st7735_qemu.c stands in for it and streams
+# the framebuffer out a UART (the same idea as transport_uart.c for the PHY).
+set(GLUE "")
 
 set(GATE_SRCS
     ../../src/chipgate.c
@@ -52,9 +53,12 @@ endif()
 # QEMU has no pins and no USB-OTG, so the PHY and the CDC/MSC glue are left out
 # entirely rather than compiled and left to fail at runtime. UART stands in.
 if(GBAGATE_QEMU)
-    list(APPEND SRCS ../../port/esp32s3/transport_uart.c)
+    list(APPEND SRCS ../../port/esp32s3/transport_uart.c
+                     ../../port/esp32s3/st7735_qemu.c
+                     ../../port/esp32s3/input_qemu.c)
 else()
     list(APPEND SRCS
+        ../../port/esp32s3/st7735_esp32s3.c
         ../../port/esp32s3/gba_link_esp32s3.c
         ../../port/esp32s3/transport_esp32s3.c)
     if(VARIANT STREQUAL "gate" OR VARIANT STREQUAL "full")

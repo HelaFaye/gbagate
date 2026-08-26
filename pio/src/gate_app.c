@@ -174,9 +174,17 @@ void ui_service(const ui_event_t *e, bool have_event) {
             uint16_t pos;
             if (ui_list_selected(&s_list, &pos)) {
                 uint16_t slot = chipview_slot_at(&s_view, s_list.cursor);
-                chip_record_t rec;
-                if (chipdb_get(&s_db, slot, &rec)) {
-                    gate_send_chip(rec.index);
+                /* Slot 5 carries the wire ID -- the number a physical chip's
+                 * shorted pads form -- not chip_record_t.index, which is the
+                 * table's sort key and names a different chip for most of the
+                 * database. tools/check_wire_ids.py quantifies the divergence. */
+                uint16_t wire_id = chipdb_id_for_slot(&s_db, slot);
+                if (wire_id == CHIPDB_NO_ID) {
+                    /* No physical chip carries this record: refuse rather than
+                     * put a plausible-looking wrong number on the wire. */
+                    snprintf(s_status, sizeof s_status, "NO WIRE ID");
+                } else {
+                    gate_send_chip(wire_id);
                 }
             }
             break;
