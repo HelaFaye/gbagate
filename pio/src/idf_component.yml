@@ -1,0 +1,22 @@
+## Managed components.
+##
+## esp_tinyusb provides tinyusb.h, tusb_msc_storage.h and tusb_cdc_acm.h, which
+## usb_msc_esp32s3.c and transport_esp32s3.c include. It is not part of ESP-IDF
+## proper, so without this file the headers are simply absent and those sources
+## cannot be compiled -- which is the reason USB storage had never been built.
+##
+## The version range covers the API this code is written against:
+##   - tinyusb_msc_spiflash_config_t carries a nested `mount_config`
+##   - the mount-changed callback takes tinyusb_msc_event_t *
+## Both arrived in 1.2 and are present through the 1.x line shipped with
+## ESP-IDF 5.x and 6.x. If a newer major renames either, the compiler will say
+## so precisely; adjust here rather than working around it in the source.
+
+dependencies:
+  espressif/esp_tinyusb:
+    version: "^1.4.0"
+    rules:
+      - if: "target in [esp32s2, esp32s3]"
+
+  idf:
+    version: ">=5.0"

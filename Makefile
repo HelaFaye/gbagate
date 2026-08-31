@@ -28,13 +28,26 @@ DEPS_render    = ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c
 DEPS_multiboot = gba_multiboot.c
 DEPS_catalog   = rom_catalog.c gba_multiboot.c
 DEPS_variant   = variant.c
+DEPS_ir        = ir_cdz.c
+DEPS_uiset     = ui_settings.c settings.c chipgate.c
+DEPS_settings  = settings.c chipgate.c
+DEPS_romview   = ui_romview.c rom_catalog.c gba_multiboot.c
+DEPS_mcp       = mcp23017.c chip_slot.c chip_reader.c
+DEPS_mbe2e     = rom_catalog.c gba_multiboot.c
+
+# Most suites are handed the chip database. This one takes the real tester ROM
+# instead: using an actual file, with an actual unpadded length, is the point
+# of it -- that is what found the alignment bug the synthetic fixtures missed.
+ARG_mbe2e      = rom/tester.gba
+DEPS_menu      = ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c ui_shell.c hw_caps.c chipgate.c
 DEPS_modes     = app_modes.c ui_shell.c hw_caps.c chipgate.c
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant modes
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir modes
 
-.PHONY: all strict clean chipdb
+.PHONY: all strict lint clean chipdb
 all: $(addprefix run-,$(SUITES))
+	@./qemu/lint.sh
 
 $(BUILD):
 	@mkdir -p $(BUILD)
@@ -53,7 +66,7 @@ $(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) | $(BUILD)
 	@$$(CC) $$(CFLAGS) -o $$@ $$< $$(addprefix src/,$$(DEPS_$(1)))
 run-$(1): $(BUILD)/test_$(1)
 	@printf '%-14s ' $(1); \
-	if ./$$< $(DB) > $(BUILD)/$(1).out 2>&1; then \
+	if ./$$< $$(ARG_$(1)) > $(BUILD)/$(1).out 2>&1; then \
 	  tail -1 $(BUILD)/$(1).out; \
 	else \
 	  echo 'FAILURES -- full output follows'; \
@@ -62,6 +75,8 @@ run-$(1): $(BUILD)/test_$(1)
 	fi
 .PHONY: run-$(1)
 endef
+# Every suite takes the chip database unless it says otherwise.
+$(foreach s,$(SUITES),$(eval ARG_$(s) ?= $(DB)))
 $(foreach s,$(SUITES),$(eval $(call SUITE_rule,$(s))))
 
 # Every suite in every configuration. The catalogue bug that only appeared at
@@ -80,12 +95,17 @@ strict-$(1): | $(BUILD)
 	       -o $(BUILD)/s_$(1) test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) \
 	       >> $(BUILD)/s_$(1).log 2>&1; \
 	  then printf ' BUILD  '; \
-	  elif ./$(BUILD)/s_$(1) $$(DB) >> $(BUILD)/s_$(1).log 2>&1; \
+	  elif ./$(BUILD)/s_$(1) $$(ARG_$(1)) >> $(BUILD)/s_$(1).log 2>&1; \
 	  then printf ' ok     '; else printf ' FAIL   '; fi; \
 	done; echo
 .PHONY: strict-$(1)
 endef
 $(foreach s,$(SUITES),$(eval $(call STRICT_rule,$(s))))
+
+# Compile-check the ESP-IDF-only sources against stub headers. Cheap, and it
+# covers the files no suite can reach.
+lint:
+	@./qemu/lint.sh
 
 strict: $(addprefix strict-,$(SUITES))
 	@echo "-O0     -O2     -O3+lto asan/ubsan"

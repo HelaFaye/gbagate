@@ -233,7 +233,9 @@ static void test_shell(void) {
     /* A bare board: display and link port, no USB, no WiFi, no reader. */
     ui_shell_t s;
     shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
-    check("modes offered", shell_item_count(&s), 4);
+    /* Battle Chip, Send Program, Self Test, Settings, Diagnostics -- the two
+     * needing USB and WiFi are absent on this board. */
+    check("modes offered", shell_item_count(&s), 5);
     check_str("first is the gate", shell_label_at(&s, 0), "Battle Chip");
 
     for (uint8_t i = 0; i < shell_item_count(&s); i++) {

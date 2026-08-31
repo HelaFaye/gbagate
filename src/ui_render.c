@@ -200,6 +200,58 @@ void ui_render_scrollbar(const ui_canvas_t *c, const ui_list_t *l) {
     }
 }
 
+/* ---- menus ------------------------------------------------------------- */
+
+void ui_render_menu(const ui_canvas_t *c, const char *title,
+                    ui_label_fn label_at, void *ctx,
+                    uint8_t count, uint8_t cursor, const char *footer) {
+    ui_fill(c, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
+
+    ui_fill(c, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
+    ui_text_clipped(c, 3, (UI_HEADER_H - UI_FONT_H) / 2, UI_SCREEN_W - 6,
+                    title, COL_BG);
+
+    /*
+     * Scroll the window with the cursor rather than clipping the list, so a
+     * menu longer than the screen is still reachable. Modes fit today; the
+     * game list plus a future entry would not.
+     */
+    uint8_t rows = UI_ROWS;
+    uint8_t top = 0;
+    if (count > rows && cursor >= rows) {
+        top = (uint8_t)(cursor - rows + 1);
+    }
+
+    for (uint8_t row = 0; row < rows; row++) {
+        uint8_t index = (uint8_t)(top + row);
+        int y = UI_LIST_Y + row * UI_ROW_H;
+        const char *label = (index < count) ? label_at(ctx, index) : NULL;
+        if (!label) {
+            ui_fill(c, 0, y, UI_SCREEN_W, UI_ROW_H, COL_BG);
+            continue;
+        }
+
+        bool selected = (index == cursor);
+        ui_fill(c, 0, y, UI_SCREEN_W, UI_ROW_H,
+                selected ? COL_HEADER : ((row & 1) ? COL_ROW_ALT : COL_BG));
+
+        int ty = y + (UI_ROW_H - UI_FONT_H) / 2;
+        if (selected) {
+            draw_glyph(c, 2, ty, '>', COL_BG);
+        }
+        ui_text_clipped(c, 12, ty, UI_SCREEN_W - 16, label,
+                        selected ? COL_BG : COL_TEXT);
+    }
+
+    int fy = UI_SCREEN_H - UI_FOOTER_H;
+    ui_fill(c, 0, fy, UI_SCREEN_W, UI_FOOTER_H, COL_ROW_ALT);
+    ui_fill(c, 0, fy, UI_SCREEN_W, 1, COL_HEADER);
+    if (footer) {
+        ui_text_clipped(c, 2, fy + (UI_FOOTER_H - UI_FONT_H) / 2,
+                        UI_SCREEN_W - 4, footer, COL_TEXT_DIM);
+    }
+}
+
 /* ---- whole screen ----------------------------------------------------- */
 
 bool ui_render_list_matches(const chipview_t *v, const ui_list_t *l) {

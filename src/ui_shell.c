@@ -22,6 +22,22 @@ static const menu_entry_t k_modes[APP_MODE_COUNT] = {
       HW_CAP_DISPLAY | HW_CAP_LINK_PORT, "connect the link cable" },
     { APP_MODE_CHIP_SCAN, "Read Chip",
       HW_CAP_DISPLAY | HW_CAP_CHIP_READER, "reader board not detected" },
+    /*
+     * Handing the volume over is a deliberate action, not something to infer
+     * from what the host appears to be doing. A device that cannot be told to
+     * release its storage is one you end up power-cycling.
+     */
+    { APP_MODE_USB_STORAGE, "USB Storage",
+      HW_CAP_DISPLAY | HW_CAP_USB, "plug in USB" },
+
+    /*
+     * Self-test drives the link itself, against rom/tester.gba on a console or
+     * a multiboot image it sends first. It needs the link port and a screen to
+     * report on, and nothing else -- deliberately, because it is the mode you
+     * reach for when you are not sure what else works.
+     */
+    { APP_MODE_SELFTEST, "Self Test",
+      HW_CAP_DISPLAY | HW_CAP_LINK_PORT, "connect the link cable" },
     { APP_MODE_SETTINGS, "Settings", HW_CAP_DISPLAY, NULL },
     { APP_MODE_DIAGNOSTICS, "Diagnostics", 0, NULL },
 };
@@ -36,7 +52,12 @@ const menu_entry_t *shell_all_modes(size_t *count) {
 bool shell_mode_needs_game(app_mode_t mode) {
     /* The gate identity and the chip database are both per-game, so anything
      * that impersonates a gate has to know which one. */
-    return mode == APP_MODE_CHIP_GATE || mode == APP_MODE_CHIP_SCAN;
+    /*
+     * Self-test needs one too: it checks the gate identity, and which identity
+     * is correct depends on the game.
+     */
+    return mode == APP_MODE_CHIP_GATE || mode == APP_MODE_CHIP_SCAN ||
+           mode == APP_MODE_SELFTEST;
 }
 
 void shell_init(ui_shell_t *s, uint32_t caps) {

@@ -58,10 +58,12 @@ typedef enum {
     FEAT_MULTIBOOT    = 1u << 10, /* send a program to a bare GBA       */
     FEAT_RFU_EMU      = 1u << 11, /* emulate the Wireless Adapter       */
     FEAT_IR           = 1u << 12, /* infrared accessory protocol        */
-    FEAT_NRF24        = 1u << 13  /* optional second radio              */
+    FEAT_NRF24        = 1u << 13, /* optional second radio              */
+    FEAT_SELFTEST     = 1u << 14, /* built-in link self-test            */
+    FEAT_USB_EXPOSE  = 1u << 15  /* expose the drive to a host         */
 } feature_t;
 
-#define FEATURE_COUNT 14
+#define FEATURE_COUNT 16
 
 /* ---- variants --------------------------------------------------------- */
 

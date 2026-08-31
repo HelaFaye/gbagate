@@ -52,7 +52,20 @@ static volatile bool s_dirty;       /* host wrote something; rescan needed */
 /* ---- ownership -------------------------------------------------------- */
 
 bool msc_storage_available(void) {
-    return s_wl != WL_INVALID_HANDLE && !s_host_owns;
+    if (s_wl == WL_INVALID_HANDLE) {
+        return false;
+    }
+    if (s_host_owns) {
+        return false;
+    }
+    /*
+     * Ask the stack as well as trusting our own flag. The callback can be
+     * missed -- a host that enumerates during boot, before the callback is
+     * registered, leaves s_host_owns false while the volume is genuinely
+     * exposed. Reading a file then races the host's writes, and the failure is
+     * a corrupt FAT that shows up much later and looks like a bad drive.
+     */
+    return !tinyusb_msc_storage_in_use_by_usb_host();
 }
 
 bool msc_storage_dirty(void) {
@@ -73,6 +86,13 @@ static void msc_on_mount_changed(tinyusb_msc_event_t *event) {
     if (event->type != TINYUSB_MSC_EVENT_MOUNT_CHANGED) {
         return;
     }
+    /*
+     * is_mounted is from the application's point of view: true when the volume
+     * has been handed back to us. The naming invites the opposite reading, and
+     * getting it backwards means writing to a volume the host is holding --
+     * which is exactly the corruption this whole arrangement exists to avoid,
+     * so it is worth the sentence.
+     */
     bool to_app = event->mount_changed_data.is_mounted;
     if (to_app) {
         s_host_owns = false;
@@ -150,14 +170,16 @@ static bool msc_next(void *ctx, char *name, size_t cap, uint32_t *size) {
 
     struct dirent *de;
     while ((de = readdir(s->dir)) != NULL) {
-        if (de->d_type == DT_DIR) {
-            continue;
-        }
         char path[300];
         snprintf(path, sizeof path, MOUNT_POINT "/%s", de->d_name);
 
+        /*
+         * stat, not d_type: DT_DIR is a BSD extension that strict C11 hides
+         * and that ESP-IDF's FATFS layer is not obliged to populate. stat is
+         * authoritative, and it is needed for the size anyway.
+         */
         struct stat st;
-        if (stat(path, &st) != 0) {
+        if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
             continue;
         }
         /* Skip anything that cannot be a program before bothering the caller;
@@ -253,4 +275,36 @@ bool msc_rescan(rom_catalog_t *cat, uint32_t logo_reference) {
 
 const rom_io_t *msc_io(void) {
     return &MSC_IO;
+}
+
+/*
+ * Hand the volume back to the host deliberately, for a menu action that says
+ * "connect to PC". Without this the only way to expose the drive is to guess
+ * at what the host is doing, and a device that cannot be told to release its
+ * storage is one you end up power-cycling.
+ */
+esp_err_t msc_release_to_host(void) {
+    if (s_wl == WL_INVALID_HANDLE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = tinyusb_msc_storage_unmount();
+    if (err == ESP_OK) {
+        s_host_owns = true;
+        ESP_LOGI(TAG, "volume released to the host");
+    }
+    return err;
+}
+
+/* Take it back, and rescan: the host has almost certainly changed something. */
+esp_err_t msc_claim_from_host(void) {
+    if (s_wl == WL_INVALID_HANDLE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = tinyusb_msc_storage_mount(MOUNT_POINT);
+    if (err == ESP_OK) {
+        s_host_owns = false;
+        s_dirty     = true;
+        ESP_LOGI(TAG, "volume reclaimed");
+    }
+    return err;
 }

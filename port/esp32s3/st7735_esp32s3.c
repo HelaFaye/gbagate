@@ -93,6 +93,14 @@ static bool                s_dirty[UI_SCREEN_H];
 static bool                s_any_dirty;
 static SemaphoreHandle_t   s_lock;
 
+/*
+ * Colour order and whether the panel has been initialised. Kept as state
+ * rather than a constant so the Settings screen can correct a module with red
+ * and blue swapped, and so the correction survives a power cycle.
+ */
+static bool                s_bgr = true;
+static bool                s_ready;
+
 /* ---- low level -------------------------------------------------------- */
 
 static void st_pre_cb(spi_transaction_t *t) {
@@ -162,12 +170,14 @@ static esp_err_t st_panel_init(void) {
 
     /*
      * MADCTL selects scan order and colour order. BGR is right for most of
-     * these modules; if red and blue swap on your unit, change to MADCTL_RGB.
+     * these modules; a unit with red and blue swapped is corrected from the
+     * Settings screen rather than by editing this line, and the choice is
+     * stored -- see st7735_set_bgr() below.
      * Leave the row/column swap bits clear -- the scroll region is defined in
      * memory rows, and rotating the scan would put the scrolling axis across
      * the list instead of along it.
      */
-    uint8_t madctl = MADCTL_BGR;
+    uint8_t madctl = s_bgr ? MADCTL_BGR : MADCTL_RGB;
     if ((err = st_cmd_args(CMD_MADCTL, &madctl, 1)) != ESP_OK) return err;
 
     if ((err = st_cmd(CMD_INVOFF)) != ESP_OK) return err;
@@ -247,13 +257,37 @@ esp_err_t st7735_init(st7735_panel_t panel) {
         return err;
     }
 
-    ESP_LOGI(TAG, "%ux%u, offset %u,%u, scroll tfa=%u vsa=%u bfa=%u",
+    s_ready = true;
+    ESP_LOGI(TAG, "%ux%u, offset %u,%u, %s, scroll tfa=%u vsa=%u bfa=%u",
              s_panel.width, s_panel.height, s_panel.colstart, s_panel.rowstart,
-             tfa, vsa, bfa);
+             s_bgr ? "BGR" : "RGB", tfa, vsa, bfa);
     return ESP_OK;
 }
 
 /* Runtime calibration: draw a 1px border and nudge until it closes. */
+/*
+ * Colour order.
+ *
+ * This was being called from the settings screen and did not exist -- the
+ * hardware image would not have linked. Worth noting how it slipped through:
+ * QEMU builds use st7735_qemu.c instead, so the QEMU lint pass never saw the
+ * call, and the hardware lint pass did not cover this file. Both now do.
+ *
+ * Safe before init: the value is applied when MADCTL is next written, and
+ * re-sent immediately if the panel is already up, so a change takes effect
+ * while the user is looking at it.
+ */
+void st7735_set_bgr(bool bgr) {
+    if (s_bgr == bgr) {
+        return;
+    }
+    s_bgr = bgr;
+    if (s_ready) {
+        uint8_t madctl = s_bgr ? MADCTL_BGR : MADCTL_RGB;
+        st_cmd_args(CMD_MADCTL, &madctl, 1);
+    }
+}
+
 void st7735_set_offset(uint8_t colstart, uint8_t rowstart) {
     st7735_panel_set_offset(&s_panel, colstart, rowstart);
     st7735_mark_all_dirty();

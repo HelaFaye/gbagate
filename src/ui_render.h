@@ -82,6 +82,21 @@ void ui_render_scrollbar(const ui_canvas_t *c, const ui_list_t *l);
 bool ui_render_list_matches(const chipview_t *v, const ui_list_t *l);
 
 /*
+ * A simple chooser: title, rows of text, one selected. Used for the mode menu,
+ * the game list and the self-test screen -- everything that is a list of
+ * strings rather than a list of chips.
+ *
+ * label_at returns NULL past the end, which is how the count is discovered;
+ * that keeps this independent of ui_shell so it can render any list of
+ * strings.
+ */
+typedef const char *(*ui_label_fn)(void *ctx, uint8_t index);
+
+void ui_render_menu(const ui_canvas_t *c, const char *title,
+                    ui_label_fn label_at, void *ctx,
+                    uint8_t count, uint8_t cursor, const char *footer);
+
+/*
  * The whole chip screen.
  *
  * The list must have been filled from this chipview: ui_list_set(l, v->view,

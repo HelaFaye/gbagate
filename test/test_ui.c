@@ -50,7 +50,9 @@ static void test_geometry(void) {
     printf("pad geometry\n");
     check("advance pads", chip_reader_pad_count(CHIP_FAMILY_ADVANCE), 11);
     check("advance common", chip_reader_common_pad(CHIP_FAMILY_ADVANCE), 10);
-    check("advance id bits", chip_reader_id_bits(CHIP_FAMILY_ADVANCE), 10);
+        /* Nine, not ten. Pad 10 is the common and pad 11 is a family marker, not
+     * a bit -- solved from the EXE schematics, see chip_reader.h. */
+    check("advance id bits", chip_reader_id_bits(CHIP_FAMILY_ADVANCE), 9);
 
     check("beast pads", chip_reader_pad_count(CHIP_FAMILY_BEAST), 12);
     check("beast common", chip_reader_common_pad(CHIP_FAMILY_BEAST), 2);
@@ -69,7 +71,7 @@ static void test_decode(void) {
 
     /* Advance_Infinite_Thick shorts every pad. Ten ID bits all set. */
     static const uint8_t all_adv[] = {1,2,3,4,5,6,7,8,9,10,11};
-    check("all pads shorted", chip_reader_decode(&r, shorted(all_adv, 11)), 0x3FF);
+    check("all pads shorted", chip_reader_decode(&r, shorted(all_adv, 11)), 0x1FF);
 
     /* Gun_Del_Sol: pads 4, 10, 11. Pad 10 is common, so bits are 4 and 11. */
     static const uint8_t gundelsol[] = {4,10,11};
@@ -83,7 +85,51 @@ static void test_decode(void) {
     uint16_t g2 = chip_reader_decode(&rev, shorted(gundelsol, 3));
     check("bit order actually matters", g != g2, 1);
     check("all-ones is order independent",
-          chip_reader_decode(&rev, shorted(all_adv, 11)), 0x3FF);
+          chip_reader_decode(&rev, shorted(all_adv, 11)), 0x1FF);
+
+    /*
+     * Real chips, from the EXE chip project schematics, against the IDs our own
+     * databases give them. This is what settled the bit order, and it is eight
+     * independent chips rather than one and a multimeter.
+     *
+     * The Gun Del Sol family proves the weighting on its own: three consecutive
+     * IDs differing by one pad each, so pad 9 must be worth 1 and pad 8 worth 2.
+     */
+    {
+        static const struct { const char *name; uint8_t pads[8]; uint8_t n;
+                              uint16_t id; } vectors[] = {
+            { "GunDelS1",   {4},                 1,  32 },
+            { "GunDelS2",   {4,9},               2,  33 },
+            { "GunDelS3",   {4,8},               2,  34 },
+            { "GunDelEX",   {2,3,5,6,8,9},       6, 219 },
+            { "Django[SP]", {1,5,7,8,9},         5, 279 },
+            { "Django[DS]", {1,5,6},             3, 280 },
+            { "Otenko",     {2,3,5,7,8,9},       6, 215 },
+            { "LifeSync",   {5,6,7},             3,  28 },
+        };
+        chip_reader_t cr;
+        chip_reader_init(&cr, CHIP_FAMILY_ADVANCE, NULL, NULL);
+        for (unsigned i = 0; i < sizeof vectors / sizeof vectors[0]; i++) {
+            uint16_t got = chip_reader_decode(&cr,
+                               shorted(vectors[i].pads, vectors[i].n));
+            if (got != vectors[i].id) {
+                printf("  FAIL %s decoded %u, schematics say %u\n",
+                       vectors[i].name, got, vectors[i].id);
+                g_fail++;
+            }
+        }
+        check("eight real chips decode to their catalogued IDs", g_fail, 0);
+
+        /*
+         * Pad 11 must carry no weight. Every Progress chip ties it and no
+         * Advance chip does, so it marks the family -- counting it as a tenth
+         * bit shifts every weight and yields plausible wrong IDs.
+         */
+        uint8_t with11[3]  = { 4, 11, 0 };
+        check("pad 11 changes nothing",
+              chip_reader_decode(&cr, shorted(with11, 2)),
+              chip_reader_decode(&cr, shorted(with11, 1)));
+    }
 
     /* Beast: only pads 3..11 contribute. Pads 1 and 12 must be ignored. */
     chip_reader_t b;

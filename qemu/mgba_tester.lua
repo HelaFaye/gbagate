@@ -49,10 +49,12 @@ local SLIP_ESC_END, SLIP_ESC_ESC = 0xDC, 0xDD
 local RESULT_ADDR  = 0x0203FF00
 -- Mailbox, laid out by result_t in rom/tester.c. Offsets follow the 9-entry
 -- rotation array (18 bytes) and its padding halfword.
-local MB_TO_GATE   = RESULT_ADDR + 44   -- ROM -> gate, u16
-local MB_SEQ_TO    = RESULT_ADDR + 46
-local MB_FROM_GATE = RESULT_ADDR + 48   -- gate -> ROM, u16
-local MB_SEQ_FROM  = RESULT_ADDR + 50
+local MB_TESTS     = RESULT_ADDR + 44   -- HS_T_* bitmask, u32
+local MB_CHIP      = RESULT_ADDR + 48   -- chip observed, u32
+local MB_TO_GATE   = RESULT_ADDR + 52   -- ROM -> gate, u16
+local MB_SEQ_TO    = RESULT_ADDR + 54
+local MB_FROM_GATE = RESULT_ADDR + 56   -- gate -> ROM, u16
+local MB_SEQ_FROM  = RESULT_ADDR + 58
 local RESULT_MAGIC = 0x47544247
 local ST_RUNNING, ST_PASS, ST_FAIL = 0, 1, 2
 
@@ -129,6 +131,14 @@ local function finish(status, note)
         f:write(string.format("frames=%d\n", emu:read32(RESULT_ADDR + 8)))
         f:write(string.format("linked=%d\n", emu:read32(RESULT_ADDR + 12)))
         f:write(string.format("gate_id=%04X\n", emu:read32(RESULT_ADDR + 16) & 0xFFFF))
+        local bits = emu:read32(MB_TESTS)
+        f:write(string.format("tests=%02X\n", bits))
+        f:write(string.format("chip=%04X\n", emu:read32(MB_CHIP) & 0xFFFF))
+        local names = { "link", "shape", "counters", "chip", "repeats", "relink" }
+        for i, n in ipairs(names) do
+          f:write(string.format("%-9s %s\n", n,
+                  ((bits & (1 << (i - 1))) ~= 0) and "pass" or "FAIL"))
+        end
       end
       f:close()
     end
@@ -138,6 +148,13 @@ local function finish(status, note)
   -- engine, mid-callback, is what segfaulted mGBA (exit 139, empty log, no Lua
   -- error to go on). The result file is the verdict; the harness's timeout
   -- ends the run.
+  local bits = emu:read32(MB_TESTS)
+  local names = { "link", "rotation shape", "data counters",
+                  "chip delivered", "chip repeats", "relink" }
+  for i, n in ipairs(names) do
+    local got = (bits & (1 << (i - 1))) ~= 0
+    console:log(string.format("  %-16s %s", n, got and "pass" or "FAIL"))
+  end
   console:log("ROM-TEST: done, verdict written to " .. RESULT)
 end
 
@@ -218,8 +235,14 @@ local function check_result()
 end
 
 local function onFrame()
-  if not sock or done then return end
+  if not sock then return end
   pump()
+
+  -- Deliberately not "if done then return". The gate only retires a chip when
+  -- the rotation reaches its slot, which takes 81 transfers -- so a ROM that
+  -- stops driving the moment its checks pass leaves any chip staged after that
+  -- point stuck, and the firmware shows BUSY for ever with no way out. Keep
+  -- clocking; the verdict is already written.
 
   frames = frames + 1
 
@@ -237,7 +260,13 @@ local function onFrame()
 
   check_result()
 
-  if not done and frames >= MAX_FRAMES then
+  if done then
+    -- Verdict recorded. Keep the link alive so chips can still be sent from
+    -- the firmware's UI and observed here.
+    return
+  end
+
+  if frames >= MAX_FRAMES then
     -- Timed out. Read whatever the ROM published, if anything.
     local status = ST_FAIL
     local note = "timed out"

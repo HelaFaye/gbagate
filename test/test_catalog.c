@@ -244,6 +244,24 @@ static void test_padding_strip(void) {
     check("keeps the real bytes", eff >= 0x900, 1);
     check("16-byte aligned", (long)((eff - MB_HEADER) % 16), 0);
 
+    /*
+     * A file with no trailing padding at all must still come back aligned.
+     * This is the case the fixtures above all missed: every one of them had
+     * padding, so the rounded-up value was always below the file size and the
+     * old size cap never bit. A 1992-byte ROM with no padding rounds up past
+     * its own length, and capping there returned an unaligned result.
+     */
+    memset(buf, 0, sizeof buf);
+    buf[3] = 0xEA;
+    buf[0xB2] = 0x96;
+    for (uint32_t i = MB_HEADER; i < 1992; i++) {
+        buf[i] = (uint8_t)(0x30 + (i % 0x40));   /* never 0x00 or 0xFF */
+    }
+    uint32_t unpadded = rom_effective_size(buf, 1992);
+    check("unpadded rom rounds up rather than being capped", unpadded, 2000);
+    check("and is aligned", (long)((unpadded - MB_HEADER) % 16), 0);
+    check("mb_padded_size agrees", (long)mb_padded_size(1992), (long)unpadded);
+
     /* A file that is all padding after the header must not strip into it. */
     memset(buf + MB_HEADER, 0x00, sizeof buf - MB_HEADER);
     check("never strips below the minimum",

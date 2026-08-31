@@ -102,6 +102,9 @@ typedef struct {
      *   ROM writes to_gate then bumps seq_to;   the script watches seq_to.
      *   script writes from_gate then bumps seq_from; the ROM watches seq_from.
      */
+    uint32_t tests;       /* HS_T_* bits earned so far             */
+    uint32_t chip_seen;   /* the chip word observed, 0 if none      */
+
     uint16_t to_gate;     /* ROM -> gate: the word we are staging  */
     uint16_t seq_to;
     uint16_t from_gate;   /* gate -> ROM: the word the gate sent   */
@@ -208,6 +211,8 @@ static void publish(const hs_t *h, uint32_t status) {
     RESULT.linked_frames = h->linked_frames;
     RESULT.gate_id_seen  = h->gate_id_seen;
     RESULT.phase         = (uint32_t)h->phase;
+    RESULT.tests         = h->tests;
+    RESULT.chip_seen     = h->chip_seen;
     for (int i = 0; i < 9; i++) {
         RESULT.rotation[i] = h->rotation[i];
     }
@@ -221,6 +226,7 @@ int main(void) {
 
     hs_t h;
     hs_init(&h, HS_GATE_ID_BN6US);
+    hs_enable_relink(&h);   /* a gate you unplug must re-link */
 
     RESULT.to_gate   = 0;
     RESULT.seq_to    = 0;
@@ -262,7 +268,7 @@ int main(void) {
         }
 
         if (status == STATUS_RUNNING) {
-            if (hs_passed(&h)) {
+            if (hs_protocol_passed(&h)) {
                 status = STATUS_PASS;
                 fill(COL_PASS);
             } else if (h.frames >= TEST_FRAMES) {

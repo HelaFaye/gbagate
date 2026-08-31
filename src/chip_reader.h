@@ -7,7 +7,8 @@
  * the EXE chip project:
  *
  *   Advance / Progress  11 pads, common = pad 10 (present in 24 of 24 nets),
- *                       ID bits on pads 1-9 and 11 -> 10 bits.
+ *                       ID bits on pads 1-9 -> 9 bits. Pad 11 is *not* an ID
+ *                       bit: see below.
  *   Beast Link          12 pads, common = pad 2  (23 of 23), ID bits on pads
  *                       3-11 -> 9 bits. Pads 1 and 12 are never wired.
  *
@@ -16,12 +17,32 @@
  * next to a display and a link port, so this takes the pad word from a
  * callback -- point it at an MCP23017 or a 74HC165 chain and spend two pins.
  *
- * Bit order is calibratable on purpose
- * ------------------------------------
- * That the pads form the ID is established. Which pad is the most significant
- * bit is not, and getting it backwards yields plausible-looking wrong IDs. One
- * chip whose ID you know settles it: read it both ways and keep the order that
- * matches. Until then, treat decoded IDs as provisional.
+ * Bit order, settled
+ * ------------------
+ * Solved from the EXE chip project schematics against our own chip databases,
+ * which is better evidence than one chip and a multimeter because it is eight
+ * independent chips at once:
+ *
+ *   pad 1 = bit 8 (MSB) ... pad 9 = bit 0 (LSB), pad 10 = common,
+ *   pad 11 = family marker, carries no weight.
+ *
+ * The Gun Del Sol family settles the weighting by itself. Its three chips are
+ * consecutive IDs and differ by one pad each:
+ *
+ *   GunDelS1  pads {4}      = 32     pad 4 = 32
+ *   GunDelS2  pads {4,9}    = 33     so pad 9 = 1
+ *   GunDelS3  pads {4,8}    = 34     so pad 8 = 2
+ *
+ * Confirmed on GunDelEX (219), Django[SP] (279), Django[DS] (280), Otenko
+ * (215) and, from the other family, LifeSync (28). Eight for eight.
+ *
+ * Pad 11 is what distinguishes Progress chips from Advance ones: every EXE 5
+ * Progress chip ties it, no EXE 4 Advance chip does. Treating it as a tenth
+ * bit shifts every weight and yields plausible-looking wrong IDs -- which is
+ * exactly what this file used to do.
+ *
+ * msb_is_lowest_pad stays, defaulting to the confirmed orientation, because a
+ * Beast Link chip has not been checked the same way.
  */
 
 #ifndef CHIP_READER_H

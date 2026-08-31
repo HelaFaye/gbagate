@@ -27,7 +27,13 @@ static bool pad_carries_id(chip_family_t family, uint8_t pad) {
     if (family == CHIP_FAMILY_BEAST) {
         return pad >= 3 && pad <= 11;
     }
-    return pad >= 1 && pad <= CHIP_ADV_PADS;
+    /*
+     * Pads 1..9 only. Pad 10 is the common (excluded above) and pad 11 is not
+     * an ID bit at all -- see the note in chip_reader.h. Counting it as one
+     * gave a 10-bit value and shifted every weight, so IDs came out plausible
+     * and wrong.
+     */
+    return pad >= 1 && pad <= 9;
 }
 
 uint8_t chip_reader_id_bits(chip_family_t family) {

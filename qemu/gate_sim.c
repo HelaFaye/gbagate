@@ -42,6 +42,18 @@ static void send_pkt(int fd, const lp_packet_t *p) {
 int main(int argc, char **argv) {
     int port = (argc > 1) ? atoi(argv[1]) : 5556;
     const char *game = (argc > 2) ? argv[2] : "bn6";
+    /*
+     * Mirrors the firmware's self-test mode: send chips unprompted so the
+     * ROM's chip checks can pass without anyone at a keyboard. Same schedule
+     * and the same cooldown, because the cooldown is the part that matters --
+     * reloading before the far end has seen slot 5 empty makes two deliveries
+     * look like one. See SELFTEST_COOLDOWN in pio/src/gate_app.c.
+     */
+    int selftest = (argc > 3) && !strcmp(argv[3], "--selftest");
+    unsigned sent = 0, ready = 0;
+#define SIM_CHIP     0x0101u
+#define SIM_SETTLE   40
+#define SIM_COOLDOWN 20
 
     chipgate_t gate;
     chipgate_init(&gate, game_from_name(game));
@@ -98,6 +110,23 @@ int main(int argc, char **argv) {
             /* This is the firmware's whole gate loop. */
             uint16_t answer = chipgate_step(&gate, in.u.word.word);
             transfers++;
+
+            if (chipgate_take_consumed(&gate)) {
+                ready = transfers + SIM_COOLDOWN;
+            }
+            if (selftest && chipgate_connected(&gate) && !chipgate_busy(&gate)) {
+                if (ready == 0) {
+                    ready = transfers + SIM_SETTLE;
+                }
+                if (sent < 2 && transfers >= ready) {
+                    if (chipgate_load(&gate, SIM_CHIP)) {
+                        sent++;
+                        ready = 0;
+                        fprintf(stderr, "gate_sim: sent test chip %u at %u\n",
+                                sent, transfers);
+                    }
+                }
+            }
 
             lp_packet_t out = { .type = LP_RESULT, .seq = in.seq };
             out.u.result.word[0] = in.u.word.word;  /* the game, as parent */

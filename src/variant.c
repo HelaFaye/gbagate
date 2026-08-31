@@ -19,6 +19,12 @@ uint32_t feature_requires(feature_t f) {
 
     case FEAT_CHIPDB_ALL:  return FEAT_CHIPGATE;
 
+    /* Self-test drives the link and reports on screen. */
+    case FEAT_SELFTEST:    return FEAT_DISPLAY | FEAT_LINK_MASTER;
+
+    /* Exposing the drive needs a drive and a screen to say so on. */
+    case FEAT_USB_EXPOSE: return FEAT_DISPLAY | FEAT_USB_MSC;
+
     /* Something has to drive the encoder's selection. */
     case FEAT_ENCODER:     return FEAT_DISPLAY;
 
@@ -41,7 +47,7 @@ static const variant_t k_variant[VARIANT_COUNT] = {
         .name = "link",
         .features = FEAT_DISPLAY | FEAT_ENCODER |
                     FEAT_LINK_MASTER | FEAT_ESPNOW | FEAT_USB_CDC |
-                    FEAT_RFU_EMU,
+                    FEAT_RFU_EMU | FEAT_SELFTEST,
         .optional = 0,
         .summary = "wireless link cable and Wireless Adapter emulation",
     },
@@ -50,7 +56,8 @@ static const variant_t k_variant[VARIANT_COUNT] = {
         .features = FEAT_DISPLAY | FEAT_ENCODER | FEAT_CHIPGATE |
                     FEAT_CHIPDB_ALL | FEAT_LINK_MASTER | FEAT_LINK_SLAVE |
                     FEAT_ESPNOW | FEAT_USB_CDC | FEAT_USB_MSC |
-                    FEAT_MULTIBOOT | FEAT_RFU_EMU,
+                    FEAT_MULTIBOOT | FEAT_RFU_EMU | FEAT_SELFTEST |
+                    FEAT_USB_EXPOSE,
         .optional = 0,
         .summary = "everything except physical chips and IR",
     },
@@ -60,7 +67,8 @@ static const variant_t k_variant[VARIANT_COUNT] = {
                     FEAT_CHIP_READER | FEAT_CHIPDB_ALL |
                     FEAT_LINK_MASTER | FEAT_LINK_SLAVE |
                     FEAT_ESPNOW | FEAT_USB_CDC | FEAT_USB_MSC |
-                    FEAT_MULTIBOOT | FEAT_RFU_EMU | FEAT_IR | FEAT_NRF24,
+                    FEAT_MULTIBOOT | FEAT_RFU_EMU | FEAT_IR | FEAT_NRF24 |
+                    FEAT_SELFTEST | FEAT_USB_EXPOSE,
         /* The nRF24 may or may not be populated; hw_caps decides at boot and
          * the menu entry appears or does not. Same image either way. */
         .optional = FEAT_NRF24,
@@ -122,6 +130,8 @@ const char *feature_name(feature_t f) {
     case FEAT_RFU_EMU:     return "adapter emulation";
     case FEAT_IR:          return "infrared";
     case FEAT_NRF24:       return "nRF24";
+    case FEAT_SELFTEST:    return "self test";
+    case FEAT_USB_EXPOSE:  return "expose drive";
     default:               return "?";
     }
 }

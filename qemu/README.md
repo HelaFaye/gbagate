@@ -220,6 +220,140 @@ Colour conversion is checked against `test_render.c`'s `save_ppm()` so a screen
 captured from live firmware and one from the host render test are directly
 comparable.
 
+## Send Program
+
+USB MSC had glue but no user: `msc_rescan()` was never called and the mode had
+no screen, so the catalogue was unreachable. `src/ui_romview.{h,c}` is the
+browser, host-tested, and `gate_app.c` now renders it.
+
+The drive is rescanned **on entry to the mode**, not cached: a PC rewrites it
+between visits, and a stale list offers files that are no longer there.
+
+### The empty states are the interesting part
+
+Three different things produce an empty list, and telling the user the wrong
+one sends them hunting a fault that is not there:
+
+| state | shown |
+|---|---|
+| a PC has the volume mounted | `connected to PC` |
+| mounted, readable, nothing on it | `drop .mb files on` |
+| the partition would not mount | `no storage` |
+
+The first is not a fault at all -- a FAT volume has exactly one owner and the
+host has it.
+
+### Unplayable files are listed with their reason
+
+```
+demo.mb  2K
+huge.gba  wrong size
+garbage.mb  not a GBA image
+patched.mb  bad logo - repair on PC
+big_but_fine.mb  256K
+```
+
+Not hidden, and not merely greyed. "wrong size" tells someone their 8 MB retail
+dump will never work; a greyed row tells them nothing and they try again. The
+footer says `cannot send this` when the cursor is on one, so the button never
+silently does nothing.
+
+Sending stages the file, closes the handle, then transfers -- the staging rule
+from `rom_catalog.h` -- and shows a progress bar rather than a bare percentage,
+because a percentage alone does not show that a transfer has stopped moving.
+
+Under emulation there is no USB peripheral and no SPI, so the mode reports
+`no storage` rather than offering an empty list as though the drive were blank.
+It is a hardware mode; the transfer itself is covered by `test_mbe2e`.
+
+## Multiboot, end to end with a real ROM
+
+`test/test_mbe2e.c` runs the whole Send Program path against `rom/tester.gba`:
+the catalogue finds and validates it, `rom_stage()` stages it, `mb_send()`
+encrypts and transfers it, and a simulated BIOS decrypts it back.
+
+```
+tester.gba: 1992 bytes, ok
+staged 2000 bytes
+ok, 560 words, client byte 0xD1, crc 0x38DF
+1808 bytes of payload identical after encryption and transfer
+```
+
+The simulated receiver derives the session key itself and computes its own CRC,
+so it would not pass with the wrong constants -- and the ROM's entry branch and
+fixed byte are checked at the far end, because if offset 0 is wrong nothing else
+matters.
+
+### It found a bug the synthetic tests could not
+
+`rom_effective_size()` rounds the payload up to a 16-byte boundary and then
+capped the result at the file size. For any ROM whose length is not already
+aligned, that cap returned an **unaligned** length -- silently breaking the one
+guarantee the function exists to provide.
+
+Every fixture in `test_catalog.c` had trailing padding, so the rounded value was
+always *below* the file size and the cap never bit. A real 1992-byte ROM with no
+padding rounds up to 2000 and found it on the first run.
+
+The cap is gone: returning more than `size` is safe because `rom_stage()`
+already requires the buffer to hold `mb_padded_size()` and zeroes the gap.
+There is now a regression test using an unpadded fixture.
+
+## What the tester ROM checks
+
+Six checks, not one. The first version only proved a link came up; these prove
+the gate behaves.
+
+| check | what it means |
+|---|---|
+| `link` | reached LINKED and the identity was the expected one |
+| `shape` | slots 0/1/2 and 6/7/8 hold their fixed values, two rotations running |
+| `counters` | both rolling counters actually advance |
+| `chip` | a chip arrived in slot 5 |
+| `repeats` | it was held for exactly nine rotations, then the slot emptied |
+| `relink` | the session tore down and a second handshake succeeded |
+
+Verified through the whole chain -- ROM in mGBA, Lua, broker, the real
+`chipgate.c`:
+
+```
+PASS
+gate_id=FF00
+tests=3F
+chip=0101
+link      pass      chip      pass
+shape     pass      repeats   pass
+counters  pass      relink    pass
+```
+
+The two chip checks need something to send a chip, so **self-test mode sends its
+own** -- two of them, spaced apart -- and no one has to be at a keyboard. On the
+host side `build/gate_sim --selftest` does the same, so the chain can be proven
+before ESP-IDF is involved.
+
+`hs_protocol_passed()` reports the four checks that do not depend on the
+firmware doing anything, separately from `hs_all_passed()`. A gate that links,
+rotates and re-links is working even if nobody has sent a chip, and reporting
+that as a failure would train people to ignore the result.
+
+### Three things running it exposed
+
+**The test chip cannot be chip 1.** A watcher identifies slots by position, and
+DATA0 is an 8-bit counter that eventually takes every value up to `0xFF` -- so
+the counter reaching `0x0001` reads as a chip arriving. The self-test chip is
+`0x0101`: above DATA0's range, and not a multiple of `0x400`, so DATA1 cannot
+produce it either.
+
+**Two identical chips looked like one.** The observer distinguished deliveries
+by value, so a firmware sending the same chip twice produced one impossibly long
+delivery -- 18 repeats instead of two runs of 9. A new delivery is signalled by
+the slot having gone *empty*, not by a different value.
+
+**Reloading immediately hides the gap.** The gate retires a chip the instant its
+ninth repeat goes out. The firmware reloaded two transfers later, before slot 5
+came round again, so the far end never saw the slot empty. `SELFTEST_COOLDOWN`
+leaves two full rotations, which is why there is a cooldown at all.
+
 ## The tester ROM, proven end to end
 
 `rom/tester.gba` is a purpose-built GBA program that drives the gate handshake

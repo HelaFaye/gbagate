@@ -9,6 +9,12 @@
 #   ./qemu/lab.sh --no-viewer        leave :5557 free for rawtap.py/fbgrab.py
 #   ./qemu/lab.sh --aux-uart 0       for a QEMU that only wires two UARTs
 #   ./qemu/lab.sh --sim              use build/gate_sim instead of QEMU
+#   ./qemu/lab.sh --bios gba_bios.bin           boot through the real BIOS
+#
+# The BIOS is optional for the gate tests -- the tester ROM is a cartridge image
+# and mGBA's high-level BIOS runs it fine. It is required for multiboot, because
+# multiboot *is* a BIOS routine: without the real thing there is nothing on the
+# far end to receive the transfer. GBA_BIOS in the environment works too.
 #
 # Topology:
 #
@@ -51,6 +57,7 @@ USE_MGBA=1
 USE_SIM=0
 USE_VIEWER=1
 VIEW_MODE=""
+BIOS="${GBA_BIOS:-}"
 AUX_UART="${AUX_UART:-2}"
 LOGS="$ROOT/build/lab"
 
@@ -65,6 +72,7 @@ while [ $# -gt 0 ]; do
         --term)     VIEW_MODE="--term"; shift ;;
         --tk)       VIEW_MODE="--tk"; shift ;;
         --variant)  VARIANT="$2"; shift 2 ;;
+        --bios)     BIOS="$2"; shift 2 ;;
         -h|--help)  sed -n '2,38p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 1 ;;
     esac
@@ -139,7 +147,11 @@ done
 if [ "$USE_SIM" = 1 ]; then
     [ -x "$ROOT/build/gate_sim" ] || die "build/gate_sim missing. Run: make gate-sim"
     say "gate_sim on :$LINK_PORT (no QEMU, no screen)"
-    "$ROOT/build/gate_sim" "$LINK_PORT" bn6 >"$LOGS/firmware.log" 2>&1 &
+    # --selftest makes it send its own chips, the way the firmware's self-test
+    # mode does. Without it the ROM's two chip checks cannot pass, and a run
+    # that reports FAIL for a reason nobody caused is worse than no run.
+    "$ROOT/build/gate_sim" "$LINK_PORT" bn6 --selftest \
+        >"$LOGS/firmware.log" 2>&1 &
     PIDS="$PIDS $!"
 else
     FLASH="$ROOT/build/qemu-$VARIANT/flash.bin"
@@ -232,6 +244,13 @@ fi
 # ---- 4. the game --------------------------------------------------------
 
 if [ "$USE_MGBA" = 1 ]; then
+    BIOS_ARG=""
+    if [ -n "$BIOS" ]; then
+        [ -f "$BIOS" ] || die "no BIOS at $BIOS"
+        BIOS_ARG="-b $BIOS"
+        say "using BIOS $(basename "$BIOS")"
+    fi
+
     MGBA=""
     for c in mgba-headless mgba-qt mgba; do
         command -v "$c" >/dev/null 2>&1 && { MGBA="$c"; break; }
@@ -248,14 +267,15 @@ if [ "$USE_MGBA" = 1 ]; then
             # caveat in qemu/README.md.
             [ -f "$GAME" ] || die "no such ROM: $GAME"
             say "mGBA: $(basename "$GAME") with mgba_link.lua (retail path)"
-            LINK_PORT="$MGBA_PORT" "$MGBA" --script qemu/mgba_link.lua "$GAME" \
-                >"$LOGS/mgba.log" 2>&1 &
+            # shellcheck disable=SC2086
+            LINK_PORT="$MGBA_PORT" "$MGBA" $BIOS_ARG \
+                --script qemu/mgba_link.lua "$GAME" >"$LOGS/mgba.log" 2>&1 &
         else
             [ -f "$ROM" ] || die "no tester ROM at $ROM. Run: make -C rom"
             say "mGBA: $(basename "$ROM") with mgba_tester.lua (self-checking)"
             LINK_PORT="$MGBA_PORT" \
             ROMTEST_RESULT="$LOGS/rom_test.result" \
-                "$MGBA" --script qemu/mgba_tester.lua "$ROM" \
+                "$MGBA" $BIOS_ARG --script qemu/mgba_tester.lua "$ROM" \
                 >"$LOGS/mgba.log" 2>&1 &
         fi
         PIDS="$PIDS $!"

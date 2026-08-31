@@ -490,9 +490,88 @@ def _swap(frame_tuple):
     return (pixels, w, h)
 
 
+SUITE_HARNESS = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include "chipgate.h"
+#include "handshake.h"
+int main(int argc, char **argv) {
+    int send_chips = (argc > 1) ? atoi(argv[1]) : 1;
+    int frames     = (argc > 2) ? atoi(argv[2]) : 4000;
+    chipgate_t cg; chipgate_init(&cg, CG_GAME_BN6_US);
+    hs_t h; hs_init(&h, HS_GATE_ID_BN6US); hs_enable_relink(&h);
+    uint16_t stage = HS_WORD_IDLE;
+    unsigned transfers = 0, sent = 0, ready = 0;
+    for (int i = 0; i < frames; i++) {
+        uint16_t answer = chipgate_step(&cg, stage);
+        stage = hs_step(&h, answer);
+        transfers++;
+        if (chipgate_take_consumed(&cg)) ready = transfers + 20;
+        if (send_chips && chipgate_connected(&cg) && !chipgate_busy(&cg)) {
+            if (ready == 0) ready = transfers + 40;
+            if (sent < 2 && transfers >= ready) {
+                if (chipgate_load(&cg, 0x0101)) { sent++; ready = 0; }
+            }
+        }
+    }
+    printf("%08X %u %u\n", h.tests, h.chip_events, h.chip_rotations);
+    return 0;
+}
+"""
+
+
+def test_suite(tmp, root):
+    """The ROM's six-check suite, driven against the real chipgate.c."""
+    src, exe = os.path.join(tmp, "s.c"), os.path.join(tmp, "s")
+    with open(src, "w") as fh:
+        fh.write(SUITE_HARNESS)
+    subprocess.run(["cc", "-std=c11", "-I", os.path.join(root, "src"),
+                    "-I", os.path.join(root, "rom"), "-o", exe, src,
+                    os.path.join(root, "src", "chipgate.c")], check=True)
+
+    fails = 0
+    out = subprocess.run([exe, "1", "4000"], capture_output=True,
+                         text=True, check=True).stdout.split()
+    bits, chips, reps = int(out[0], 16), int(out[1]), int(out[2])
+
+    names = ["link", "shape", "counters", "chip", "repeats", "relink"]
+    for i, n in enumerate(names):
+        if not (bits & (1 << i)):
+            print(f"  FAIL {n} did not pass against the real gate")
+            fails += 1
+    if chips != 2:
+        print(f"  FAIL expected 2 chip deliveries, saw {chips}")
+        fails += 1
+    if reps != 9:
+        print(f"  FAIL expected exactly 9 repeats, saw {reps}")
+        fails += 1
+    if not fails:
+        print(f"  all six checks pass; {chips} chips, {reps} repeats each")
+
+    # A suite that cannot fail proves nothing. With no chip sent, exactly the
+    # two firmware-dependent checks must go red and the other four stay green.
+    out2 = subprocess.run([exe, "0", "4000"], capture_output=True,
+                          text=True, check=True).stdout.split()
+    bits2 = int(out2[0], 16)
+    if bits2 & 0x18:
+        print("  FAIL chip checks passed with no chip sent")
+        fails += 1
+    elif (bits2 & 0x27) != 0x27:
+        print("  FAIL protocol checks regressed when no chip was sent")
+        fails += 1
+    else:
+        print("  control: no chip sent -> only the two chip checks fail")
+    return fails
+
+
 def main() -> int:
     fails = (test_handshake() + test_chip_injection()
              + test_session_lifecycle() + test_framebuffer())
+    with tempfile.TemporaryDirectory() as tmp:
+        print("\nthe six-check suite against the real chipgate.c")
+        g_fail_extra = test_suite(tmp, ROOT)
+        fails += g_fail_extra
+
     print("\n" + ("FAILURES" if fails else
                   "the ROM handshake drives the real chipgate.c, a slotted chip "
                   "goes out over the full rotation, sessions tear down and "

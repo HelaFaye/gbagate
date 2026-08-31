@@ -113,6 +113,52 @@ static void test_chip_send(void) {
     check("reload now accepted", chipgate_load(&cg, 0x0002), 1);
 }
 
+/*
+ * The bug behind "device stays busy": a chip is only retired when the rotation
+ * reaches its slot, so if the parent stops clocking mid-chip the slot never
+ * clears and every later chipgate_load() is refused for ever.
+ *
+ * The gate cannot fix that by itself -- it has no clock of its own and no
+ * notion of time -- so the contract is that chipgate_clear() is the escape,
+ * and the caller is responsible for noticing the stall. This pins both halves
+ * down so neither can be quietly dropped.
+ */
+static void test_stalled_link_locks_the_slot(void) {
+    printf("a stalled parent locks the chip slot\n");
+
+    chipgate_t cg;
+    chipgate_init(&cg, CG_GAME_BN6_US);
+    handshake(&cg, CG_ID_BEAST_LINK_US);
+
+    check("chip accepted", chipgate_load(&cg, 0x0001), 1);
+    check("busy", chipgate_busy(&cg), 1);
+
+    /* A few transfers, then the parent goes away mid-chip. */
+    for (int i = 0; i < 20; i++) {
+        frame(&cg, 0x0000);
+    }
+    check("still busy after a partial rotation", chipgate_busy(&cg), 1);
+
+    /* No amount of waiting helps: without transfers nothing advances. */
+    check("still busy however long we wait", chipgate_busy(&cg), 1);
+    check("and every further chip is refused", chipgate_load(&cg, 0x0002), 0);
+
+    /* chipgate_clear() is the way out, and it must leave the gate usable. */
+    chipgate_clear(&cg);
+    check("cleared", chipgate_busy(&cg), 0);
+    check("accepts a chip again", chipgate_load(&cg, 0x0002), 1);
+
+    /* And with the parent still clocking, a chip retires on its own. */
+    chipgate_t ok;
+    chipgate_init(&ok, CG_GAME_BN6_US);
+    handshake(&ok, CG_ID_BEAST_LINK_US);
+    chipgate_load(&ok, 0x0003);
+    for (int i = 0; i < 9 * CG_CHIP_REPEATS + 18; i++) {
+        frame(&ok, 0x0000);
+    }
+    check("retires when the link keeps running", chipgate_busy(&ok), 0);
+}
+
 static void test_teardown_and_relink(void) {
     printf("teardown and relink\n");
     chipgate_t cg;
@@ -183,6 +229,7 @@ int main(void) {
     test_handshake();
     test_rotation();
     test_chip_send();
+    test_stalled_link_locks_the_slot();
     test_teardown_and_relink();
     test_identities();
     trace();

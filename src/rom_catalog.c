@@ -125,11 +125,24 @@ uint32_t rom_effective_size(const uint8_t *data, uint32_t size) {
         }
         end--;
     }
-    /* The protocol moves the payload in 16-byte groups. */
+    /*
+     * The protocol moves the payload in 16-byte groups, so the result is
+     * rounded up -- and deliberately not capped at the file size.
+     *
+     * Capping was the obvious-looking thing and it was wrong: a ROM whose
+     * length is not already a multiple of 16 would round up, hit the cap, and
+     * come back unaligned, quietly breaking the guarantee this function
+     * exists to provide. It went unnoticed because the catalogue's test
+     * fixtures all had trailing padding, so the rounded value was always
+     * below the file size and the cap never bit. A real 1992-byte ROM found
+     * it immediately.
+     *
+     * Returning more than `size` is safe because rom_stage() requires the
+     * buffer to hold mb_padded_size(), and zeroes the gap.
+     */
     uint32_t payload = end - MB_HEADER;
     payload = (payload + 0x0F) & ~0x0Fu;
-    uint32_t out = payload + MB_HEADER;
-    return out > size ? size : out;
+    return payload + MB_HEADER;
 }
 
 static void insert_sorted(rom_catalog_t *cat, const rom_entry_t *e) {

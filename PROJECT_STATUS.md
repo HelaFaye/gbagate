@@ -605,3 +605,226 @@ At the bench:
 
 Adding further modes before that session multiplies untested surface against an
 unverified foundation.
+
+---
+
+## Remaining features: what was built, and what was deliberately not
+
+**Built and host-tested (this pass):**
+
+- **MCP23017 driver** (`src/mcp23017.{h,c}`) -- the last piece between a fitted
+  reader board and a working Read Chip mode. I2C injected, so register
+  sequencing, the presence probe, BANK=1 recovery and bus discipline are all
+  tested against a simulated part that models the pad-bus physics.
+- **`port/esp32s3/i2c_esp32s3.c`** -- the real transfer behind it, and a
+  `chip_reader_probe()` that reports honestly when no board is fitted.
+- Wired into the full image only; the gate and link images keep the weak
+  default and hide Read Chip.
+
+The expander test found a bug immediately: the detect switches were on bits 8
+and 9, which are **pads 9 and 10**, not spare pins. A direction change for a
+pad silently became a change for a switch, the mask came out all-ones, the
+write was skipped as redundant, and every chip decoded as empty. Moved to bits
+11 and 12.
+
+**Deliberately not implemented:**
+
+- **RFU (Wireless Adapter) emulation.** The link-cable side is documented, but
+  it runs at `SIOCNT 0x5003` -- 0.5 us per bit, with the clock direction
+  switching mid-session. Nothing in this project can verify that timing: QEMU
+  models no pins, and the host suites model no clock. Writing it now would
+  produce a few hundred lines of plausible code whose only test would be a
+  bench session that has not happened. That is exactly the pattern that
+  produced every defect the audit found.
+- **Infrared.** The GBA side is GPIO bit-banging, which is the easy part; the
+  accessory protocol is undocumented beyond a single third-party device. There
+  is nothing to implement *against*.
+- **USB MSC.** The glue exists and is unrun. Finishing it means testing it, and
+  testing it needs ESP-IDF and a USB host.
+
+The honest position is unchanged from the audit: what remains needs hardware or
+a toolchain, not more code. Adding unverifiable modes multiplies the untested
+surface against a foundation that still has not met a logic analyser.
+
+---
+
+## Modes and persistence (this pass)
+
+**All nine modes now have a screen.** Four had been falling through to a
+placeholder: `Link: USB`, `Link: Wireless`, `Read Chip` and `Settings`. A fifth,
+`USB Storage`, is new.
+
+| mode | shows |
+|---|---|
+| Link: USB / Wireless | bridge state, words sent and received, round-trip time |
+| Read Chip | slot occupancy, and the decoded wire ID |
+| USB Storage | who owns the volume, and a button to hand it over |
+| Settings | panel offsets, colour order, saved/unsaved |
+
+The link screens report **round-trip time** because that is the number that says
+whether a wireless link is usable: under a millisecond is fine, tens are not.
+
+`USB Storage` exists because handing the volume to a host has to be a deliberate
+action. Inferring it from what the host appears to be doing is what corrupts a
+FAT volume, and a device that cannot be told to release its storage is one you
+end up power-cycling. Leaving the mode reclaims the volume automatically, so the
+catalogue never reads a drive the device does not own.
+
+### Persistence
+
+`src/settings.{h,c}` holds two kinds of state, and they are worth telling apart:
+
+- **calibration** -- panel offsets and BGR/RGB. Found once with a test pattern.
+  Losing these means recalibrating by eye.
+- **preference** -- default game, encoder acceleration, favourites.
+
+The blob is `magic | version | length | payload | CRC`, with storage injected,
+so a corrupt or foreign save is handled by tested code rather than by whatever
+NVS returns. A bad blob falls back to defaults: **a device that boots to
+defaults is recoverable, one that boots to garbage calibration is a puzzle.**
+
+An intact blob holding an impossible value -- a game index from a build with
+more games, an offset past the panel -- is **clamped, not rejected**, because
+rejecting would throw the calibration away along with it.
+
+**Saves are deferred.** Every favourite toggle would otherwise be a flash write,
+and flash writes suspend the instruction cache -- the one thing the link task
+cannot tolerate. State is marked dirty and flushed when a mode is left, keeping
+writes to moments when nothing is being clocked.
+
+### Still not done
+
+Unchanged: RFU emulation and infrared, for the reasons above; and the bench
+list, which no further code touches.
+
+---
+
+## Infrared: no longer undocumented
+
+I twice declined to implement IR on the grounds that there was nothing to
+implement against. That was true until you supplied Shonumi's article, which is
+a complete description of the AGB-006 and the Cyber Drive Zoids protocol. The
+objection is answered and the work is done.
+
+`src/ir_cdz.{h,c}` -- classification, decoding, encoding, 22nd test suite.
+
+### What the article establishes
+
+The adapter runs in **General Purpose mode** via `RCNT`, not SIO. The game
+writes `0x80BE` and `0x80B6`; decoding those against the GPIO bit layout shows
+they differ in exactly one bit, bit 3 = **SO**, with a direction nibble of `B`
+making SO an output and SI an input. That is internally consistent with the
+article's claim that SO high turns the LED on, and it is the one part of the
+spec I could check independently.
+
+Presence is detected by a **serial interrupt**, not by pin values: the game
+sends a pulse and expects an IRQ. The adapter interrupts on both sending and
+receiving, and on receive only for no-light to light -- never the reverse.
+
+### The two mistakes this code exists to avoid
+
+**Pulses are classified by the gap before them, not by how long the light is
+on.** The LED is on briefly every time; it is the off period that varies. A
+decoder that measures ON duration sees four identical pulses and never decodes
+anything.
+
+**Mini pulses are keep-alives and carry no data.** They sit between every other
+pulse. Counting them as bits overruns twelve and discards every command, which
+looks like a timing fault rather than a parsing one.
+
+Thresholds sit at the **geometric** mean of adjacent classes, not the
+arithmetic one. The classes are separated by ratios -- 16x, 2.5x, 150x -- so a
+log-domain midpoint gives each the same proportional margin. An arithmetic
+midpoint between Short and Medium would leave Medium, the class a late
+interrupt stretches, with almost no room.
+
+### What I could not verify
+
+I searched the ROM for the documented `RCNT` writes and found the constants,
+but only inside a monotonically increasing data table -- coincidence, not code.
+The ten genuine `0x04000134` literal sites cluster around `0x083130-0x08342C`
+and one carries `0x80B0`, the same direction nibble, which is suggestive and no
+more. Confirming the write sites needs disassembly, and Shonumi has already
+done that work; re-deriving it would not have improved the implementation.
+
+The timing itself still needs a scope and an LED. What is tested is the reading
+of the protocol.
+
+---
+
+## Pad bit order: solved
+
+Open question 2 is closed, and without hardware. The EXE chip project ships
+EAGLE schematics for the real chips; our own databases give those chips their
+wire IDs. Solving one against the other is eight independent chips at once,
+which is stronger evidence than the one chip and a multimeter I kept
+recommending.
+
+```
+pad 1 = bit 8 (MSB) ... pad 9 = bit 0 (LSB)
+pad 10 = common
+pad 11 = family marker, no weight
+```
+
+The Gun Del Sol family settles the weighting by itself -- three consecutive IDs
+differing by one pad each:
+
+| chip | ID pads | value | catalogued |
+|---|---|---|---|
+| GunDelS1 | 4 | 32 | 32 |
+| GunDelS2 | 4, 9 | 33 | 33 |
+| GunDelS3 | 4, 8 | 34 | 34 |
+
+so pad 9 is worth 1 and pad 8 is worth 2. Confirmed on GunDelEX (219),
+Django[SP] (279), Django[DS] (280), Otenko (215), and from the other family
+LifeSync (28). Eight for eight, and both databases agree that GunSol1/2/3 are
+32/33/34 in BN4 as well as BN5.
+
+### The bug this exposed
+
+`chip_reader.c` counted **pad 11 as a tenth ID bit**. It is not a bit at all:
+every EXE 5 Progress chip ties it and no EXE 4 Advance chip does, so it marks
+which family the chip belongs to. Counting it shifted every weight, and the
+result was IDs that looked entirely plausible and were wrong -- the exact
+failure the header warned about, sitting in the code the whole time.
+
+Three test assertions had encoded the same wrong assumption and failed when it
+was corrected, which is what they are for. The eight chips are now vectors in
+`test_ui.c`.
+
+### What is still open
+
+Beast Link chips have not been checked this way -- the schematics are there but
+the family's chips did not name-match our databases. `msb_is_lowest_pad`
+therefore stays, defaulting to the confirmed Advance orientation.
+
+---
+
+## The build-list failure, removed rather than fixed again
+
+Three separate hardware builds failed the same way: a file was added to `src/`
+and not to `pio/src/CMakeLists.txt`. Each time the linker reported the missing
+**symbols** -- `romview_init`, `uiset_move`, `settings_save` -- and not the
+missing file, so it read as a code fault rather than a build-config one. Each
+time the fix was to add a line, and the next new file failed the same way.
+
+`src/` is now globbed with `CONFIGURE_DEPENDS`.
+
+Globbing usually hides what is being built, and that is a fair objection almost
+everywhere. It is the right call here because of what `src/` specifically is:
+portable C, no hardware dependencies, no variant-specific behaviour, nothing
+that is wrong to compile. `--gc-sections` drops whatever an image does not
+reference, so the cost of compiling an unused file is build time and nothing
+else.
+
+The glob immediately pulled in `app_modes.c`, which had been sitting in `src/`
+unbuilt.
+
+`port/esp32s3/` stays an explicit list -- those files genuinely must not be
+compiled everywhere, since they need hardware that may be absent. That half is
+covered by `qemu/srccheck.py`, which fails if a file there is in no build and
+not listed as knowingly excluded, and which also fails if the `src/` glob is
+ever removed. Verified against a deliberately orphaned file.
+
+`make lint` now runs: 12 compiles across both configurations, source coverage,
+DRAM budget, and capability coverage.

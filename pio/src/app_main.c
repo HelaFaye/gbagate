@@ -8,11 +8,13 @@
 #include "nvs_flash.h"
 
 #include "hw_caps.h"
+#include "link_source.h"
 #include "variant.h"
 
 static const char *TAG = "main";
 
 extern void tasks_start(uint32_t features);
+extern uint16_t *st7735_framebuffer(void);
 extern esp_err_t st7735_init(int panel);
 #ifndef GBAGATE_QEMU
 extern esp_err_t msc_storage_init(void);
@@ -52,10 +54,21 @@ void app_main(void) {
      * and a mode whose hardware is absent must never appear -- see the
      * diagnostics screen, which is reachable with no capabilities at all.
      */
+    /*
+     * Log every probe. A black panel has at least four causes -- display init
+     * failed, the UI task never started, nothing ever rendered, or QEMU mapped
+     * the serial ports differently -- and they are indistinguishable from the
+     * outside. The console log has to say which.
+     */
     uint32_t caps = 0;
     if (v.resolved & FEAT_DISPLAY) {
-        if (st7735_init(0) == ESP_OK) {
+        esp_err_t derr = st7735_init(0);
+        if (derr == ESP_OK) {
             caps |= HW_CAP_DISPLAY;
+            ESP_LOGI(TAG, "display ready, framebuffer %p", st7735_framebuffer());
+        } else {
+            ESP_LOGE(TAG, "display init failed: %s -- the panel will stay black",
+                     esp_err_to_name(derr));
         }
     }
 #ifndef GBAGATE_QEMU
@@ -69,5 +82,69 @@ void app_main(void) {
         caps |= HW_CAP_WIFI;
     }
 
+    /*
+     * Nothing was setting this, so every mode that needs the link port -- the
+     * chip gate, both link modes, Send Program and Self Test, five of the eight
+     * -- was filtered out of the menu. The device booted to Settings and
+     * Diagnostics and looked like it had almost no features.
+     *
+     * "Detected" cannot mean "a cable is plugged in": the link port has no
+     * presence pin, and on real hardware the parent only clocks once a game
+     * asks it to. What the capability actually gates is whether this image has
+     * somewhere for transfers to come from -- the PHY on hardware, the bridge
+     * under emulation -- and link_source_active() answers exactly that.
+     */
+    /*
+     * The chip reader is a board that may or may not be fitted, so this is a
+     * real probe rather than a build-time fact -- an MCP23017 either answers on
+     * I2C or it does not. Under emulation there is no I2C at all, so the mode
+     * stays hidden, which is correct: there is nothing to read a chip with.
+     */
+    if (v.resolved & FEAT_CHIP_READER) {
+#if defined(GBAGATE_QEMU)
+        ESP_LOGI(TAG, "no chip reader under emulation; Read Chip hidden");
+#else
+        extern bool chip_reader_probe(void);
+        if (chip_reader_probe()) {
+            caps |= HW_CAP_CHIP_READER;
+            ESP_LOGI(TAG, "chip reader detected");
+        } else {
+            ESP_LOGI(TAG, "no chip reader fitted; Read Chip hidden");
+        }
+#endif
+    }
+
+    if (v.resolved & (FEAT_LINK_MASTER | FEAT_LINK_SLAVE)) {
+        const link_source_t *src = link_source_active();
+        if (src && src->poll) {
+            caps |= HW_CAP_LINK_PORT;
+            ESP_LOGI(TAG, "link source: %s", src->name);
+        } else {
+            ESP_LOGW(TAG, "no link source; link modes will be hidden");
+        }
+    }
+
+    /*
+     * Settings before tasks: the display offsets are calibration, and a UI that
+     * starts before they are loaded paints one frame with the wrong ones.
+     */
+    {
+        extern void gate_settings_start(void);
+        gate_settings_start();
+    }
+
     tasks_start(v.resolved);
+
+    /*
+     * Show the shell. Without this the firmware boots straight into the chip
+     * list and all seven modes -- self test included -- are unreachable, which
+     * is exactly how it behaved until now.
+     */
+    if (v.resolved & FEAT_DISPLAY) {
+        extern void gate_shell_start(uint32_t shell_caps);
+        gate_shell_start(caps);
+        ESP_LOGI(TAG, "shell started with caps 0x%08X", (unsigned)caps);
+    } else {
+        ESP_LOGW(TAG, "image has no display feature; nothing will be drawn");
+    }
 }
