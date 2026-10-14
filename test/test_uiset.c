@@ -144,6 +144,15 @@ static void test_clamping_and_wrapping(void) {
     uiset_move(&v, 1);
     check("and flips back", s.wrap, was);
 
+    /* Input mode wraps too: three values, and someone who picked the wrong
+     * one has to be able to get back. */
+    v.cursor = SETFIELD_INPUT;
+    s.input_mode = INPUT_MODE_COUNT - 1;
+    uiset_move(&v, 1);
+    check("input mode wraps", s.input_mode, 0);
+    uiset_move(&v, -1);
+    check("and back", s.input_mode, INPUT_MODE_COUNT - 1);
+
     v.cursor = SETFIELD_GAME;
     s.game = CG_GAME_COUNT - 1;
     uiset_move(&v, 1);

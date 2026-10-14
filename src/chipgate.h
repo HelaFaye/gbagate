@@ -35,6 +35,40 @@ extern "C" {
 #define CG_ID_BATTLECHIP    0xFFC6u /* BN4 / EXE4 / EXE4.5  Battle Chip Gate  */
 #define CG_ID_PROGRESS      0xFFC7u /* BN5 / EXE5           Progress Chip Gate*/
 #define CG_ID_BEAST_LINK    0xFFC4u /* EXE6      (JP)       Beast Link Gate   */
+/*
+ * Confirmed against the game's own code
+ * -------------------------------------
+ * These came from mGBA's battlechip.c. Disassembling MEGAMAN6_GXX (BR5E) with
+ * the community symbol table shows the game agreeing.
+ *
+ * The link library classifies each Multi-Play slot at 0x08146342:
+ *
+ *     word = REG_SIOMULTI[slot];              // 0x04000120
+ *     if ((word & ~3) == 0xA6C0               // another GBA, player in bits 0-1
+ *      ||  word       == 0x8FFF               // the sync word
+ *      ||  word       == 0xFF00)              // a Battle Chip Gate
+ *         -> a known device is in this slot
+ *
+ * and at 0x081462D6 it writes 0x8FFF to REG_SIOMLT_SEND (0x0400012A). So both
+ * CG_ID_BEAST_LINK_US and CG_WORD_SYNC are the values the retail game actually
+ * looks for.
+ *
+ * The result is stored as a device-type byte per player at 0x0200F48A, which
+ * is what chipgate_Chip_gate_check reads back -- the game never re-examines the
+ * raw word, which is why the identity does not appear in the chipgate block.
+ *
+ * 0xA6C0 is worth knowing about: it is another *console*, not another gate, and
+ * the low two bits carry the player number. It is what
+ * chipgate_second_gate_check (0x0803F618) compares against -- the name means
+ * "check for a second player", not "check for a second gate". Finding it there
+ * first is what made the gate ID look doubtful.
+ */
+
+/* Another GBA running the game. Low two bits are the player number, so the
+ * four values 0xA6C0..0xA6C3 are one per slot. Not a gate. */
+#define CG_ID_PEER_GBA      0xA6C0u
+#define CG_ID_PEER_GBA_MASK 0xFFFCu
+
 #define CG_ID_BEAST_LINK_US 0xFF00u /* MMBN6     (US/EU)    Beast Link Gate   */
 
 #define CG_WORD_CONTINUE 0xFFFFu /* filler / "gate present, nothing to say"   */

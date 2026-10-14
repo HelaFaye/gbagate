@@ -41,8 +41,31 @@
  * bit shifts every weight and yields plausible-looking wrong IDs -- which is
  * exactly what this file used to do.
  *
- * msb_is_lowest_pad stays, defaulting to the confirmed orientation, because a
- * Beast Link chip has not been checked the same way.
+ * Beast Link, checked the same way
+ * --------------------------------
+ * Solved against the EXE 6 Link schematics and the bn6g database, seven chips
+ * for seven:
+ *
+ *   BugBomb 67, Discord 147, Django 278, Falzar 313, GunDelS3 17,
+ *   HeatDrgn 46, TrnArrw3 26
+ *
+ * And the orientation is the *opposite* of Advance, which is not something
+ * anyone would have guessed:
+ *
+ *   Advance/Progress   pad 1 = bit 8 (MSB) ... pad 9 = bit 0
+ *   Beast Link         pad 3 = bit 0 (LSB) ... pad 11 = bit 8
+ *
+ *   BugBomb  {3,4,9}      = 1 + 2 + 64        =  67
+ *   Discord  {3,4,7,10}   = 1 + 2 + 16 + 128  = 147
+ *   GunDelS3 {3,7}        = 1 + 16            =  17
+ *
+ * The other direction scores 1 of 7, and the one it gets is Falzar, whose pad
+ * set is a palindrome under reversal. A single agreeing chip is exactly what a
+ * wrong bit order looks like -- which is why seven were checked and why the
+ * first attempt at this, with only Falzar to go on, would have been wrong.
+ *
+ * msb_is_lowest_pad is therefore set from the family rather than fixed, and
+ * both values are confirmed rather than assumed.
  */
 
 #ifndef CHIP_READER_H

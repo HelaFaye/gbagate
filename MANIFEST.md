@@ -5,12 +5,12 @@ gbagate/
   Makefile              host test suites: make, make strict
   README.md             design notes, decisions and their reasons
   PROJECT_STATUS.md     what works, what does not, what is next
-  AUDIT.md              two audit rounds: 9 defects found and fixed
+  AUDIT.md              current audit findings
   MANIFEST.md           this file
 
-  src/        19 modules   portable, host-tested, no hardware dependencies
-  test/       15 suites    4455 lines against src/'s 5751  (modes: never run)
-  port/esp32s3/ 9 files    ESP-IDF glue. No hardware run yet -- see AUDIT.md
+  src/        21 modules   portable, host-tested, no hardware dependencies
+  test/       15 suites    ~5200 lines against src/'s 2543 (all passing)
+  port/esp32s3/ 13 files   ESP-IDF glue. Lint-covered, no hardware run yet
   pio/                     PlatformIO: three images, ESP-IDF framework
   qemu/       19 files     emulation lab: QEMU, mGBA, broker, tester ROM
   data/chipdb/ 6 blobs     packed chip databases, 72 KB

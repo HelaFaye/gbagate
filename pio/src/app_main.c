@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "board.h"
 #include "hw_caps.h"
 #include "link_source.h"
 #include "variant.h"
@@ -60,8 +61,18 @@ void app_main(void) {
      * the serial ports differently -- and they are indistinguishable from the
      * outside. The console log has to say which.
      */
+    /*
+     * Two gates on every subsystem, and they mean different things:
+     *
+     *   the variant says the firmware was built with the feature;
+     *   the board says the part is fitted.
+     *
+     * Both must hold. Keeping them separate is what lets a bring-up leave the
+     * card off with a build flag instead of an edit, and lets one image serve
+     * boards that differ in what is populated.
+     */
     uint32_t caps = 0;
-    if (v.resolved & FEAT_DISPLAY) {
+    if ((v.resolved & FEAT_DISPLAY) && BOARD_HAS_DISPLAY) {
         esp_err_t derr = st7735_init(0);
         if (derr == ESP_OK) {
             caps |= HW_CAP_DISPLAY;
@@ -100,7 +111,7 @@ void app_main(void) {
      * I2C or it does not. Under emulation there is no I2C at all, so the mode
      * stays hidden, which is correct: there is nothing to read a chip with.
      */
-    if (v.resolved & FEAT_CHIP_READER) {
+    if ((v.resolved & FEAT_CHIP_READER) && BOARD_HAS_READER) {
 #if defined(GBAGATE_QEMU)
         ESP_LOGI(TAG, "no chip reader under emulation; Read Chip hidden");
 #else
@@ -114,7 +125,24 @@ void app_main(void) {
 #endif
     }
 
-    if (v.resolved & (FEAT_LINK_MASTER | FEAT_LINK_SLAVE)) {
+#if !defined(GBAGATE_QEMU)
+    /*
+     * Infrared shares the link connector but not its protocol -- General
+     * Purpose mode rather than Multi-Play -- so it is brought up separately.
+     * QEMU has no pins, so the mode reports "no IR fitted" there via the weak
+     * defaults in gate_app.c.
+     */
+    if ((v.resolved & FEAT_IR) && BOARD_HAS_IR) {
+        extern esp_err_t ir_init(void);
+        if (ir_init() == ESP_OK) {
+            ESP_LOGI(TAG, "infrared ready");
+        } else {
+            ESP_LOGW(TAG, "infrared init failed; the mode will say so");
+        }
+    }
+#endif
+
+    if ((v.resolved & (FEAT_LINK_MASTER | FEAT_LINK_SLAVE)) && BOARD_HAS_LINK) {
         const link_source_t *src = link_source_active();
         if (src && src->poll) {
             caps |= HW_CAP_LINK_PORT;

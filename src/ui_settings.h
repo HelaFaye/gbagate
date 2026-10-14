@@ -31,6 +31,7 @@ typedef enum {
     SETFIELD_GAME,
     SETFIELD_ACCEL,
     SETFIELD_WRAP,
+    SETFIELD_INPUT,
     SETFIELD_COUNT
 } setfield_t;
 

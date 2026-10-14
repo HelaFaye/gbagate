@@ -68,6 +68,19 @@ static void test_every_mode_is_reachable(void) {
     }
     check("usb storage present", expose, 1);
 
+    /*
+     * Infrared. ir_cdz.c had the protocol and no menu entry, so the feature
+     * was compiled into the full image and unreachable -- which looks exactly
+     * like it was never implemented.
+     */
+    bool ir = false;
+    for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
+        if (strcmp(shell_label_at(&g_shell, i), "Infrared") == 0) {
+            ir = true;
+        }
+    }
+    check("infrared present", ir, 1);
+
     bool seen[APP_MODE_COUNT];
     memset(seen, 0, sizeof seen);
     for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {

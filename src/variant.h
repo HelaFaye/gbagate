@@ -60,10 +60,16 @@ typedef enum {
     FEAT_IR           = 1u << 12, /* infrared accessory protocol        */
     FEAT_NRF24        = 1u << 13, /* optional second radio              */
     FEAT_SELFTEST     = 1u << 14, /* built-in link self-test            */
-    FEAT_USB_EXPOSE  = 1u << 15  /* expose the drive to a host         */
+    FEAT_USB_EXPOSE  = 1u << 15, /* expose the drive to a host         */
+    /*
+     * Programs on an SD card rather than a USB volume. rom_catalog.c takes its
+     * filesystem as a callback, so only the backend differs and a board can
+     * have either.
+     */
+    FEAT_SD_STORAGE  = 1u << 16
 } feature_t;
 
-#define FEATURE_COUNT 16
+#define FEATURE_COUNT 17
 
 /* ---- variants --------------------------------------------------------- */
 
@@ -71,6 +77,12 @@ typedef enum {
     VARIANT_LINK = 0,  /* wireless link cable / adapter. S2 or S3.        */
     VARIANT_GATE,      /* chip gate and everything but chips and IR. S3.  */
     VARIANT_FULL,      /* everything. S3.                                 */
+    /*
+     * The board you can actually build from a devkit, a display, switches, an
+     * SD module and two link sockets. No USB storage, no chip reader, no
+     * infrared, no second radio -- just the gate, the link and multiboot.
+     */
+    VARIANT_MINI,
     VARIANT_COUNT
 } variant_id_t;
 

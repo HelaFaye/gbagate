@@ -93,6 +93,13 @@ typedef struct {
  * a different one is a bug, and the mismatch would show as a mode that lists
  * but will not start.
  */
+/*
+ * The built-in handler table. Exposed so whoever owns the shell can drive the
+ * dispatcher with the capabilities it actually probed, rather than this file
+ * guessing at them.
+ */
+const app_mode_handler_t *app_modes_table(size_t *count);
+
 void app_dispatch_init(app_dispatch_t *d, const app_mode_handler_t *handlers,
                        size_t count, uint32_t caps, void *ctx);
 

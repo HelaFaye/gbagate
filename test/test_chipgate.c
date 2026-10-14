@@ -4,11 +4,10 @@
  * Simulates the game side of the link so the responder can be validated with
  * no hardware and no emulator. Build:
  *
- *     cc -std=c11 -Wall -Wextra -o test_chipgate test_chipgate.c chipgate.c
+ *     cc -I/home/hela/gbagate/src -std=c11 -Wall -Wextra -o test_chipgate test_chipgate.c chipgate.c
  */
 
 #include <stdio.h>
-#include <string.h>
 
 #include "chipgate.h"
 
@@ -123,6 +122,36 @@ static void test_chip_send(void) {
  * and the caller is responsible for noticing the stall. This pins both halves
  * down so neither can be quietly dropped.
  */
+/*
+ * The three words the retail game accepts, read out of its own link library at
+ * 0x08146342. This is not a test of our code so much as a record of what the
+ * far end is looking for -- if someone "tidies" the gate ID one day, this says
+ * where the value came from and that it was checked.
+ */
+static void test_ids_match_the_game(void) {
+    printf("identities the game accepts\n");
+
+    check("gate id is what the game tests for", CG_ID_BEAST_LINK_US, 0xFF00);
+    check("sync word likewise", CG_WORD_SYNC, 0x8FFF);
+
+    /* A peer console, with the player number in the low two bits. All four
+     * must classify as a console and none of them as a gate. */
+    for (uint16_t n = 0; n < 4; n++) {
+        uint16_t word = (uint16_t)(CG_ID_PEER_GBA | n);
+        check("peer console recognised",
+              (word & CG_ID_PEER_GBA_MASK) == CG_ID_PEER_GBA, 1);
+        check("and is not our gate id", word != CG_ID_BEAST_LINK_US, 1);
+    }
+
+    /* The masking matters: 0xA6C4 is outside the run and must not match. */
+    check("one past the peer range",
+          (0xA6C4u & CG_ID_PEER_GBA_MASK) == CG_ID_PEER_GBA, 0);
+
+    /* And the gate must not be mistaken for a console. */
+    check("gate is not a peer",
+          (CG_ID_BEAST_LINK_US & CG_ID_PEER_GBA_MASK) == CG_ID_PEER_GBA, 0);
+}
+
 static void test_stalled_link_locks_the_slot(void) {
     printf("a stalled parent locks the chip slot\n");
 
@@ -229,6 +258,7 @@ int main(void) {
     test_handshake();
     test_rotation();
     test_chip_send();
+    test_ids_match_the_game();
     test_stalled_link_locks_the_slot();
     test_teardown_and_relink();
     test_identities();

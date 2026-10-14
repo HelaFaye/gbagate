@@ -53,7 +53,17 @@ void chip_reader_init(chip_reader_t *r, chip_family_t family,
     r->read              = read;
     r->ctx               = ctx;
     r->stable_samples    = DEFAULT_STABLE_SAMPLES;
-    r->msb_is_lowest_pad = true; /* provisional until calibrated */
+    /*
+     * The two families run in opposite directions, which is not something
+     * anyone would guess:
+     *
+     *   Advance/Progress  pad 1 is the MSB  (lowest ID pad = most significant)
+     *   Beast Link        pad 3 is the LSB  (lowest ID pad = least significant)
+     *
+     * Both solved from the EXE schematics against our own databases -- eight
+     * chips for Advance, seven for Beast. See chip_reader.h.
+     */
+    r->msb_is_lowest_pad = (family != CHIP_FAMILY_BEAST);
     r->has_detect_switch = true; /* the slot has a mechanical switch, so a
                                   * blank chip (no shorts at all) reads as
                                   * ID 0 rather than as an empty slot */

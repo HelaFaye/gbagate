@@ -1,0 +1,992 @@
+[
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/app_modes.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/app_modes.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/chip_reader.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/chip_reader.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/chip_slot.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/chip_slot.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/chipdb.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/chipdb.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/chipgate.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/chipgate.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/gba_multiboot.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/gba_multiboot.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/hw_caps.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/hw_caps.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/input_encoder.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/input_encoder.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/ir_cdz.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/ir_cdz.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/link_bridge.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/link_bridge.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/link_proto.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/link_proto.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/link_session.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/link_session.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/mcp23017.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/mcp23017.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/nrf24_probe.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/nrf24_probe.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/rom_catalog.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/rom_catalog.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/settings.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/settings.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/st7735_panel.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/st7735_panel.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/ui_chipview.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/ui_chipview.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/ui_font.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/ui_font.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/ui_input.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/ui_input.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/ui_list.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/ui_list.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/ui_render.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/ui_render.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/ui_romview.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/ui_romview.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/ui_settings.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/ui_settings.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/ui_shell.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/ui_shell.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/src/variant.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/src/variant.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_bridge.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_bridge.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_catalog.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_catalog.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_chipdb.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_chipdb.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_chipgate.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_chipgate.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_chipview.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_chipview.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_encoder.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_encoder.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_hw.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_hw.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_input.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_input.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_ir.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_ir.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_link.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_link.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_mbe2e.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_mbe2e.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_mcp.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_mcp.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_menu.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_menu.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_modes.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_modes.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_multiboot.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_multiboot.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_panel.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_panel.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_render.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_render.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_romview.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_romview.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_settings.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_settings.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_slot.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_slot.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_ui.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_ui.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_uiset.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_uiset.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/test/test_variant.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/src",
+      "/home/claude/u9/gbagate/test/test_variant.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/rom/tester.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/rom",
+      "/home/claude/u9/gbagate/rom/tester.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/pio/src/app_main.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/pio/src/app_main.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/pio/src/gate_app.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/pio/src/gate_app.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/pio/src/link_source.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/pio/src/link_source.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/pio/src/tasks.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/pio/src/tasks.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/buttons_esp32s3.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/buttons_esp32s3.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/cg_phy_esp32s3.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/cg_phy_esp32s3.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/gba_link_esp32s3.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/gba_link_esp32s3.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/i2c_esp32s3.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/i2c_esp32s3.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/input_qemu.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/input_qemu.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/ir_esp32s3.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/ir_esp32s3.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/mb_spi_esp32s3.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/mb_spi_esp32s3.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/nvs_store.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/nvs_store.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/st7735_esp32s3.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/st7735_esp32s3.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/st7735_qemu.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/st7735_qemu.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/transport_esp32s3.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/transport_esp32s3.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/transport_uart.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/transport_uart.c"
+    ]
+  },
+  {
+    "directory": "/home/claude/u9/gbagate",
+    "file": "/home/claude/u9/gbagate/port/esp32s3/usb_msc_esp32s3.c",
+    "arguments": [
+      "cc",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Wshadow",
+      "-I/home/claude/u9/gbagate/qemu/stubs",
+      "-I/home/claude/u9/gbagate/src",
+      "-I/home/claude/u9/gbagate/port/esp32s3",
+      "-I/home/claude/u9/gbagate/pio/src",
+      "-DVARIANT=VARIANT_GATE",
+      "-DGBAGATE_VARIANT_NAME=\"gate\"",
+      "-DGBAGATE_HAS_CHIPDB=1",
+      "-DGBAGATE_QEMU=1",
+      "/home/claude/u9/gbagate/port/esp32s3/usb_msc_esp32s3.c"
+    ]
+  }
+]

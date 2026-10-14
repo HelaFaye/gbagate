@@ -7,17 +7,31 @@
  * st7735_qemu.c streams the framebuffer out of -- a QEMU tcp chardev is
  * bidirectional, so the read direction costs nothing and needs no extra port.
  *
+ * A virtual switch bank, not a shortcut
+ * -------------------------------------
+ * This used to post encoder events straight into the UI queue, which meant the
+ * whole of ui_input.c -- debounce, repeat, long press, and every mode except
+ * the encoder -- never ran under emulation. Three of the four input modes were
+ * unreachable, so a matrix run across them would have tested one mode four
+ * times.
+ *
+ * Now a keystroke sets a bit in a virtual button mask and ui_input.c reads it
+ * exactly as it reads real pins. A tap holds the bit briefly; a shifted key
+ * holds it past the long-press threshold. Everything downstream is the real
+ * path.
+ *
  * The commands are deliberately one byte and human-typable, so the channel can
  * be driven by qemu/viewer.py, by a test script, or by hand with netcat when
  * something is behaving oddly:
  *
- *     u / A    encoder one detent anticlockwise   (up the list)
- *     d / B    encoder one detent clockwise       (down the list)
- *     U / D    ten detents, as an accelerated spin
- *     \r \n s  the encoder button: select
- *     b        back
- *     t        next library tab
- *     f        toggle favourite
+ *     u d l r   the five-way's directions
+ *     s / \r    the five-way's click, or the encoder button (A)
+ *     S         the same, held past the long-press threshold
+ *     b         B
+ *     f         Select
+ *     [ ]       L and R, on four- and five-switch boards
+ *     m         Start, on five-switch boards
+ *     M         Start, held
  *
  * Events go through the same queue the real encoder would use, so ui_service()
  * cannot tell the difference and no UI code is emulation-aware.
@@ -30,8 +44,12 @@
 
 #include "driver/uart.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include "controls.h"
+#include "ui_input.h"
 
 static const char *TAG = "input_qemu";
 
@@ -70,61 +88,115 @@ static void post(ui_event_type_t type, int32_t a) {
     tasks_post_ui_event(&e);
 }
 
+/*
+ * The virtual bank. A key sets a bit and a deadline; the reader clears bits
+ * whose deadline has passed, so a keystroke behaves like a press and release
+ * rather than a level that stays stuck.
+ */
+#define TAP_MS  90     /* comfortably past UI_IN_DEBOUNCE_MS, short of a hold */
+#define HOLD_MS 900    /* comfortably past UI_IN_LONG_MS                      */
+
+static volatile uint32_t s_bits;
+static volatile uint32_t s_until_ms[10];
+
+static uint32_t now_ms(void) {
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+static void tap(uint32_t bit, uint32_t ms) {
+    for (int i = 0; i < 10; i++) {
+        if (bit == (1u << i)) {
+            s_until_ms[i] = now_ms() + ms;
+            s_bits |= bit;
+            return;
+        }
+    }
+}
+
+/* The read function ui_input.c polls -- the same shape buttons_esp32s3.c
+ * provides on real hardware, so the path under test is identical. */
+static uint32_t qemu_buttons_read(void *ctx) {
+    (void)ctx;
+    uint32_t t = now_ms();
+    for (int i = 0; i < 10; i++) {
+        if ((s_bits & (1u << i)) && (int32_t)(t - s_until_ms[i]) >= 0) {
+            s_bits &= ~(1u << i);
+        }
+    }
+    return s_bits;
+}
+
+static ui_input_t  s_input;
+
+/* The controls layer binds against this, so screens describe the emulated
+ * hardware rather than a keyboard. */
+ui_input_t *input_active(void) { return &s_input; }
+static controls_t  s_controls;
+
+/*
+ * Everything a screen might use. gate_app.c will narrow this per screen once
+ * it is converted; until then the emulated bank offers the lot so a matrix run
+ * can exercise every binding.
+ */
+#define QEMU_WANTED (CTRL_BIT(CTRL_PREV) | CTRL_BIT(CTRL_NEXT) | \
+                     CTRL_BIT(CTRL_PAGE_PREV) | CTRL_BIT(CTRL_PAGE_NEXT) | \
+                     CTRL_BIT(CTRL_TAB_PREV) | CTRL_BIT(CTRL_TAB_NEXT) | \
+                     CTRL_BIT(CTRL_CONFIRM) | CTRL_BIT(CTRL_CANCEL) | \
+                     CTRL_BIT(CTRL_MARK) | CTRL_BIT(CTRL_MENU))
+
 static void input_task(void *arg) {
     (void)arg;
+
+    ESP_LOGI(TAG, "virtual switches on UART%d, mode %s",
+             IN_UART, input_mode_name(s_input.mode));
+
     uint8_t buf[32];
-
-    /*
-     * st7735_qemu.c owns the port and installs the driver; if that failed it
-     * took its degraded path and there is nothing to read from. Reading anyway
-     * would return an error immediately every time and spin this task at full
-     * tilt against a 50 ms timeout that never elapses, so check first and stand
-     * down instead. The screen is already lost in that case; silently pinning a
-     * core as well would only make the cause harder to see.
-     */
-    if (!uart_is_driver_installed(IN_UART)) {
-        ESP_LOGW(TAG, "no UART%d driver; keyboard input disabled", IN_UART);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    ESP_LOGI(TAG, "keyboard input on UART%d: u/d step, U/D spin, enter select",
-             IN_UART);
-
     for (;;) {
-        int n = uart_read_bytes(IN_UART, buf, sizeof buf, pdMS_TO_TICKS(50));
-        if (n < 0) {
-            /* Transient driver error rather than "no bytes" (which is 0). Back
-             * off rather than retrying flat out. */
-            vTaskDelay(pdMS_TO_TICKS(50));
-            continue;
-        }
+        int n = uart_read_bytes(IN_UART, buf, sizeof buf, pdMS_TO_TICKS(10));
         for (int i = 0; i < n; i++) {
             switch (buf[i]) {
-            case 'u': case 'A': post(UI_EVENT_ENCODER, -1);  break;
-            case 'd': case 'B': post(UI_EVENT_ENCODER, +1);  break;
-            case 'U':           post(UI_EVENT_ENCODER, -10); break;
-            case 'D':           post(UI_EVENT_ENCODER, +10); break;
+            case 'u': tap(BTN_UP, TAP_MS); break;
+            case 'd': tap(BTN_DOWN, TAP_MS); break;
+            case 'l': tap(BTN_LEFT, TAP_MS); break;
+            case 'r': tap(BTN_RIGHT, TAP_MS); break;
+            case 's': case '\r': case '\n': tap(BTN_A, TAP_MS); break;
+            case 'S': tap(BTN_A, HOLD_MS); break;
+            case 'b': tap(BTN_B, TAP_MS); break;
+            case 'f': tap(BTN_SELECT, TAP_MS); break;
+            case '[': tap(BTN_L, TAP_MS); break;
+            case ']': tap(BTN_R, TAP_MS); break;
+            case 'm': tap(BTN_START, TAP_MS); break;
+            case 'M': tap(BTN_START, HOLD_MS); break;
+            default: break;   /* escape sequences land here harmlessly */
+            }
+        }
 
-            case '\r': case '\n': case 's':
-                post(UI_EVENT_CHIP_SENT, 0);
+        /* Drain: one poll can produce a press and a repeat. */
+        for (;;) {
+            int32_t v = 0;
+            ctrl_action_t a = controls_next(&s_controls, now_ms(), &v);
+            if (a == CTRL_NONE) {
                 break;
-
-            case 'b': post(UI_EVENT_CHIP_OUT, 0); break;
-            case 't': post(UI_EVENT_ENCODER, 0);  break;  /* tab: handled in ui */
-            case 'f': post(UI_EVENT_CHIP_IN, 0);  break;
-
-            default:
-                /* Ignore anything else in silence. The viewer sends arrow keys
-                 * as escape sequences and only the final letter matters; the
-                 * ESC and '[' land here and must not do anything. */
-                break;
+            }
+            switch (a) {
+            case CTRL_PREV:      post(UI_EVENT_ENCODER, -1); break;
+            case CTRL_NEXT:      post(UI_EVENT_ENCODER, +1); break;
+            case CTRL_PAGE_PREV: post(UI_EVENT_ENCODER, v);  break;
+            case CTRL_PAGE_NEXT: post(UI_EVENT_ENCODER, v);  break;
+            case CTRL_CONFIRM:   post(UI_EVENT_CHIP_SENT, 0); break;
+            case CTRL_CANCEL:    post(UI_EVENT_CHIP_OUT, 0);  break;
+            case CTRL_MARK:      post(UI_EVENT_CHIP_IN, 0);   break;
+            default: break;   /* tabs and the menu once gate_app takes them */
             }
         }
     }
 }
 
-void input_qemu_start(void) {
+void input_qemu_start(int mode_in) {
+    input_mode_t mode = (input_mode_t)mode_in;
+    ui_input_init(&s_input, mode, qemu_buttons_read, NULL);
+    controls_bind(&s_controls, &s_input, QEMU_WANTED);
+
     /*
      * The UART is already installed by st7735_qemu.c -- it owns the port and
      * the framebuffer is the higher-traffic direction. Starting a second

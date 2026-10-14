@@ -33,6 +33,7 @@ typedef enum {
     APP_MODE_MULTIBOOT,     /* serve a .mb program to a stock GBA        */
     APP_MODE_CHIP_SCAN,     /* read chips without a console attached     */
     APP_MODE_USB_STORAGE,   /* hand the drive to a PC, and take it back  */
+    APP_MODE_INFRARED,      /* Cyber Drive Zoids IR, via the link port   */
     APP_MODE_SELFTEST,      /* run the tester ROM's checks and show them */
     APP_MODE_SETTINGS,
     APP_MODE_DIAGNOSTICS,

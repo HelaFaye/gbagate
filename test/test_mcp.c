@@ -36,6 +36,10 @@ typedef struct {
     uint16_t shorts;      /* pads the seated chip ties to its common */
     uint8_t  common;      /* the chip's common pad, 0 for empty slot */
     bool     det_advance, det_beast;
+    /* For the button-bank tests: drive the pins directly rather than through
+     * the pad-bus model, which assumes a chip is shorting them. */
+    bool     pins_override;
+    uint16_t pins;
     unsigned transfers;
 } sim_t;
 
@@ -45,6 +49,9 @@ static uint16_t port(const sim_t *s, int reg_a) {
 
 /* GPIO reads reflect the pins, not a latch: drive, pull-up and chip shorts. */
 static uint16_t sim_pins(const sim_t *s) {
+    if (s->pins_override) {
+        return s->pins;
+    }
     uint16_t iodir = port(s, MCP_IODIRA);
     uint16_t olat  = port(s, MCP_OLATA);
 
@@ -278,12 +285,62 @@ static void test_io_failure(void) {
     check("errors counted", m.errors > 0, 1);
 }
 
+/*
+ * The same part as a button bank. This is what makes a Supermini viable: it
+ * has fourteen usable pins and the link, display and card take twelve, so ten
+ * switches have nowhere to go without an expander.
+ */
+static void test_button_bank(void) {
+    printf("as a button bank\n");
+
+    sim_t sim = make_sim();
+    mcp_t m;
+
+    check("initialises", mcp_buttons_init(&m, sim_i2c, &sim, MCP_ADDR_BASE), 1);
+
+    /* Every pin an input with a pull-up -- nothing is ever driven here, so
+     * unlike the pad bus the direction is set once. */
+    check("all inputs", port(&sim, MCP_IODIRA), 0xFFFF);
+    check("all pulled up", port(&sim, MCP_GPPUA), 0xFFFF);
+
+    /* Nothing pressed: pull-ups hold every line high, so the mask is empty. */
+    check("idle reads as nothing pressed", mcp_buttons_read(&m), 0);
+
+    /* Switches short to ground, so pressed reads low and the mask inverts. */
+    sim.reg[MCP_GPIOA] = 0xFF; sim.reg[MCP_GPIOB] = 0xFF;
+    sim.pins_override = 1;
+    sim.pins = (uint16_t)~((1u << 0) | (1u << 4) | (1u << 9));
+    check("three pressed", mcp_buttons_read(&m),
+          (1u << 0) | (1u << 4) | (1u << 9));
+
+    sim.pins = 0xFFFF;
+    check("released", mcp_buttons_read(&m), 0);
+
+    /*
+     * A bus failure must report nothing pressed. Stale state would leave a
+     * button stuck down across a glitch, and all-ones would look like every
+     * button held at once -- which on a five-way is a direction and its
+     * opposite together.
+     */
+    sim.absent = true;
+    check("a failed read presses nothing", mcp_buttons_read(&m), 0);
+    sim.absent = false;
+
+    /* An absent board is the normal case on a devkit build. */
+    sim_t none = make_sim();
+    none.absent = true;
+    mcp_t m2;
+    check("no expander fitted", mcp_buttons_init(&m2, sim_i2c, &none, MCP_ADDR_BASE), 0);
+    check("and reads nothing", mcp_buttons_read(&m2), 0);
+}
+
 int main(void) {
     test_presence();
     test_bank1_recovery();
     test_bus_discipline();
     test_reads_a_chip();
     test_io_failure();
+    test_button_bank();
     printf("\n%s\n", g_fail ? "FAILURES" : "all checks passed");
     return g_fail != 0;
 }

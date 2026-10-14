@@ -207,3 +207,57 @@ bool mcp_read_detect(mcp_t *m, bool *advance, bool *beast) {
     }
     return true;
 }
+
+/* ---- as a button bank --------------------------------------------------- */
+
+bool mcp_buttons_init(mcp_t *m, mcp_i2c_fn i2c, void *ctx, uint8_t addr) {
+    memset(m, 0, sizeof *m);
+    m->i2c  = i2c;
+    m->ctx  = ctx;
+    m->addr = addr;
+
+    /* Same reason as mcp_init(): a part left in BANK=1 answers on different
+     * register numbers and every value read is plausible nonsense. */
+    if (!wr8(m, MCP_IOCON, 0x00)) {
+        return false;
+    }
+    if (!mcp_present(m)) {
+        return false;
+    }
+
+    /*
+     * All sixteen pins inputs with pull-ups. Unlike the pad bus, nothing here
+     * is ever driven -- a button bank has no output phase, so the direction is
+     * set once and never changes. That also means an unpopulated pin reads
+     * high, which is "not pressed", so a board that fits fewer than sixteen
+     * switches needs no special handling beyond the mode mask ui_input.c
+     * already applies.
+     */
+    m->iodir = 0xFFFF;
+    m->gppu  = 0xFFFF;
+    m->olat  = 0xFFFF;
+
+    if (!wr16(m, MCP_IODIRA, m->iodir) || !wr16(m, MCP_GPPUA, m->gppu)) {
+        return false;
+    }
+
+    m->ready = true;
+    return true;
+}
+
+uint32_t mcp_buttons_read(void *ctx) {
+    mcp_t *m = ctx;
+    if (!m || !m->ready) {
+        return 0;
+    }
+    uint16_t v;
+    if (!rd16(m, MCP_GPIOA, &v)) {
+        /*
+         * A failed read must report "nothing pressed", not the last value or
+         * all-ones. Returning stale state would leave a button stuck down
+         * across a bus glitch, and all-ones would look like every button held.
+         */
+        return 0;
+    }
+    return (uint32_t)(uint16_t)~v;   /* active low */
+}

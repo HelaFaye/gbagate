@@ -90,6 +90,22 @@ const chip_bus_io_t *mcp_bus_io(void);
 /* Read the two detect switches: bit 0 = Advance slot, bit 1 = Beast slot. */
 bool mcp_read_detect(mcp_t *m, bool *advance, bool *beast);
 
+/* ---- as a button bank ---------------------------------------------------
+ *
+ * The same part, used the other way round. On a board with too few pins for
+ * ten switches -- a Supermini has fourteen, and the link, display and card
+ * take twelve -- the expander carries the buttons instead of the chip reader.
+ * Two pins in, sixteen out.
+ *
+ * Configure every pin as an input with a pull-up, then read the lot. Switches
+ * short to ground, so this inverts: a set bit means pressed, matching what
+ * ui_input.c expects from buttons_esp32s3.c.
+ */
+bool mcp_buttons_init(mcp_t *m, mcp_i2c_fn i2c, void *ctx, uint8_t addr);
+
+/* The read function to hand ui_input_init(). ctx is the mcp_t. */
+uint32_t mcp_buttons_read(void *ctx);
+
 #ifdef __cplusplus
 }
 #endif

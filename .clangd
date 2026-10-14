@@ -1,0 +1,20 @@
+# Fallback for files not in compile_commands.json -- headers
+# opened on their own, mainly. Regenerate the database with
+#   make compile-commands
+CompileFlags:
+  Add:
+    - -std=c11
+    - -Isrc
+    - -Iqemu/stubs
+    - -Iport/esp32s3
+    - -Ipio/src
+    - -Irom
+    - -DGBAGATE_QEMU=1
+    - -DVARIANT=VARIANT_GATE
+    - -DGBAGATE_VARIANT_NAME="gate"
+    - -DGBAGATE_HAS_CHIPDB=1
+Diagnostics:
+  # The ESP-IDF stubs deliberately do not define everything the
+  # real headers do; unused-parameter noise from them is not
+  # worth reading past.
+  UnusedIncludes: None

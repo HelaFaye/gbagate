@@ -15,6 +15,9 @@ endif()
 
 # The single firmware component lives in pio/src (component name "src").
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/pio")
+
+# Include path for headers in pio/include and pio/src that ESP-IDF doesn't add automatically.
+add_compile_options(-I"${CMAKE_CURRENT_LIST_DIR}/pio/include" -I"${CMAKE_CURRENT_LIST_DIR}/pio/src")
 set(COMPONENTS src)
 
 # These images are always for the emulator: no pins, no USB-OTG. The component

@@ -22,13 +22,19 @@
 #include <stdint.h>
 
 #include "chipgate.h"
+#include "ui_input.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define SETTINGS_MAGIC   0x47425354u   /* "GBST" */
-#define SETTINGS_VERSION 1
+/*
+ * 2: input_mode took over the padding byte. An older blob would decode that
+ * byte as a mode, so the version has to move -- a stale save falls back to
+ * defaults rather than selecting input hardware that is not fitted.
+ */
+#define SETTINGS_VERSION 2
 
 /* One bit per chip record, matching CHIPVIEW_FAV_BYTES. */
 #define SETTINGS_FAV_BYTES 64
@@ -43,6 +49,13 @@ typedef struct {
     /* preference */
     uint8_t  game;         /* cg_game_t */
     uint8_t  accel;        /* encoder detents multiplier at full speed */
+    /*
+     * Which input hardware is fitted: encoder, five-way plus two switches, or
+     * five-way plus four. A setting rather than a build flag so one image
+     * serves both boards -- the pins differ but both drivers are small, and a
+     * user with the wrong build and no way to change it has a brick.
+     */
+    uint8_t  input_mode;
     bool     wrap;         /* list wraps at the ends */
 
     /* the logo fingerprint, 0 when the user has not supplied a donor */

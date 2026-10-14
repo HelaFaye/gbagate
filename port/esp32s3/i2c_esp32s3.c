@@ -11,6 +11,7 @@
 
 #include "driver/i2c_master.h"
 #include "esp_check.h"
+#include "board.h"
 #include "esp_log.h"
 
 #include "chip_slot.h"
@@ -18,8 +19,8 @@
 
 static const char *TAG = "i2c";
 
-#define I2C_SDA      8
-#define I2C_SCL      9
+#define I2C_SDA      PIN_I2C_SDA
+#define I2C_SCL      PIN_I2C_SCL
 #define I2C_HZ       400000
 #define I2C_TIMEOUT  50   /* ms; a missing board must fail fast, not stall the UI */
 

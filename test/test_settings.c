@@ -151,6 +151,40 @@ static void test_corruption(void) {
     check("and is the one we saved", b.colstart, 7);
 }
 
+/*
+ * The blob layout changed when input_mode took over the padding byte. An older
+ * save has arbitrary content there, so a build that read it as a mode could
+ * select input hardware that is not fitted -- and the device would then appear
+ * to have dead buttons. The version bump is what prevents that.
+ */
+static void test_version_bump_protects_input_mode(void) {
+    printf("an older save cannot set the input mode\n");
+
+    settings_t a;
+    settings_defaults(&a);
+    a.input_mode = INPUT_DPAD4;
+
+    uint8_t buf[SETTINGS_BLOB_MAX + 16];
+    size_t len = settings_pack(&a, buf, sizeof buf);
+
+    settings_t b;
+    check("round trips at the current version", settings_unpack(&b, buf, len), 1);
+    check("mode preserved", b.input_mode, INPUT_DPAD4);
+
+    /* Pretend it is a version-1 blob, as a device upgraded in the field would
+     * find in NVS. */
+    buf[4] = 1;
+    check("older blob rejected", settings_unpack(&b, buf, len), 0);
+    check("and the mode is the safe default", b.input_mode, INPUT_ENCODER);
+
+    /* An out-of-range mode in an otherwise valid blob is clamped, not
+     * rejected: the calibration in the same blob is worth keeping. */
+    a.input_mode = 99;
+    len = settings_pack(&a, buf, sizeof buf);
+    check("accepted", settings_unpack(&b, buf, len), 1);
+    check("mode clamped", b.input_mode, INPUT_ENCODER);
+}
+
 static void test_clamping(void) {
     printf("valid blob, impossible values\n");
 
@@ -211,6 +245,7 @@ int main(void) {
     test_round_trip();
     test_new_device();
     test_corruption();
+    test_version_bump_protects_input_mode();
     test_clamping();
     test_io_failure();
     printf("\n%s\n", g_fail ? "FAILURES" : "all checks passed");

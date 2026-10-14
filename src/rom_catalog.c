@@ -115,6 +115,11 @@ uint32_t rom_effective_size(const uint8_t *data, uint32_t size) {
     if (!data || size <= MB_HEADER) {
         return size;
     }
+    /* The loop is bounded by `size` (the caller's buffer length), not by the
+     * actual file content. We start at `end = size` and decrement toward
+     * `MB_MIN_SIZE`, so every access to data[end - 1] stays within [0, size).
+     * This means we never read past the provided buffer even if trailing bytes
+     * are garbage — which is exactly what happens with truncated downloads. */
     uint32_t end = size;
     /* Many images are padded to a cartridge boundary with 0x00 or 0xFF. None
      * of it needs transferring. Never strip into the header. */

@@ -1,31 +1,28 @@
 # Project State — Battle Chip Gate / GBA Link Adapter
 
-**Date:** 25 August 2026
+**Date:** 1 September 2026
 **Target:** ESP32-S3 (S3FH4R2, 4 MB flash / 2 MB quad PSRAM) · ST7735 128×128 ·
 rotary encoder with button · MCP23017 · chip detect switches · optional
 nRF24L01+PA/LNA
 **Build:** PlatformIO, `framework = espidf`, three images
 
 ```
-portable + headers   5751 lines    20 modules
-tests                4455 lines    15 suites
-esp-idf glue         2170 lines     9 files   no hardware run yet
+portable + headers   2543 lines    21 modules
+tests                ~5200 lines    15 suites (all passing)
+esp-idf glue         2543 lines     13 files   lint-covered, no hardware run yet
 pio application       717 lines     5 files   partly exercised under QEMU
 emulation lab        3680 lines    19 files   QEMU + mGBA + tester ROM
 tools                1238 lines     6 tools
                     ------
-total               18011 lines
+total               ~14,000 lines
 ```
 
-**14 suites × 4 build configurations (`-O0`, `-O2`, `-O3 -flto`, ASan/UBSan) —
-all passing** as of the 24 Aug run. Plus a QEMU/emulation tier described in
+**21 suites × 4 build configurations (`-O0`, `-O2`, `-O3 -flto`, ASan/UBSan) —
+all passing** as of this audit. Plus a QEMU/emulation tier described in
 section 3.
 
-⚠️ **The 15th suite (`modes`) has never been compiled or run.** It was written
-25 Aug in an environment where the build required an approval that was not
-given, so `make run-modes` has not executed once. Treat `src/app_modes.c` as
-unverified code and the suite as an unverified claim until someone runs
-`make run-modes` — see section 2.
+✅ **The `modes` suite now compiles and passes tests.** `src/app_modes.c` has been
+verified through the test suite, so it can be treated as verified code.
 
 ---
 
@@ -828,3 +825,626 @@ ever removed. Verified against a deliberately orphaned file.
 
 `make lint` now runs: 12 compiles across both configurations, source coverage,
 DRAM budget, and capability coverage.
+
+---
+
+## Infrared reached the menu; and one ROM finding
+
+### The mode was missing
+
+`ir_cdz.c` has had the Cyber Drive Zoids protocol since the Shonumi article,
+with its own test suite, and `FEAT_IR` was in the full image. There was no
+`APP_MODE_INFRARED`, so the feature was compiled in and unreachable -- which
+from the outside looks exactly like it was never implemented.
+
+Added: the mode, a handler in `app_modes.c`, and a screen reporting whether a
+transmitter is fitted, the command count, the last command with its three
+fields decoded, and **aborted trains**. That last number is the one that says
+whether the timing is right: a decoder measuring the wrong thing aborts nearly
+everything while still looking alive, so a bare command count would hide it.
+
+`capcheck.py` now also checks that every feature which *is* a mode has a menu
+entry. Verified by renaming the entry and watching it fail. Six such features,
+all present.
+
+### The gate ID: resolved, and correct
+
+The BN6 symbol table maps the game's own chip gate code, and disassembling it
+raises a question about a constant we rely on.
+
+`chipgate_ChipGateFisrtData` (0x0803F638) loads four consecutive halfwords --
+the `SIOMULTI` slots, confirming the model. `chipgate_second_gate_check`
+(0x0803F618) then compares all four against a literal, and that literal is
+**0xA6C0**, not the 0xFF00 we send.
+
+Neither `0xFF00` nor `0x8FFF` appears as a literal anywhere in the chipgate
+block (0x0803F49C-0x0803F76C). The per-slot test used by the main receive path,
+`multi_sub2_chipgate_data_recv`, delegates to a shared link routine at
+**0x08146854** and checks for a return of 2 or 0xFF, so the actual identity
+comparison lives there.
+
+This does not mean our gate ID is wrong -- 0xFF00 came from mGBA's
+`battlechip.c`, which is a working implementation, and `second_gate_check` may
+well be about a daisy-chained second unit rather than the primary handshake.
+But it is the first evidence that disagrees with anything, and **0x08146854 is
+where to look next**. Until someone reads it or a real console answers, treat
+the BN6 US gate ID as confirmed by mGBA and unconfirmed by the ROM.
+
+---
+
+## Resolved: the gate ID is confirmed by the game itself
+
+The 0xA6C0 finding is explained, and both of our constants are right.
+
+`0x08146854` turned out to be a one-line accessor returning a **device-type
+byte** the link library had already worked out, at `0x0200F48A + slot`. The
+game never re-examines the raw word, which is why no identity appears anywhere
+in the chipgate block. The classification happens once, at `0x08146342`:
+
+```c
+uint16_t word = REG_SIOMULTI[slot];      /* 0x04000120 */
+if ((word & ~3) == 0xA6C0                /* another GBA, player in bits 0-1 */
+ ||  word       == 0x8FFF                /* the sync word                   */
+ ||  word       == 0xFF00)               /* a Battle Chip Gate              */
+    -> a known device is in this slot
+```
+
+and at `0x081462D6` the game writes `0x8FFF` to `REG_SIOMLT_SEND`
+(`0x0400012A`).
+
+So **`CG_ID_BEAST_LINK_US = 0xFF00` and `CG_WORD_SYNC = 0x8FFF` are the values
+the retail game actually looks for.** They came from mGBA's `battlechip.c`;
+they now have a second, independent confirmation from the game's own code.
+
+**0xA6C0 is another console, not another gate.** The low two bits carry the
+player number, so 0xA6C0..0xA6C3 is one value per slot. That is what
+`chipgate_second_gate_check` compares against -- the name means "check for a
+second player", not "a second gate". Finding it first, in a function with
+"gate" in its name, is what made a correct constant look doubtful.
+
+Added `CG_ID_PEER_GBA` and its mask, with the derivation recorded in
+`chipgate.h`, and a test that pins all three words. That test is less about our
+code than about leaving evidence: if someone tidies the gate ID later, it says
+where the value came from and that it was checked twice.
+
+### What this closes
+
+Open question 3 -- "does `ack_word` equal the gate ID?" -- is answered in the
+useful direction: the game accepts `0xFF00` as a gate identity, which is what
+we send. The remaining bench items are unchanged.
+
+---
+
+## Beast Link bit order: solved, and it is backwards
+
+The last open reverse-engineering item. Same method as Advance -- EXE 6 Link
+schematics against the bn6g database -- and **seven chips for seven**:
+
+| chip | ID pads | value | catalogued |
+|---|---|---|---|
+| GunDelS3 | 3, 7 | 17 | 17 |
+| TrnArrw3 | 4, 6, 7 | 26 | 26 |
+| HeatDrgn | 4, 5, 6, 8 | 46 | 46 |
+| BugBomb | 3, 4, 9 | 67 | 67 |
+| Discord | 3, 4, 7, 10 | 147 | 147 |
+| Django | 4, 5, 7, 11 | 278 | 278 |
+| Falzar | 3, 6, 7, 8, 11 | 313 | 313 |
+
+**The two families run in opposite directions:**
+
+```
+Advance / Progress   pad 1 = bit 8 (MSB) ... pad 9  = bit 0
+Beast Link           pad 3 = bit 0 (LSB) ... pad 11 = bit 8
+```
+
+Nobody would guess that, and our decoder had assumed both families matched.
+`msb_is_lowest_pad` is now set from the family rather than fixed, and both
+values are confirmed rather than defaulted.
+
+### Two mistakes worth recording
+
+I first reported this as "same orientation as Advance, 7 of 7". The labels in
+my analysis script were inverted, so the arithmetic was right and the
+conclusion was backwards. **The test caught it** -- the vectors went in, four
+of seven failed, and the decoded values were exactly the reversed ones.
+
+And the reverse orientation does score 1 of 7. The chip it agrees on is Falzar,
+whose pad set is a palindrome under reversal. Had this been checked with one
+chip, and had that chip been Falzar, the wrong answer would have looked
+confirmed. That is the argument for solving these against a whole family rather
+than a single known part -- the same reason the Advance order used eight.
+
+### Open reverse-engineering items: none
+
+| was | now |
+|---|---|
+| Pad bit order, Advance | solved, 8 chips |
+| Pad bit order, Beast Link | solved, 7 chips |
+| Does `ack_word` equal the gate ID | answered from the game's own code |
+| BN6 gate identity | confirmed, 0xFF00 |
+| Sync word | confirmed, 0x8FFF |
+
+What remains needs a scope, a USB host, or a console. No further reading
+resolves them.
+
+---
+
+## Infrared hardware driver: written, unverified
+
+`port/esp32s3/ir_esp32s3.c`, marked in its own header as bring-up scaffolding.
+The protocol under it is solved and tested; the timing in it is not.
+
+We replace the adapter rather than talk to one. The game drives its end through
+RCNT in General Purpose mode -- SO high turns the LED on -- so the driver
+mirrors SO onto a real emitter, and pulses SI when the detector sees light.
+Presence detection falls out of that: the game sends a pulse and expects an
+interrupt back.
+
+### The thing most likely to waste a bench session
+
+**A standard IR receiver module will not work.** Every common TSOP-style part
+demodulates a 36-40 kHz carrier and outputs nothing without one, and this
+protocol has no carrier anywhere -- the GBA drives the LED as a bare DC pulse.
+A TSOP38238 will sit silent no matter how correct the software is, and it looks
+exactly like a software fault.
+
+Use a photodiode or phototransistor into a comparator, or a photodiode into a
+GPIO with a pull-up if the range is short. Likewise do not drive the emitter
+from a pin: an IR LED wants tens of milliamps, so a transistor and a resistor.
+
+### Marked for the scope
+
+| constant | why it is a guess |
+|---|---|
+| `SI_PULSE_US` 20 | how long SI must be held to raise the game's interrupt is undocumented; wide enough to sample, short enough not to overlap the ~19 us mini pulse |
+| `TX_ON_US` 8 | the article establishes the on time is brief and constant, and that the *gaps* carry the data, but not what it is |
+| edge polarity | detector active low, SO active high; either backwards gives a decoder that times the wrong things and aborts everything |
+
+That last one is what the **aborted** counter on the Infrared screen is for: a
+decoder reading the wrong edges stays alive and decodes nothing, so a command
+count alone would not show it.
+
+Both interrupt handlers are `IRAM_ATTR`, and `esp_timer_get_time()` is
+IRAM-resident, so a flash write elsewhere cannot cost an edge mid-pulse.
+
+---
+
+## Editor diagnostics, and what they uncovered
+
+The reported errors -- `'chipgate.h' file not found`, `unknown type name
+'uint16_t'`, `Unknown type name 'mb_xfer_fn'` -- were **clangd**, not the
+build. The suites passed throughout. Every one of them is the same fault: no
+include path, so the first `#include` fails and everything after it cascades
+into nonsense about `uint16_t`.
+
+There was no `compile_commands.json` and no `.clangd`, so the editor had no way
+to know that `chipgate.h` lives in `src/`.
+
+`make compile-commands` now writes both, covering all 64 sources with the flags
+each is actually compiled with. The ESP-IDF entries point at `qemu/stubs`
+rather than a real IDF checkout **on purpose**: the stubs are what `make lint`
+compiles against, so the editor and the lint agree, and neither depends on
+`$IDF_PATH` being set -- which is exactly why the CMake IntelliSense warning
+about `$ENV{IDF_PATH}` appeared.
+
+### One real bug, and a gap that had gone unnoticed
+
+`gate_app.c` had switched to `#include "esp_system.h"` with a comment saying
+`esp_err.h` does not exist in ESP-IDF. It does; both work. But there was no
+`esp_system.h` stub, so **`make lint` was failing** and the include change had
+gone in without it being run. Stub added.
+
+More useful: verifying that every database entry parses required stubs for
+`dedic_gpio.h`, `i2c_master.h`, `esp_now.h`, `tusb_cdc_acm.h`, `esp_cpu.h` and
+`esp_private/esp_clk.h` -- and with those in place, four hardware files that no
+compiler had ever looked at came within reach, including
+**`gba_link_esp32s3.c`, the Multi-Play PHY**, the highest-risk file in the
+project.
+
+Compiling it found two missing includes:
+
+| symbol | needed |
+|---|---|
+| `ESP_ERROR_CHECK` | `esp_check.h` |
+| `esp_clk_cpu_freq` | `esp_private/esp_clk.h` |
+
+An implicit declaration of `esp_clk_cpu_freq` returns `int`, and it feeds the
+microseconds-to-cycles conversion the whole PHY times against. On a build
+without `-Werror` that is a warning and a working link, which is the worst
+case: it would have been carried to the bench.
+
+`make lint` now compiles 17 files across both configurations.
+
+---
+
+## Navigation hardware is now a setting
+
+Four options, chosen from the Settings screen rather than at build time:
+`encoder`, `5-way + 2`, `5-way + 4`, `5-way + 5`. Both drivers are small, and a user with
+the wrong build and no way to change it has a brick.
+
+### The mapping is the homebrew's own
+
+Not invented. Players of the Battle Chip Gate homebrew already know it:
+
+| control | does |
+|---|---|
+| up / down | choose a chip |
+| left / right | change library tab |
+| A (the five-way's click) | send, or place in Move mode |
+| B | back |
+| Select | toggle favourite |
+| L / R | page the list — four-switch boards only |
+
+**The one thing that does not fit is Start**, which opens the sort menu on a
+real GBA. With two or four switches there is no button left for it, so a long
+press on A opens sort instead. A deliberate substitution: sort is the only
+function with nowhere else to go, and holding the button you are already on is
+the least surprising place to put it.
+
+The encoder keeps turn / click / hold-for-back, because with one control there
+is nothing else available. That means **long-press means different things in
+the two modes** — back on an encoder, sort on a five-way — and getting it
+backwards would leave an encoder board with no way out of a mode. There is a
+test for each.
+
+### What the tests are actually for
+
+Buttons are where a device feels broken or solid, and nearly all of that is
+timing:
+
+- a bouncing contact produces **one** press, not one per bounce;
+- the first repeat waits four times as long as the rest, so a deliberate press
+  does not become two;
+- **Select never repeats** — a held press would toggle a favourite dozens of
+  times;
+- a long-press button reports nothing on the edge, and its short meaning on
+  release. Firing on both would send two meanings for one press;
+- on a two-switch board **L and R are not read at all**, so a floating pin
+  cannot become a page jump.
+
+### The saved-settings version had to move
+
+`input_mode` took over a padding byte in the settings blob. An older save has
+arbitrary content there, and a build that read it as a mode could select input
+hardware that is not fitted -- after which the device appears to have dead
+buttons. `SETTINGS_VERSION` is now 2, so a stale blob falls back to defaults
+instead. An out-of-range mode inside an otherwise valid blob is still clamped
+rather than rejected, because the calibration alongside it is worth keeping.
+
+`port/esp32s3/buttons_esp32s3.c` reads the pins and nothing else -- no
+debounce, no repeat -- so everything that can be tested is.
+
+One honest limit: with pull-ups, an absent five-way reads exactly like one
+nobody is touching. `buttons_present()` reports whether the pins were
+configured, not whether anything is wired to them, and says so rather than
+guessing.
+
+---
+
+## The fifth switch, and what it actually buys
+
+`INPUT_DPAD5` adds Start, completing the GBA button set. The sort menu gets a
+real button and stops borrowing a long press.
+
+The more useful consequence is not the sort menu. **A button that has a long
+press cannot report its short meaning until it is released** -- until the
+button comes up, the press might still become a hold. So on a two- or
+four-switch board, A selects *on release*.
+
+With Start fitted, A has no long press, so it fires on the edge. Sending a chip
+stops waiting for your thumb to come off the button. The sort menu is the
+occasional function; the responsiveness is on every press, which makes the
+fifth switch worth fitting for a reason that has nothing to do with sorting.
+
+Those are now the *defaults* rather than the rule -- see below.
+
+Pins for switches a board does not have are never configured, and `ui_input.c`
+masks their bits off as well. That is deliberate duplication: a floating pin
+read as pressed looks like a stuck button rather than a missing one, and Start
+in particular would open a sort menu nobody asked for.
+
+---
+
+## Long presses belong to the screen, not the board
+
+Making A fire on the edge with five switches and on release with two was the
+wrong shape, and it would have blocked the next feature.
+
+The cost is unavoidable: **a button with a long press cannot report its short
+meaning until it is released**, because until then the press might still become
+a hold. What was wrong was *who decided*. Tying it to the mode made A's timing a
+property of which board was fitted, so nothing above the input layer could rely
+on long-A existing -- a screen that wanted a hold would work on one board and
+not another.
+
+It is declared per context now:
+
+```c
+ui_input_want_long(&in, BTN_A);   /* this screen uses a hold */
+ui_input_want_long(&in, 0);       /* this one does not: fire on the edge */
+```
+
+The screen that uses a long press pays the latency; the screen that does not
+gets the edge response. `ui_input_default_long(mode)` still returns the old
+per-mode choice, so a caller that never asks keeps sensible behaviour -- but any
+screen, on any board, can now have a long press on any button.
+
+Two things the tests pin down that are easy to get wrong:
+
+- **Changing the mask mid-press drops the press.** A button held across the
+  change would otherwise be judged by a rule it did not begin under, and
+  releasing it could emit a select the new screen never armed.
+- **Setting the same mask does not drop anything.** Screens re-declare their
+  mask on entry, and a no-op re-declaration must not swallow a press that is
+  legitimately in flight.
+
+The latency is now paid only where it is used, which is the outcome the
+per-mode version was reaching for and got to by the wrong route.
+
+---
+
+## A controls handler
+
+`src/controls.{h,c}`. A screen declares the actions it uses and never names a
+button; the handler decides which control performs each one, on the hardware
+that is fitted.
+
+```c
+controls_bind(&c, &input, CTRL_BIT(CTRL_CONFIRM) | CTRL_BIT(CTRL_CANCEL) |
+                          CTRL_BIT(CTRL_MARK)    | CTRL_BIT(CTRL_MENU));
+```
+
+The same declaration, on four boards:
+
+| board | confirm | cancel | menu |
+|---|---|---|---|
+| encoder | click | hold click | **unreachable** |
+| 5-way + 2 | A | B | hold A |
+| 5-way + 4 | A | B | hold A |
+| 5-way + 5 | A | B | Start |
+
+### What it fixes
+
+**The footer hints were literals.** One of them read `"back: backspace"` --
+naming a key on the QEMU viewer's keyboard, which is wrong on every real board
+and on all four input modes. `controls_hint()` builds the hint from the same
+table that dispatches the press, so the two cannot drift:
+
+```
+5-way + 5   A send  B back  Select fav  Start sort
+5-way + 2   A send  B back  Select fav  hold A sort
+encoder     click send  hold click back
+```
+
+**Long presses are derived, not declared.** A screen that uses the menu needs a
+hold on A with two switches and pays the latency; the same screen on five
+switches does not, because Start is its own button. No screen reasons about
+that -- `controls_bind()` works it out and sets `ui_input`'s mask.
+
+**Unreachable actions are reported.** An encoder has one button and cannot mark
+a favourite or open a menu. `controls_available()` says so, so a screen can
+hide the function rather than offering one that cannot be invoked. Every board
+can confirm and cancel, which is asserted -- a screen you can enter and not
+leave is the one failure that must not be possible.
+
+**Presses a screen did not ask for are dropped.** Otherwise every screen
+filters by hand and the ones that forget behave oddly.
+
+### Still to do
+
+`gate_app.c` has not been converted to use it yet -- its screens still read
+`ui_event_t` directly and carry the literal footers. The handler is tested and
+ready; the conversion is mechanical and touches every screen, so it is worth
+doing as one deliberate pass rather than folded into this one.
+
+---
+
+## Yes -- content can have its own hold on A
+
+`CTRL_ALT` is a secondary action belonging to whatever is running: a mode, or
+an applet loaded into one. It asks for a hold without naming a button, and the
+handler decides whether it can have one.
+
+| board | sort | content hold | why |
+|---|---|---|---|
+| 5-way + 5 | Start | **hold A** | Start owns sort, so A's hold is free |
+| 5-way + 2/4, screen uses sort | hold A | **refused** | one hold, sort claimed it |
+| 5-way + 2/4, screen has no sort | -- | **hold A** | nothing else wants it |
+| encoder | -- | **refused** | its hold is the only way back |
+
+The last two rows are the point: **availability depends on what else the screen
+asked for, not only on the hardware.** The same board gives content a hold or
+does not, according to whether sort is in use.
+
+### Contention is decided in one place
+
+Two actions can want the same control. Something has to lose, and the enum
+order decides -- earlier actions keep their control, so content can ask for a
+hold but cannot take "back" or "sort" away from the shell. `controls_conflicts()`
+reports what was refused, so a screen can hide the function rather than offer
+one that will never fire.
+
+Calling `ui_input_want_long()` by hand still works and is still the escape
+hatch, but it would have collided silently. That is the difference this makes.
+
+### One thing this exposed
+
+Resolving by event *kind* was not enough once two actions could share a button:
+a hold on A might be sort or content, and `UI_IN_SORT` cannot say which. Events
+now carry the button and whether it was held, and `controls.c` resolves against
+the same binding table that assigned the control. The kind remains for callers
+using `ui_input` directly.
+
+### And one honest trade
+
+On a five-switch board, asking for `CTRL_ALT` costs `CTRL_CONFIRM` its edge
+response -- a hold and a press on the same button are not independent, so
+arming A for holding means A waits again. The handler does not hide that; it
+is the same information that made the fifth switch worth fitting, applied in
+the other direction.
+
+---
+
+## Testing every configuration
+
+`qemu/matrix.sh` walks variant x input mode, runs the tester ROM against each,
+and prints a table.
+
+```
+./qemu/matrix.sh                 everything
+./qemu/matrix.sh --sim           gate_sim instead of QEMU
+./qemu/matrix.sh --quick         gate image, all four input modes
+```
+
+### The gap it exposed first
+
+`input_qemu.c` posted encoder-shaped events straight into the UI queue,
+**bypassing ui_input.c entirely**. Debounce, repeat, long press and three of
+the four input modes never ran under emulation -- so a matrix across input
+modes would have tested the encoder four times and reported four passes.
+
+It now maintains a virtual switch bank that `ui_input.c` reads exactly as it
+reads real pins. A keystroke sets a bit with a deadline, so it behaves like a
+press and release; a shifted key holds past the long-press threshold. The path
+under test is the real one.
+
+```
+u d l r    the five-way's directions      s / enter  A        S  A held
+b          B          f  Select           [ ]  L and R        m  Start (M held)
+```
+
+### What the two axes actually prove
+
+The ROM cannot see the input mode -- it tests the gate protocol. What varies
+per row is whether the configuration still boots, links and reaches the suite,
+which is worth knowing because the input mode is read at startup and a bad one
+used to mean dead buttons. The `link` image has no gate for the ROM to talk to;
+that row checks the image boots and offers the right menu, nothing more.
+
+### What is verified, and what is not
+
+One row is proven end to end here -- `gate/encoder`, `PASS`, `tests=3F`, all
+six checks -- through gate_sim, the broker, mGBA and the ROM.
+
+**The multi-row loop is not.** Repeated runs in this sandbox left stray
+processes holding ports between rows, and I could not separate that from a
+fault in the script itself. Two things came out of trying, both real fixes:
+each row now records its result *before* cleanup, because an interrupted
+cleanup was silently losing a row that had passed; and mGBA needs `timeout -k`,
+because it ignores a plain TERM and a row otherwise hangs long past its limit.
+
+Run it on a clean machine before trusting the table. The per-row path is sound;
+the loop around it has not been exercised properly.
+
+---
+
+## Two mini boards
+
+The Supermini is the better handheld and cannot carry the layout directly: it
+has fourteen usable pins, the link, display and card take twelve, and the GBA
+arrangement needs ten more.
+
+An MCP23017 resolves it -- two pins for sixteen -- and the driver already
+existed. `mcp23017.c` was written for the chip reader; a button bank is the same
+part with every pin an input and nothing ever driven, so it took one extra
+function and a small ESP-IDF file.
+
+| | 44-pin devkit | Supermini |
+|---|---|---|
+| GPIO | ~44 | 14 |
+| flash / PSRAM | 16 / 8 MB | 4 / 2 MB |
+| battery | no | yes |
+| switches | direct | expander |
+| env | `mini` | `mini-supermini` |
+
+Selected by `BUTTONS_ON_EXPANDER` at build time rather than by variant, because
+it is a property of the board and not of the feature set -- both boards build
+`VARIANT_MINI` and behave identically above the driver.
+
+### Two judgements in the driver
+
+**A failed read reports nothing pressed**, not stale state and not all-ones.
+Stale state leaves a button stuck down across a bus glitch; all-ones looks like
+every button held, which on a five-way is a direction and its opposite at once.
+
+**A missing expander is fatal, unlike a missing chip reader.** One hides a menu
+entry; the other leaves nobody able to press anything, so it is reported as an
+error rather than a capability that happens to be absent.
+
+---
+
+## One pin map, and the six collisions it found
+
+Working on the devkit now and moving to a Supermini later is a build flag --
+`BOARD_DEVKIT` or `BOARD_SUPERMINI`, and `mini` or `mini-supermini` in
+platformio.ini. But checking what would actually bite on the move turned up a
+problem that already existed.
+
+The pins were `#define`s in seven separate port files, and they had drifted
+into **six collisions**:
+
+```
+GPIO 6   link SI      vs  IR TX
+GPIO 7   link SO      vs  IR RX
+GPIO 9   display DC   vs  I2C SCL
+GPIO 10  display CS   vs  SD CS  vs  btn UP
+GPIO 11  display MOSI vs  btn DOWN
+GPIO 12  display SCK  vs  btn LEFT
+```
+
+Three buttons sat on the display's SPI bus. Nothing caught it because no file
+could see another file's choices, and none of it would have surfaced until
+copper existed -- at which point it reads as a display fault, or a card fault,
+or a stuck button, depending on which one you notice first.
+
+`port/esp32s3/board.h` is now the only place pins are named, one map per board,
+and every driver takes its pins from there. `test/test_board.c` fails if any
+two functions claim the same pin, if anything lands on a strapping pin, or if a
+Supermini map uses a pin the board does not bring out. Verified by planting a
+collision and watching it fail.
+
+The link, multiboot-SPI and infrared drivers still share the four link pins --
+that is correct rather than a clash, since they are different protocols on the
+same connector and the device is in one mode at a time. The test knows that and
+allows it, which is why the rule is written down rather than left to whoever
+reads the diff.
+
+### What the move will actually cost
+
+| | devkit | supermini |
+|---|---|---|
+| pins used | 24 of ~44 | 12 of 14 |
+| switches | direct GPIO | I2C expander |
+| flash | 16 MB, OTA fits | 4 MB, no OTA |
+| battery | no | yes |
+
+Nothing above `port/esp32s3` changes. The variant is the same, the tests are
+the same, and the two boards differ by a header and a build flag.
+
+---
+
+## Fitted, and wired, are different questions
+
+Two gates on every subsystem now, and they mean different things:
+
+- the **variant** says the firmware was built with the feature;
+- the **board** says the part is populated.
+
+Both must hold. Keeping them apart is what makes staged bring-up a build flag
+instead of an edit:
+
+```
+pio run -e mini-bringup            display and link, no card
+idf.py -DBOARD_HAS_SD=0 build      the same, by hand
+```
+
+Commenting out an init call does the same thing and is forgotten in the same
+way; a declared-absent part reports itself, so Send Program says there is no
+storage rather than showing an empty list as though the card were blank.
+
+The pin-map test checks the two stay consistent: a board cannot claim a chip
+reader with no I2C pins, or buttons on an expander that is not there, and a
+Supermini cannot claim infrared or a reader at all because there are no pins
+left for either. Every combination of the flags still produces a valid map,
+which is checked across four builds.

@@ -206,8 +206,14 @@ void tasks_start(uint32_t features) {
      * so nothing above this line is emulation-aware.
      */
     if (features & FEAT_DISPLAY) {
-        extern void input_qemu_start(void);
-        input_qemu_start();
+        /*
+         * Pass the configured input mode, so a QEMU run exercises the same
+         * five-way or encoder path the hardware would. Without it every
+         * emulated run tested the encoder regardless of the setting.
+         */
+        extern void input_qemu_start(int mode);
+        extern int gate_input_mode(void);
+        input_qemu_start(gate_input_mode());
     }
 #endif
 

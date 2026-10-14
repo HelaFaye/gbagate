@@ -14,6 +14,7 @@
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_check.h"
+#include "board.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 
@@ -30,9 +31,9 @@ static const char *TAG = "mb_spi";
  *   pin 6 GND
  * Pin 1 VCC stays disconnected; the board has its own supply.
  */
-#define PIN_MISO 6   /* GBA SO */
-#define PIN_MOSI 5   /* GBA SI */
-#define PIN_SCLK 4   /* GBA SC */
+#define PIN_MISO PIN_LINK_SI   /* GBA SO */
+#define PIN_MOSI PIN_LINK_SD   /* GBA SI */
+#define PIN_SCLK PIN_LINK_SC   /* GBA SC */
 
 #define MB_HOST SPI3_HOST
 

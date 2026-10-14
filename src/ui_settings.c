@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "chipgate.h"
+#include "ui_input.h"
 #include "ui_settings.h"
 
 static bool s_dirty;
@@ -28,6 +29,7 @@ static const char *field_name(setfield_t f) {
     case SETFIELD_GAME:     return "game";
     case SETFIELD_ACCEL:    return "accel";
     case SETFIELD_WRAP:     return "wrap";
+    case SETFIELD_INPUT:    return "input";
     default:                return "?";
     }
 }
@@ -42,6 +44,9 @@ static void field_value(const settings_t *s, setfield_t f, char *out, size_t cap
         break;
     case SETFIELD_ACCEL:    snprintf(out, cap, "%u", s->accel); break;
     case SETFIELD_WRAP:     snprintf(out, cap, "%s", s->wrap ? "on" : "off"); break;
+    case SETFIELD_INPUT:
+        snprintf(out, cap, "%s", input_mode_name((input_mode_t)s->input_mode));
+        break;
     default:                snprintf(out, cap, "?"); break;
     }
 }
@@ -100,6 +105,18 @@ static void adjust(settings_t *s, setfield_t f, int32_t d) {
     case SETFIELD_WRAP:
         s->wrap = !s->wrap;
         break;
+    case SETFIELD_INPUT: {
+        /*
+         * Wraps rather than clamps: with three values there is nowhere else to
+         * go, and someone who has picked the wrong one needs to get back.
+         */
+        int32_t m = ((int32_t)s->input_mode + d) % INPUT_MODE_COUNT;
+        if (m < 0) {
+            m += INPUT_MODE_COUNT;
+        }
+        s->input_mode = (uint8_t)m;
+        break;
+    }
     default:
         return;
     }

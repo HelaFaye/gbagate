@@ -1,0 +1,16 @@
+# ESP32-S3-WROOM-1 N16R8: 16 MB flash, 8 MB PSRAM.
+#
+# Four times the flash of the Supermini this project first targeted, so the app
+# partition stops being tight and there is room for OTA -- which matters more
+# on a board with no USB storage, since reflashing is the only way in.
+#
+# No FAT partition: programs live on the SD card, and the chip databases are
+# embedded in the app.
+#
+# Name,     Type, SubType, Offset,  Size,   Flags
+nvs,        data, nvs,     ,        0x6000,
+otadata,    data, ota,     ,        0x2000,
+phy_init,   data, phy,     ,        0x1000,
+ota_0,      app,  ota_0,   ,        4M,
+ota_1,      app,  ota_1,   ,        4M,
+spiffs,     data, spiffs,  ,        1M,

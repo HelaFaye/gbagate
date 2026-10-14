@@ -131,6 +131,38 @@ static void test_decode(void) {
               chip_reader_decode(&cr, shorted(with11, 1)));
     }
 
+    /*
+     * Beast Link chips, from the EXE 6 Link schematics against bn6g. Seven for
+     * seven, and the reverse orientation scores one -- Falzar, whose pad set is
+     * a palindrome under reversal. One agreeing chip is exactly what a wrong
+     * bit order looks like, which is why there are seven here.
+     */
+    {
+        static const struct { const char *name; uint8_t pads[8]; uint8_t n;
+                              uint16_t id; } beast[] = {
+            { "BugBomb",   {3,4,9},        3,  67 },
+            { "Discord",   {3,4,7,10},     4, 147 },
+            { "Django",    {4,5,7,11},     4, 278 },
+            { "Falzar",    {3,6,7,8,11},   5, 313 },
+            { "GunDelS3",  {3,7},          2,  17 },
+            { "HeatDrgn",  {4,5,6,8},      4,  46 },
+            { "TrnArrw3",  {4,6,7},        3,  26 },
+        };
+        chip_reader_t br;
+        chip_reader_init(&br, CHIP_FAMILY_BEAST, NULL, NULL);
+        int before = g_fail;
+        for (unsigned i = 0; i < sizeof beast / sizeof beast[0]; i++) {
+            uint16_t got = chip_reader_decode(&br,
+                               shorted(beast[i].pads, beast[i].n));
+            if (got != beast[i].id) {
+                printf("  FAIL %s decoded %u, schematics say %u\n",
+                       beast[i].name, got, beast[i].id);
+                g_fail++;
+            }
+        }
+        check("seven Beast Link chips decode correctly", g_fail, before);
+    }
+
     /* Beast: only pads 3..11 contribute. Pads 1 and 12 must be ignored. */
     chip_reader_t b;
     chip_reader_init(&b, CHIP_FAMILY_BEAST, slot_read, &slot);

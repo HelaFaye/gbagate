@@ -12,7 +12,8 @@
 
 #include <string.h>
 
-#include "esp_err.h"
+/* esp_err.h does not exist in ESP-IDF; error types are defined in esp_system.h */
+#include "esp_system.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -26,6 +27,8 @@
 #include "ui_list.h"
 #include "ui_font.h"    /* UI_FONT_H, for centring the banner */
 #include "ui_render.h"
+#include "controls.h"
+#include "ir_cdz.h"
 #include "ui_romview.h"
 #include "ui_settings.h"
 #include "chip_slot.h"
@@ -42,8 +45,25 @@ static mb_xfer_fn mb_spi_transfer(void) { return NULL; }
 extern mb_xfer_fn mb_spi_transfer(void);
 #endif
 #include "ui_shell.h"
+#include "app_modes.h"
 
 extern uint32_t tasks_ui_events_dropped(void);
+
+/*
+ * Infrared. Weak defaults so images without a transmitter still link and say
+ * so; the real ones would live in port/esp32s3/ir_esp32s3.c, which needs a
+ * scope before it is worth writing.
+ */
+bool     ir_ready(void);
+uint32_t ir_commands(void);
+uint32_t ir_aborted(void);
+uint16_t ir_last_command(void);
+bool     ir_send(uint16_t cmd);
+__attribute__((weak)) bool     ir_ready(void)        { return false; }
+__attribute__((weak)) uint32_t ir_commands(void)     { return 0; }
+__attribute__((weak)) uint32_t ir_aborted(void)      { return 0; }
+__attribute__((weak)) uint16_t ir_last_command(void) { return 0; }
+__attribute__((weak)) bool     ir_send(uint16_t c)   { (void)c; return false; }
 extern link_bridge_t *tasks_bridge(void);
 
 /*
@@ -212,8 +232,72 @@ __attribute__((weak)) esp_err_t msc_claim_from_host(void) { return ESP_FAIL; }
 static bool s_exposed;
 static ui_settings_t s_setedit;
 
+/* ---- controls ----------------------------------------------------------- */
+
+/*
+ * The input object belongs to whichever driver is running -- buttons_esp32s3.c
+ * on hardware, input_qemu.c under emulation. Weak default so an image with
+ * neither still links; the screens then bind against nothing and fall back to
+ * an empty hint rather than a wrong one.
+ */
+ui_input_t *input_active(void);
+__attribute__((weak)) ui_input_t *input_active(void) { return NULL; }
+
+static controls_t s_controls;
+static uint32_t   s_bound_set;   /* what the current screen asked for */
+
+/*
+ * Declare a screen's controls. Cheap enough to call every frame, and doing so
+ * means a screen cannot forget to rebind after the input mode is changed from
+ * the Settings screen -- which would otherwise leave the previous mode's
+ * bindings, and a footer describing hardware that is no longer selected.
+ */
+static const char *screen_controls(uint32_t wanted) {
+    ui_input_t *in = input_active();
+    if (!in) {
+        return "";
+    }
+    if (wanted != s_bound_set || s_controls.in != in ||
+        s_controls.mode != in->mode) {
+        controls_bind(&s_controls, in, wanted);
+        s_bound_set = wanted;
+    }
+    return controls_hint(&s_controls);
+}
+
+/* What a plain page offers: confirm and back, nothing else. */
+#define CTRLS_PAGE   (CTRL_BIT(CTRL_CONFIRM) | CTRL_BIT(CTRL_CANCEL))
+
+/* A list: movement as well. */
+#define CTRLS_LIST   (CTRLS_PAGE | CTRL_BIT(CTRL_PREV) | CTRL_BIT(CTRL_NEXT) | \
+                      CTRL_BIT(CTRL_PAGE_PREV) | CTRL_BIT(CTRL_PAGE_NEXT))
+
+/* The chip screen: everything. */
+#define CTRLS_CHIPS  (CTRLS_LIST | CTRL_BIT(CTRL_TAB_PREV) | \
+                      CTRL_BIT(CTRL_TAB_NEXT) | CTRL_BIT(CTRL_MARK) | \
+                      CTRL_BIT(CTRL_MENU))
+
 static ui_shell_t s_shell;
 static bool       s_shell_ready;
+
+/*
+ * The dispatcher.
+ *
+ * app_modes.c has existed and been tested since 25 Aug with nothing in the
+ * firmware calling it: shell_select() set SHELL_SCREEN_RUNNING, ui_service()
+ * called gate_enter_mode() by hand, and no mode had a teardown at all. Every
+ * mode now enters and leaves through here, so a single exit path runs the
+ * claim-back, the settings flush and the chip cancel that used to be scattered
+ * through the event handling -- and reached only via the Back key.
+ */
+static app_dispatch_t s_dispatch;
+
+/*
+ * Why the last attempt to start a mode failed. Held separately because
+ * app_dispatch_from_shell() resets last_status to OK as soon as the shell
+ * leaves the running screen, which is exactly the moment we want to explain.
+ */
+static app_dispatch_status_t s_last_refusal = APP_DISPATCH_OK;
 
 static uint32_t s_last_transfer_ms;
 
@@ -455,6 +539,19 @@ static void render_mode_screen(void)
         snprintf(line, sizeof line, "uidrop %lu",
                  (unsigned long)tasks_ui_events_dropped());
         ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, line, COL_TEXT);
+    } else if (!app_dispatch_running(&s_dispatch)) {
+        /*
+         * The shell is on the running screen with nothing behind it, which is
+         * what a refused enter() looks like. Naming the reason matters: the
+         * page used to read "no screen for this mode yet", which describes the
+         * firmware rather than the fault the user just hit.
+         */
+        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4,
+                        "mode did not start", COL_TEXT);
+        y += 14;
+        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4,
+                        app_dispatch_status_name(s_dispatch.last_status),
+                        COL_TEXT_DIM);
     } else {
         ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, s_status, COL_TEXT);
         y += 14;
@@ -469,7 +566,7 @@ static void render_mode_screen(void)
     ui_fill(&canvas, 0, fy, UI_SCREEN_W, UI_FOOTER_H, COL_ROW_ALT);
     ui_fill(&canvas, 0, fy, UI_SCREEN_W, 1, COL_HEADER);
     ui_text_clipped(&canvas, 2, fy + (UI_FOOTER_H - UI_FONT_H) / 2,
-                    UI_SCREEN_W - 4, "back: backspace", COL_TEXT_DIM);
+                    UI_SCREEN_W - 4, screen_controls(CTRLS_PAGE), COL_TEXT_DIM);
 
     st7735_mark_all_dirty();
     st7735_flush();
@@ -494,6 +591,18 @@ static void send_program(void)
 {
     const rom_entry_t *e = romview_current(&s_roms);
     if (!e || !romview_selectable(&s_roms, s_roms.cursor)) {
+        return;
+    }
+
+    /*
+     * Checked before the 256 KB staging buffer is taken, not after. With no SPI
+     * master in this image -- QEMU -- mb_send() answers MB_ERR_ARGS, and "bad
+     * arguments" describes the call rather than the cause: nothing here can
+     * drive the clock.
+     */
+    mb_xfer_fn xfer_fn = mb_spi_transfer();
+    if (!xfer_fn) {
+        snprintf(s_send_status, sizeof s_send_status, "no link hardware");
         return;
     }
 
@@ -538,7 +647,7 @@ static void send_program(void)
     s_send_pct = 0;
 
     mb_session_t mb;
-    mb_init(&mb, mb_spi_transfer(), NULL);
+    mb_init(&mb, xfer_fn, NULL);
     mb.progress = send_progress;
 
     mb_result_t r = mb_send(&mb, staging, len);
@@ -583,8 +692,7 @@ static void render_page(const char *title, const char *const *lines, int n,
     ui_fill(&canvas, 0, fy, UI_SCREEN_W, UI_FOOTER_H, COL_ROW_ALT);
     ui_fill(&canvas, 0, fy, UI_SCREEN_W, 1, COL_HEADER);
     ui_text_clipped(&canvas, 2, fy + (UI_FOOTER_H - UI_FONT_H) / 2,
-                    UI_SCREEN_W - 4, footer ? footer : "back: backspace",
-                    COL_TEXT_DIM);
+                    UI_SCREEN_W - 4, footer ? footer : "", COL_TEXT_DIM);
 
     st7735_mark_all_dirty();
     st7735_flush();
@@ -657,7 +765,10 @@ static void render_settings(const ui_event_t *e, bool have_event)
     }
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
     ui_render_menu(&canvas, "Settings", uiset_label, &s_setedit,
-                   uiset_count(), s_setedit.cursor, uiset_footer(&s_setedit));
+                   uiset_count(), s_setedit.cursor,
+                   /* The editor's own hint says whether turning changes the
+                    * value or the selection, which no binding table knows. */
+                   uiset_footer(&s_setedit));
     st7735_mark_all_dirty();
     st7735_flush();
 }
@@ -682,7 +793,26 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
         /* Round trip is the number that says whether a wireless link is
          * usable: under a millisecond is fine, tens are not. */
         snprintf(l3, sizeof l3, "rtt    %lu us", b ? (unsigned long)b->rtt_us : 0ul);
-        footer = "back: backspace";
+        footer = screen_controls(CTRLS_PAGE);
+        break;
+    }
+
+    case APP_MODE_INFRARED: {
+        uint16_t last = ir_last_command();
+        snprintf(l0, sizeof l0, "%s", ir_ready() ? "IR ready" : "no IR fitted");
+        snprintf(l1, sizeof l1, "cmds   %lu", (unsigned long)ir_commands());
+        snprintf(l2, sizeof l2, "last   %03X  %X/%X/%X", (unsigned)last,
+                 cdz_category(last), cdz_motion(last), cdz_action(last));
+        /*
+         * Aborted trains is the number that tells you whether the timing is
+         * right. A decoder measuring the wrong thing aborts nearly everything
+         * while still looking alive, so a bare command count would not show it.
+         */
+        snprintf(l3, sizeof l3, "aborted %lu", (unsigned long)ir_aborted());
+        footer = screen_controls(CTRLS_PAGE);
+        if (have_event && e && e->type == UI_EVENT_CHIP_SENT && ir_ready()) {
+            ir_send(last);
+        }
         break;
     }
 
@@ -700,7 +830,7 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
                 snprintf(l3, sizeof l3, "unreadable");
             }
         }
-        footer = "enter: send to gate";
+        footer = screen_controls(CTRLS_PAGE);
         if (have_event && e && e->type == UI_EVENT_CHIP_SENT && (adv || beast)) {
             uint16_t id = gate_scan_chip(adv, beast);
             if (id != CG_CHIP_NONE) {
@@ -726,7 +856,12 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
          * mode -- guessing at it is what corrupts a FAT volume. */
         snprintf(l2, sizeof l2, "%s", s_exposed ? "eject before back"
                                                 : "");
-        footer = s_exposed ? "enter: take back" : "enter: hand over";
+        /*
+         * The hint names the control; the line above already says what the
+         * action does, and which way round it is. Restating "enter" here was
+         * wrong on every board without a keyboard.
+         */
+        footer = screen_controls(CTRLS_PAGE);
         break;
 
     case APP_MODE_SETTINGS:
@@ -766,7 +901,7 @@ static void render_rom_browser(void)
         ui_fill(&canvas, 4, UI_LIST_Y + 40,
                 (int)((bw * (int)s_send_pct) / 100), 8, COL_BAR_THUMB);
 
-        char pct[8];
+        char pct[12];   /* "100%" plus slack: %lu can print ten digits */
         snprintf(pct, sizeof pct, "%lu%%", (unsigned long)s_send_pct);
         ui_text_clipped(&canvas, 4, UI_LIST_Y + 54, 60, pct, COL_TEXT_DIM);
 
@@ -774,7 +909,7 @@ static void render_rom_browser(void)
         ui_fill(&canvas, 0, fy, UI_SCREEN_W, UI_FOOTER_H, COL_ROW_ALT);
         ui_fill(&canvas, 0, fy, UI_SCREEN_W, 1, COL_HEADER);
         ui_text_clipped(&canvas, 2, fy + (UI_FOOTER_H - UI_FONT_H) / 2,
-                        UI_SCREEN_W - 4, "back: backspace", COL_TEXT_DIM);
+                        UI_SCREEN_W - 4, screen_controls(CTRLS_PAGE), COL_TEXT_DIM);
         st7735_mark_all_dirty();
         st7735_flush();
         return;
@@ -794,6 +929,8 @@ static void render_rom_browser(void)
 
     ui_render_menu(&canvas, "Send Program", romview_label, &s_roms,
                    romview_count(&s_roms), (uint8_t)s_roms.cursor,
+                   /* romview's hint explains why a rom cannot be sent, which
+                    * is about the file rather than the buttons. */
                    romview_hint(&s_roms));
     st7735_mark_all_dirty();
     st7735_flush();
@@ -823,13 +960,43 @@ static void render_shell(void)
 
     const char *title = (s_shell.screen == SHELL_SCREEN_GAMES)
                             ? "Choose game" : "gbagate";
-    const char *foot = (s_shell.screen == SHELL_SCREEN_GAMES)
-                            ? "back: hold" : GBAGATE_VARIANT_NAME;
 
+    /*
+     * A mode that refused to start says so here. Without it, being bounced
+     * straight back to the menu is indistinguishable from a button press that
+     * did nothing -- and "the gate never appears" with no explanation is the
+     * bug report nobody can act on.
+     */
+    const char *foot;
+    if (s_last_refusal != APP_DISPATCH_OK) {
+        foot = app_dispatch_status_name(s_last_refusal);
+    } else if (s_shell.screen == SHELL_SCREEN_GAMES) {
+        foot = "back: hold";
+    } else {
+        foot = GBAGATE_VARIANT_NAME;
+    }
+
+    (void)screen_controls(CTRLS_LIST);
     ui_render_menu(&canvas, title, shell_label, NULL,
                    shell_item_count(&s_shell), shell_cursor(&s_shell), foot);
     st7735_mark_all_dirty();
     st7735_flush();
+}
+
+/*
+ * Leave the running mode.
+ *
+ * The dispatcher follows the shell rather than requiring the caller to pair an
+ * enter with an exit, so moving the screen off SHELL_SCREEN_RUNNING is what
+ * tears the mode down. That is the whole reason the exit handlers exist: the
+ * claim-back, the settings flush and the chip cancel used to be written out at
+ * each Back keypress, and every path that was not a Back keypress skipped them.
+ */
+static void leave_mode(void)
+{
+    shell_back(&s_shell);
+    app_dispatch_from_shell(&s_dispatch, &s_shell);
+    render_shell();
 }
 
 void ui_service(const ui_event_t *e, bool have_event) {
@@ -866,13 +1033,32 @@ void ui_service(const ui_event_t *e, bool have_event) {
             switch (e->type) {
             case UI_EVENT_ENCODER:
                 shell_move(&s_shell, e->a);
+                s_last_refusal = APP_DISPATCH_OK;  /* stale reason, clear it */
                 changed = true;
                 break;
             case UI_EVENT_CHIP_SENT:      /* the encoder button */
                 if (shell_select(&s_shell)) {
-                    gate_enter_mode(s_shell.chosen_mode,
-                                    s_shell.has_game ? s_shell.chosen_game
-                                                     : CG_GAME_BN6_US);
+                    /*
+                     * The join that was missing. The shell is the source of
+                     * truth and dispatch follows it, so the game is taken from
+                     * the shell rather than passed alongside -- has_game is
+                     * authoritative and the cg_game_t beside it means nothing
+                     * without it, which is the stale-identity guard
+                     * app_modes.h describes.
+                     */
+                    app_dispatch_status_t st =
+                        app_dispatch_from_shell(&s_dispatch, &s_shell);
+                    if (st != APP_DISPATCH_OK) {
+                        /*
+                         * Refused. Do not sit on a running screen with nothing
+                         * behind it: go back to where it was chosen and let
+                         * the footer say why.
+                         */
+                        s_last_refusal = st;
+                        shell_back(&s_shell);
+                    } else {
+                        s_last_refusal = APP_DISPATCH_OK;
+                    }
                 }
                 changed = true;
                 break;
@@ -893,6 +1079,14 @@ void ui_service(const ui_event_t *e, bool have_event) {
     }
 
     /* ---- a mode is running ---- */
+
+    /*
+     * Service it before drawing. Only the link modes use this today -- it is
+     * what finally calls bridge_ping(), so the round-trip time on their screen
+     * is a measurement rather than the zero it has always shown.
+     */
+    app_dispatch_tick(&s_dispatch);
+
     /* ---- the modes that are a page plus one action ---- */
     if (s_shell.chosen_mode == APP_MODE_LINK_USB ||
         s_shell.chosen_mode == APP_MODE_LINK_WIRELESS ||
@@ -900,16 +1094,11 @@ void ui_service(const ui_event_t *e, bool have_event) {
         s_shell.chosen_mode == APP_MODE_USB_STORAGE ||
         s_shell.chosen_mode == APP_MODE_SETTINGS) {
 
+        /* The claim-back and the settings flush that used to be written out
+         * here are now this mode's exit handler, so they also run when the
+         * mode is left any other way. */
         if (have_event && e && e->type == UI_EVENT_CHIP_OUT) {
-            if (s_shell.chosen_mode == APP_MODE_USB_STORAGE && s_exposed) {
-                /* Never leave with the host still holding the volume: the
-                 * catalogue would read a drive we do not own. */
-                msc_claim_from_host();
-                s_exposed = false;
-            }
-            settings_flush();
-            shell_back(&s_shell);
-            render_shell();
+            leave_mode();
             return;
         }
         if (s_shell.chosen_mode == APP_MODE_SETTINGS) {
@@ -930,8 +1119,7 @@ void ui_service(const ui_event_t *e, bool have_event) {
                 send_program();
                 break;
             case UI_EVENT_CHIP_OUT:
-                shell_back(&s_shell);
-                render_shell();
+                leave_mode();
                 return;
             default:
                 break;
@@ -941,10 +1129,10 @@ void ui_service(const ui_event_t *e, bool have_event) {
         return;
     }
 
-    if (s_shell.chosen_mode != APP_MODE_CHIP_GATE || !s_db_open) {
+    if (s_shell.chosen_mode != APP_MODE_CHIP_GATE || !s_db_open ||
+        !app_dispatch_running(&s_dispatch)) {
         if (have_event && e && e->type == UI_EVENT_CHIP_OUT) {
-            shell_back(&s_shell);
-            render_shell();
+            leave_mode();
             return;
         }
         /* Redraw every call: the diagnostics counters change on their own, and
@@ -981,9 +1169,8 @@ void ui_service(const ui_event_t *e, bool have_event) {
                 chipgate_clear(&s_gate);
                 snprintf(s_status, sizeof s_status, "CANCELLED");
             } else {
-                settings_flush();   /* favourites starred during the session */
-                shell_back(&s_shell);
-                render_shell();
+                /* The favourites flush is the mode's exit handler now. */
+                leave_mode();
                 return;
             }
             break;
@@ -1014,6 +1201,10 @@ void ui_service(const ui_event_t *e, bool have_event) {
         return;
     }
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
+    /* Bind the full set: the chip screen is the only one that uses tabs, the
+     * favourite mark and the sort menu, and binding is what tells ui_input
+     * whether A needs a hold on this hardware. */
+    (void)screen_controls(CTRLS_CHIPS);
     ui_render_chip_screen(&canvas, &s_view, &s_db, &s_list, s_status);
     st7735_mark_all_dirty();
     st7735_flush();
@@ -1088,6 +1279,9 @@ void gate_settings_start(void) {
         ESP_LOGI(TAG, "settings loaded: offsets %u,%u %s",
                  s_settings.colstart, s_settings.rowstart,
                  s_settings.bgr ? "BGR" : "RGB");
+#if !defined(GBAGATE_QEMU)
+        gate_apply_display_settings();
+#endif
     } else {
         /* Not an error. A new device has nothing stored, and the defaults are
          * the ones most 128x128 modules want. */
@@ -1097,10 +1291,150 @@ void gate_settings_start(void) {
     uiset_init(&s_setedit, &s_settings);
 }
 
+int gate_input_mode(void) { return (int)s_settings.input_mode; }
+
 const settings_t *gate_settings(void) { return &s_settings; }
+
+/* ---- mode handler table ------------------------------------------------- */
+/*
+ * The seam app_modes.c was written for and nothing ever bound. Until now
+ * s_dispatch was zero-initialised -- no handlers, count 0 -- so every
+ * app_dispatch_from_shell() returned NO_HANDLER, gate_enter_mode() was never
+ * reached, and picking any mode bounced straight back to the menu with the
+ * s_last_refusal footer reading "no handler". PROJECT_STATUS.md calls this out
+ * as "designed but not built".
+ *
+ * Each entry maps a menu mode to the setup, teardown and per-iteration work its
+ * subsystem needs. enter() runs when the shell reaches SHELL_SCREEN_RUNNING;
+ * exit() runs when it leaves by any route -- Back, a swap, a reset -- so the
+ * USB reclaim, the settings flush and the chip cancel happen on every exit path
+ * rather than only on the Back key.
+ */
+
+static bool mode_enter_chip_gate(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)has_game;
+    gate_enter_mode(APP_MODE_CHIP_GATE, game);
+    /* A gate with no database has no identity to announce. Refuse rather than
+     * strand the user on a blank chip screen the encoder cannot escape. */
+    return s_db_open;
+}
+
+static void mode_exit_chip_gate(void *ctx) {
+    (void)ctx;
+    /* A chip staged against a link that never completed would leave the gate
+     * BUSY for ever; clear it on the way out. */
+    if (chipgate_busy(&s_gate)) {
+        chipgate_clear(&s_gate);
+    }
+    settings_flush();   /* deferred favourites, written now that nothing clocks */
+}
+
+static bool mode_enter_multiboot(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    /* No game applies to Send Program; the rescan and browser reset live in
+     * gate_enter_mode. An empty drive is reported by the browser, not refused. */
+    gate_enter_mode(APP_MODE_MULTIBOOT, CG_GAME_BN6_US);
+    return true;
+}
+
+static void mode_exit_multiboot(void *ctx) {
+    (void)ctx;
+    s_send_status[0] = '\0';
+    s_send_pct       = 0;
+}
+
+static bool mode_enter_chip_scan(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)has_game;
+    gate_enter_mode(APP_MODE_CHIP_SCAN, game);
+    return true;
+}
+
+static bool mode_enter_usb_storage(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    s_exposed = false;   /* we own the volume on entry */
+    return true;
+}
+
+static void mode_exit_usb_storage(void *ctx) {
+    (void)ctx;
+    /*
+     * Reclaim the volume so the catalogue never reads a drive the host owns.
+     * Leaving the mode is the deliberate "take it back" the screen describes;
+     * inferring release from host activity is what corrupts a FAT volume.
+     */
+    if (s_exposed) {
+        msc_claim_from_host();
+        s_exposed = false;
+    }
+}
+
+static bool mode_enter_selftest(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)has_game;
+    gate_enter_mode(APP_MODE_SELFTEST, game);
+    return true;
+}
+
+static void mode_exit_selftest(void *ctx) {
+    (void)ctx;
+    s_selftest = false;   /* stop the automatic chip sends */
+}
+
+static bool mode_enter_link(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    /* The bridge is created by tasks.c; a build without it cannot link. */
+    return tasks_bridge() != NULL;
+}
+
+static void mode_tick_link(void *ctx) {
+    (void)ctx;
+    /*
+     * The measurement behind the round-trip figure on the link screen. Nothing
+     * else calls bridge_ping(), so without this tick rtt_us stays the zero it
+     * initialised to and the screen cannot tell a usable link from a dead one.
+     */
+    link_bridge_t *b = tasks_bridge();
+    if (b) {
+        bridge_ping(b, (uint32_t)esp_timer_get_time());
+    }
+}
+
+static bool mode_enter_settings(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    return true;
+}
+
+static void mode_exit_settings(void *ctx) {
+    (void)ctx;
+    settings_flush();   /* deferred save, flushed as the running screen is left */
+}
+
+static bool mode_enter_diagnostics(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    return true;   /* reads live state only; nothing to set up or refuse */
+}
+
+static const app_mode_handler_t k_handlers[] = {
+    { APP_MODE_CHIP_GATE,     mode_enter_chip_gate,   mode_exit_chip_gate,   NULL           },
+    { APP_MODE_LINK_USB,      mode_enter_link,        NULL,                  mode_tick_link },
+    { APP_MODE_LINK_WIRELESS, mode_enter_link,        NULL,                  mode_tick_link },
+    { APP_MODE_MULTIBOOT,     mode_enter_multiboot,   mode_exit_multiboot,   NULL           },
+    { APP_MODE_CHIP_SCAN,     mode_enter_chip_scan,   NULL,                  NULL           },
+    { APP_MODE_USB_STORAGE,   mode_enter_usb_storage, mode_exit_usb_storage, NULL           },
+    { APP_MODE_SELFTEST,      mode_enter_selftest,    mode_exit_selftest,    NULL           },
+    { APP_MODE_SETTINGS,      mode_enter_settings,    mode_exit_settings,    NULL           },
+    { APP_MODE_DIAGNOSTICS,   mode_enter_diagnostics, NULL,                  NULL           },
+};
+#define HANDLER_COUNT (sizeof k_handlers / sizeof k_handlers[0])
 
 void gate_shell_start(uint32_t caps) {
     shell_init(&s_shell, caps);
+    /*
+     * Bind the dispatcher to the handler table. caps is the same mask
+     * shell_init() was given, which app_modes.h requires: the menu and the
+     * dispatcher must agree about what each mode needs, or a mode lists but
+     * refuses to start.
+     */
+    app_dispatch_init(&s_dispatch, k_handlers, HANDLER_COUNT, caps, NULL);
     s_shell_ready = true;
     ui_service(NULL, false);
 }

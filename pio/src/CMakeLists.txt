@@ -47,6 +47,13 @@ if(GBAGATE_QEMU)
 else()
     list(APPEND SRCS
         ../../port/esp32s3/st7735_esp32s3.c
+        # Direct GPIO or an I2C expander, decided by the board rather than the
+        # variant: a Supermini has too few pins for ten switches, a 44-pin
+        # devkit has plenty. Only one is built, because both define
+        # input_active().
+        $<$<NOT:$<BOOL:${BUTTONS_ON_EXPANDER}>>:../../port/esp32s3/buttons_esp32s3.c>
+        $<$<BOOL:${BUTTONS_ON_EXPANDER}>:../../port/esp32s3/buttons_mcp.c>
+        ../../port/esp32s3/sd_esp32s3.c
         ../../port/esp32s3/gba_link_esp32s3.c
         ../../port/esp32s3/transport_esp32s3.c)
     if(VARIANT STREQUAL "gate" OR VARIANT STREQUAL "full")
@@ -56,7 +63,8 @@ else()
     endif()
     # The expander only exists on hardware; QEMU has no I2C at all.
     if(VARIANT STREQUAL "full")
-        list(APPEND SRCS ../../port/esp32s3/i2c_esp32s3.c)
+        list(APPEND SRCS ../../port/esp32s3/i2c_esp32s3.c
+                         ../../port/esp32s3/ir_esp32s3.c)
     endif()
 endif()
 

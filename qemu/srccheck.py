@@ -22,6 +22,9 @@ CMAKE = os.path.join(ROOT, "pio", "src", "CMakeLists.txt")
 
 # Files that exist and are deliberately not built, with the reason.
 EXCLUDED = {
+    # Both provide input_active(); the CMakeLists picks one by board. Naming
+    # them here as well would hide a genuine omission, so instead both appear
+    # in the CMakeLists and this entry is empty of them.
     "cg_phy_esp32s3.c": "superseded by gba_link_esp32s3.c; kept to diff early "
                         "assumptions",
 }

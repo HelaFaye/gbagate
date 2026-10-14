@@ -24,13 +24,25 @@ uint32_t feature_requires(feature_t f) {
 
     /* Exposing the drive needs a drive and a screen to say so on. */
     case FEAT_USB_EXPOSE: return FEAT_DISPLAY | FEAT_USB_MSC;
+    case FEAT_SD_STORAGE: return 0;
+
+    /*
+     * Infrared uses the link connector in General Purpose mode rather than the
+     * Multi-Play machinery -- a different mode of the same pins.
+     */
+    case FEAT_IR:         return FEAT_DISPLAY | FEAT_LINK_MASTER;
 
     /* Something has to drive the encoder's selection. */
     case FEAT_ENCODER:     return FEAT_DISPLAY;
 
     /* Multiboot is a parent role, and the programs have to come from
      * somewhere the user can put them. */
-    case FEAT_MULTIBOOT:   return FEAT_LINK_MASTER | FEAT_USB_MSC;
+    /*
+     * Multiboot needs a parent role and somewhere the programs live. Either
+     * storage will do, so this is checked in variant_resolve() rather than
+     * expressed here -- a plain requires-mask cannot say "one of these two".
+     */
+    case FEAT_MULTIBOOT:   return FEAT_LINK_MASTER;
 
     /* The adapter presents itself to the GBA over the link port and carries
      * payload over the radio. */
@@ -60,6 +72,14 @@ static const variant_t k_variant[VARIANT_COUNT] = {
                     FEAT_USB_EXPOSE,
         .optional = 0,
         .summary = "everything except physical chips and IR",
+    },
+    [VARIANT_MINI] = {
+        .name = "mini",
+        .features = FEAT_DISPLAY | FEAT_ENCODER | FEAT_CHIPGATE |
+                    FEAT_CHIPDB_ALL | FEAT_LINK_MASTER | FEAT_LINK_SLAVE |
+                    FEAT_MULTIBOOT | FEAT_SD_STORAGE | FEAT_SELFTEST,
+        .optional = 0,
+        .summary = "gate, link and multiboot, from an SD card",
     },
     [VARIANT_FULL] = {
         .name = "full",
@@ -99,6 +119,15 @@ variant_result_t variant_resolve(variant_id_t id) {
         if (!(r.resolved & f)) {
             continue;
         }
+        if (f == FEAT_MULTIBOOT &&
+            !(r.resolved & (FEAT_USB_MSC | FEAT_SD_STORAGE))) {
+            /* Programs have to come from somewhere. Either backend will do,
+             * which a plain requires-mask cannot express. */
+            r.status   = VARIANT_ERR_DEPENDENCY;
+            r.offender = f;
+            r.missing  = FEAT_SD_STORAGE;
+            return r;
+        }
         uint32_t missing = feature_requires(f) & ~r.resolved;
         if (missing) {
             r.status   = VARIANT_ERR_DEPENDENCY;
@@ -132,6 +161,7 @@ const char *feature_name(feature_t f) {
     case FEAT_NRF24:       return "nRF24";
     case FEAT_SELFTEST:    return "self test";
     case FEAT_USB_EXPOSE:  return "expose drive";
+    case FEAT_SD_STORAGE:  return "SD card";
     default:               return "?";
     }
 }

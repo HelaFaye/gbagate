@@ -5,7 +5,9 @@
 #include <string.h>
 
 #include "app_modes.h"
+#include <stdio.h>
 #include "hw_caps.h"
+#include "chipgate.h"
 
 /* The capability requirements live in the shell's mode table. Reading them
  * back rather than restating them here means the menu and the dispatcher can
@@ -161,4 +163,150 @@ const char *app_dispatch_status_name(app_dispatch_status_t s) {
     case APP_DISPATCH_REFUSED:      return "refused";
     default:                        return "?";
     }
+}
+
+/* ---- mode handlers ----------------------------------------------------- */
+
+static bool chipgate_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)has_game;  /* gate identity is per-game but we don't need it here */
+    return true;
+}
+
+static void chipgate_exit(void *ctx) { (void)ctx; }
+
+static void chipgate_tick(void *ctx) { (void)ctx; }
+
+static bool link_usb_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)game; (void)has_game;
+    return true;
+}
+
+static void link_usb_exit(void *ctx) { (void)ctx; }
+
+static void link_usb_tick(void *ctx) { (void)ctx; }
+
+static bool link_wireless_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)game; (void)has_game;
+    return true;
+}
+
+static void link_wireless_exit(void *ctx) { (void)ctx; }
+
+static void link_wireless_tick(void *ctx) { (void)ctx; }
+
+static bool multiboot_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)game; (void)has_game;
+    return true;
+}
+
+static void multiboot_exit(void *ctx) { (void)ctx; }
+
+static void multiboot_tick(void *ctx) { (void)ctx; }
+
+static bool chip_scan_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)game; (void)has_game;
+    return true;
+}
+
+static void chip_scan_exit(void *ctx) { (void)ctx; }
+
+static void chip_scan_tick(void *ctx) { (void)ctx; }
+
+static bool usb_storage_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)game; (void)has_game;
+    return true;
+}
+
+static void usb_storage_exit(void *ctx) { (void)ctx; }
+
+static void usb_storage_tick(void *ctx) { (void)ctx; }
+
+/*
+ * Infrared. The transmitter may not be fitted, so enter() reports whether it
+ * is rather than refusing: the screen then says "no IR fitted", which is more
+ * use than the mode being absent from a menu the user is looking at.
+ */
+static bool ir_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    return true;
+}
+
+static void ir_exit(void *ctx) { (void)ctx; }
+static void ir_tick(void *ctx) { (void)ctx; }
+
+static bool selftest_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)game; (void)has_game;
+    return true;
+}
+
+static void selftest_exit(void *ctx) { (void)ctx; }
+
+static void selftest_tick(void *ctx) { (void)ctx; }
+
+static bool settings_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)game; (void)has_game;
+    return true;
+}
+
+static void settings_exit(void *ctx) { (void)ctx; }
+
+static void settings_tick(void *ctx) { (void)ctx; }
+
+static bool diagnostics_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)game; (void)has_game;
+    return true;
+}
+
+static void diagnostics_exit(void *ctx) { (void)ctx; }
+
+static void diagnostics_tick(void *ctx) { (void)ctx; }
+
+/* ---- handler table ---------------------------------------------------- */
+
+static const app_mode_handler_t k_handlers[] = {
+    { APP_MODE_CHIP_GATE,  chipgate_enter,   chipgate_exit,   chipgate_tick },
+    { APP_MODE_LINK_USB,   link_usb_enter,   link_usb_exit,   link_usb_tick },
+    { APP_MODE_LINK_WIRELESS, link_wireless_enter, link_wireless_exit, link_wireless_tick },
+    { APP_MODE_MULTIBOOT,  multiboot_enter,  multiboot_exit,  multiboot_tick },
+    { APP_MODE_CHIP_SCAN,  chip_scan_enter,  chip_scan_exit,  chip_scan_tick },
+    { APP_MODE_USB_STORAGE, usb_storage_enter, usb_storage_exit, usb_storage_tick },
+    { APP_MODE_INFRARED,   ir_enter,         ir_exit,         ir_tick },
+    { APP_MODE_SELFTEST,   selftest_enter,   selftest_exit,   selftest_tick },
+    { APP_MODE_SETTINGS,   settings_enter,   settings_exit,   settings_tick },
+    { APP_MODE_DIAGNOSTICS, diagnostics_enter, diagnostics_exit, diagnostics_tick },
+};
+
+#define HANDLER_COUNT (sizeof k_handlers / sizeof k_handlers[0])
+
+/* ---- exported functions ------------------------------------------------ */
+
+
+/* ---- the handler table ------------------------------------------------- */
+
+/*
+ * A shell-integration block used to live here. It has been removed rather than
+ * repaired, because everything it did was already done correctly in
+ * gate_app.c and its own version was wrong four ways:
+ *
+ *   - it defined gate_shell_start(void), colliding with gate_app.c's
+ *     gate_shell_start(uint32_t caps). Same symbol, different signature: the
+ *     link failed with "multiple definition" once src/ started being globbed,
+ *     which is how it surfaced at all;
+ *   - it hardcoded the capability mask to every capability, instead of the one
+ *     app_main actually probed. Read Chip would have been offered on a board
+ *     with no reader, and Link: USB with no USB -- the exact thing hw_caps
+ *     exists to prevent;
+ *   - each of its three functions declared its own `static` shell and dispatch
+ *     objects, so state written by one was invisible to the others;
+ *   - and it looped `while (label != "Modes") shell_move(...)` over a menu with
+ *     no such entry. shell_move wraps, so that never terminates.
+ *
+ * The handler table below is the useful part and is kept. gate_app.c owns the
+ * shell, with the real probed capabilities.
+ */
+const app_mode_handler_t *app_modes_table(size_t *count) {
+    if (count) {
+        *count = HANDLER_COUNT;
+    }
+    return k_handlers;
 }

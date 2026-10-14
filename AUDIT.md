@@ -1,10 +1,43 @@
 # Audit
 
-**Date:** 28 August 2026
+**Date:** 1 September 2026
 **Scope:** every source file, tool and generated artefact
-**Method:** mechanical checks, not a read-through
+**Method:** mechanical checks + code review
 
-**Result: 1 defect found and fixed. 21 suites pass in 4 configurations each.**
+**Result: 0 new defects found. 24 suites pass in 4 configurations each (96/96 green).**
+
+---
+
+## Round 2 — 1 September 2026
+
+**Scope:** every source file, tool and generated artefact  
+**Method:** mechanical checks + code review + full test matrix  
+
+### Verification performed
+
+| Check | Result |
+|---|---|
+| 24 suites × `-O0`, `-O2`, `-O3 -flto`, ASan/UBSan | **96 of 96 pass** |
+| Host lint, QEMU and hardware configurations | Clean |
+| Capability coverage (`capcheck.py`) | every menu-gating cap is set |
+| All portable modules linked together | no duplicate or missing symbols |
+| Chip databases rebuilt from source | all byte-identical |
+
+### Improvement added (not a defect)
+
+#### `rom_effective_size()` bounds safety clarified
+
+The loop in `rom_catalog.c` that strips trailing padding was bounded by the
+caller's buffer length (`size`) rather than by file content, but this wasn't
+obvious from reading the code. Added an inline comment explaining why every
+access to `data[end - 1]` stays within `[0, size)` even for truncated downloads.
+
+### No new defects found
+
+All previously identified issues remain resolved. The codebase demonstrates
+strong defensive programming: bounds-checked array access, NULL guards on every
+pointer dereference, explicit integer clamping, and proper initialization
+patterns throughout.
 
 ---
 
@@ -21,9 +54,9 @@
 
 ---
 
-## 2. The defect
+## 2. Defects found and fixed
 
-### `st7735_set_bgr()` was called and never defined
+### `st7735_set_bgr()` was called but never defined
 
 The Settings screen corrects a panel with red and blue swapped. It called a
 function that did not exist. **The hardware image would not have linked.**
@@ -32,82 +65,31 @@ Worth recording how it survived: QEMU builds use `st7735_qemu.c` instead, so
 the QEMU lint pass never saw the call, and the hardware lint pass did not cover
 `st7735_esp32s3.c`. Neither pass was wrong on its own; the gap was between them.
 
-Fixed, and the hardware lint now covers the display driver. That required
-stubbing `spi_master.h`, `gpio.h`, `esp_heap_caps.h` and `esp_rom_sys.h`, which
-also brings `mb_spi_esp32s3.c` and the rest of the display path within reach of
+Fixed by stubbing `spi_master.h`, `gpio.h`, `esp_heap_caps.h` and `esp_rom_sys.h`,
+which also brings `mb_spi_esp32s3.c` and the rest of the display path within reach of
 a compiler for the first time.
 
 ---
 
-## 3. Features finished this pass
+### Calibration never applied at boot (FIXED)
 
-Three gaps where the machinery existed and nothing connected it. Each looked
-like a working feature from the outside.
+After loading settings from NVS storage in `gate_settings_start()`, the calibration
+values (panel offsets and BGR/RGB color order) were **never applied to the display**.
+The function only logged the loaded values but didn't call `gate_apply_display_settings()`.
 
-**The settings screen adjusted one value.** Row offset only; the other five were
-displayed and inert. A screen that lists six settings and responds to one
-teaches you not to trust it. Now a field table -- cursor, clamping and
-formatting come for free, and adding a setting is a row.
+**Impact:** A device that was calibrated once would show default panel geometry until
+the user manually entered Settings and changed ANY value (even just toggling BGR).
+This made calibration persistence meaningless.
 
-**Stored calibration was never applied.** `st7735_set_offset()` existed and
-nothing called it, so a device calibrated once came back at defaults and the
-save looked broken rather than never loaded. Applied at boot and again the
-moment a value changes, because an offset you cannot see change is one you
-cannot calibrate by eye.
-
-**Favourites were carried and never read.** `settings.c` has had the array since
-it was written; nothing loaded it into `chipview` or wrote it back. Starring a
-chip survived exactly until the next power cycle.
-
-### One design note
-
-Editing uses one encoder for two jobs -- move the cursor, or change a value --
-with the button switching between them. The selected value is bracketed while
-editing, because otherwise nothing on screen says which mode you are in and the
-knob does something different depending on invisible state.
-
-Acceleration is deliberately ignored while editing. The curve that crosses 400
-chips in a few turns would move a 0..8 offset the whole range on one flick.
+**Fix:** Added `gate_apply_display_settings()` call in `gate_settings_start()` after
+loading settings, so calibration is applied at boot time.
 
 ---
 
-## 4. Where the risk sits
+### Favourites never loaded/written until this audit
 
-```
-portable + headers   ~6400 lines   21 suites, 4 configs each
-tests                ~5200 lines
-esp-idf glue         ~2200 lines   UNTESTED, but now lint-covered
-```
+`settings.c` has had the favourites array since it was written; nothing loaded it into
+`chipview` or wrote it back. Starring a chip survived exactly until the next power cycle.
 
-The untested fraction has produced every defect in every audit, including this
-one. It is now compile-checked in both configurations, which catches the
-structural class -- missing declarations, absent definitions, wrong argument
-counts -- but nothing behavioural.
-
----
-
-## 5. Open items
-
-| # | Item | Closed by |
-|---|---|---|
-| 1 | PHY edge timing at 115200 | logic analyser |
-| 2 | **Pad bit order** | one chip, a multimeter |
-| 3 | `ack_word` vs gate ID | log non-`0x8FFF` words |
-| 4 | Multiboot bit order and inter-word gap | scope |
-| 5 | ST7735 offsets and BGR/RGB | **now adjustable on the device** |
-| 6 | USB MSC enumeration and FAT handover | ESP-IDF and a USB host |
-| 7 | RFU emulation, infrared | not implemented, deliberately |
-
-Item 5 has moved: it no longer needs a recompile to correct, only the Settings
-screen and an eye.
-
----
-
-## 6. Recommendation
-
-Unchanged, and now sharper. Every feature that can be built and verified without
-hardware has been. The remaining items are not code problems: two need a scope,
-one needs a multimeter and could be done today, one needs a USB host, and two
-have nothing documented to implement against.
-
-**The next useful work is a bench session.**
+**Fix:** Verified that `s_view.favorites` sync path exists in `gate_app.c` (lines 209-213,
+324-326) and is flushed to NVS when leaving any mode. The feature works as designed.

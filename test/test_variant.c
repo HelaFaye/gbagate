@@ -71,6 +71,13 @@ static void test_full(void) {
     /* The tiers must nest, or moving up one silently loses a feature. */
     variant_result_t gate = variant_resolve(VARIANT_GATE);
     variant_result_t link = variant_resolve(VARIANT_LINK);
+    /* mini is not a subset of anything: it trades USB storage for SD, so it
+     * has a feature the others lack and lacks several they have. */
+    variant_result_t mini = variant_resolve(VARIANT_MINI);
+    check("mini has SD storage", (mini.resolved & FEAT_SD_STORAGE) != 0, 1);
+    check("and no USB storage", (mini.resolved & FEAT_USB_MSC) != 0, 0);
+    check("but can still multiboot", (mini.resolved & FEAT_MULTIBOOT) != 0, 1);
+
     check("full contains gate", gate.resolved & ~full.resolved, 0);
     check("full is strictly larger", full.resolved != gate.resolved, 1);
     check("gate contains link", link.resolved & ~gate.resolved, 0);
@@ -110,8 +117,25 @@ static void test_dependencies(void) {
           feature_requires(FEAT_CHIPGATE) & FEAT_DISPLAY, FEAT_DISPLAY);
     check("multiboot is a parent role",
           feature_requires(FEAT_MULTIBOOT) & FEAT_LINK_MASTER, FEAT_LINK_MASTER);
-    check("multiboot needs somewhere to keep programs",
-          feature_requires(FEAT_MULTIBOOT) & FEAT_USB_MSC, FEAT_USB_MSC);
+    /*
+     * Multiboot needs storage, but either kind will do -- USB on the full
+     * boards, SD on the mini. A requires-mask cannot say "one of these two",
+     * so the rule lives in variant_resolve() and is checked by result.
+     */
+    check("multiboot is a parent role",
+          feature_requires(FEAT_MULTIBOOT) & FEAT_LINK_MASTER, FEAT_LINK_MASTER);
+    for (int id = 0; id < VARIANT_COUNT; id++) {
+        variant_result_t r = variant_resolve((variant_id_t)id);
+        if (r.status != VARIANT_VALID || !(r.resolved & FEAT_MULTIBOOT)) {
+            continue;
+        }
+        if (!(r.resolved & (FEAT_USB_MSC | FEAT_SD_STORAGE))) {
+            printf("  FAIL %s has multiboot and no storage\n",
+                   variant_get((variant_id_t)id)->name);
+            g_fail++;
+        }
+    }
+    check("every multiboot image has storage of some kind", g_fail, 0);
     check("a chip reader needs a gate to send to",
           feature_requires(FEAT_CHIP_READER) & FEAT_CHIPGATE, FEAT_CHIPGATE);
     check("adapter emulation carries payload over the radio",

@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "settings.h"
+#include "ui_input.h"
 
 /* Same CRC32 as rom_catalog.c; duplicated rather than shared because settings
  * must not depend on the ROM catalogue, which is not in every image. */
@@ -37,6 +38,8 @@ void settings_defaults(settings_t *s) {
     s->game  = (uint8_t)CG_GAME_BN6_US;
     s->accel = 20;
     s->wrap  = true;
+    /* Encoder by default: it is the board that exists. */
+    s->input_mode = (uint8_t)INPUT_ENCODER;
 
     s->logo_crc = 0;   /* no donor supplied: the logo check stays off */
 }
@@ -77,7 +80,7 @@ static size_t pack_payload(const settings_t *s, uint8_t *p) {
     p[n++] = s->game;
     p[n++] = s->accel;
     p[n++] = s->wrap ? 1u : 0u;
-    p[n++] = 0;   /* pad, keeps the favourites word-aligned */
+    p[n++] = s->input_mode;   /* was pad; SETTINGS_VERSION covers the change */
     put32(p + n, s->logo_crc); n += 4;
     memcpy(p + n, s->favorites, SETTINGS_FAV_BYTES);
     n += SETTINGS_FAV_BYTES;
@@ -138,8 +141,8 @@ bool settings_unpack(settings_t *s, const uint8_t *buf, size_t len) {
     s->bgr      = p[n++] != 0;
     s->game     = p[n++];
     s->accel    = p[n++];
-    s->wrap     = p[n++] != 0;
-    n++;                       /* pad */
+    s->wrap       = p[n++] != 0;
+    s->input_mode = p[n++];
     s->logo_crc = get32(p + n); n += 4;
     if (plen >= n + SETTINGS_FAV_BYTES) {
         memcpy(s->favorites, p + n, SETTINGS_FAV_BYTES);
@@ -156,6 +159,9 @@ bool settings_unpack(settings_t *s, const uint8_t *buf, size_t len) {
     if (s->colstart > 8) s->colstart = 2;
     if (s->rowstart > 8) s->rowstart = 3;
     if (s->accel == 0 || s->accel > 40) s->accel = 20;
+    if (s->input_mode >= INPUT_MODE_COUNT) {
+        s->input_mode = (uint8_t)INPUT_ENCODER;
+    }
     return true;
 }
 

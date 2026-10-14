@@ -37,7 +37,15 @@ HW_FILES="pio/src/gate_app.c
           pio/src/tasks.c
           port/esp32s3/usb_msc_esp32s3.c
           port/esp32s3/nvs_store.c
-          port/esp32s3/st7735_esp32s3.c"
+          port/esp32s3/st7735_esp32s3.c
+          port/esp32s3/ir_esp32s3.c
+          port/esp32s3/buttons_esp32s3.c
+          port/esp32s3/sd_esp32s3.c
+          port/esp32s3/buttons_mcp.c
+          port/esp32s3/gba_link_esp32s3.c
+          port/esp32s3/transport_esp32s3.c
+          port/esp32s3/i2c_esp32s3.c
+          port/esp32s3/mb_spi_esp32s3.c"
 
 fail=0
 
@@ -57,6 +65,16 @@ check() {
 
 check qemu "-DGBAGATE_QEMU=1" $QEMU_FILES
 check hardware "" $HW_FILES
+
+# The component CMakeLists as ESP-IDF evaluates it, including the script-mode
+# pass that forbids things a normal configure allows.
+if ./qemu/cmakecheck.sh > /tmp/cm.out 2>&1; then
+    printf '%-39s ok\n' "cmake script mode"
+else
+    printf '%-39s FAIL\n' "cmake script mode"
+    sed 's/^/    /' /tmp/cm.out
+    fail=1
+fi
 
 # Sources that are in no build at all. The linker names the missing symbols,
 # not the missing file.

@@ -23,6 +23,15 @@ static const menu_entry_t k_modes[APP_MODE_COUNT] = {
     { APP_MODE_CHIP_SCAN, "Read Chip",
       HW_CAP_DISPLAY | HW_CAP_CHIP_READER, "reader board not detected" },
     /*
+     * Infrared drives an LED from RCNT bit 3 in General Purpose mode, so it
+     * needs the link port and nothing else -- no SIO, no clock. ir_cdz.c has
+     * had the protocol since the Cyber Drive Zoids article; without an entry
+     * here there was no way to reach it.
+     */
+    { APP_MODE_INFRARED, "Infrared",
+      HW_CAP_DISPLAY | HW_CAP_LINK_PORT, "connect the link cable" },
+
+    /*
      * Handing the volume over is a deliberate action, not something to infer
      * from what the host appears to be doing. A device that cannot be told to
      * release its storage is one you end up power-cycling.

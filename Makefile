@@ -29,8 +29,14 @@ DEPS_multiboot = gba_multiboot.c
 DEPS_catalog   = rom_catalog.c gba_multiboot.c
 DEPS_variant   = variant.c
 DEPS_ir        = ir_cdz.c
-DEPS_uiset     = ui_settings.c settings.c chipgate.c
-DEPS_settings  = settings.c chipgate.c
+# The pin map lives in port/esp32s3/board.h and the two boards are checked in
+# separate translation units, so both sets of macros can exist in one run.
+DEPS_board     =
+EXTRA_board    = -Iport/esp32s3 test/test_board_supermini.c
+DEPS_controls  = controls.c ui_input.c
+DEPS_input     = ui_input.c
+DEPS_uiset     = ui_settings.c settings.c chipgate.c ui_input.c
+DEPS_settings  = settings.c chipgate.c ui_input.c
 DEPS_romview   = ui_romview.c rom_catalog.c gba_multiboot.c
 DEPS_mcp       = mcp23017.c chip_slot.c chip_reader.c
 DEPS_mbe2e     = rom_catalog.c gba_multiboot.c
@@ -43,7 +49,7 @@ DEPS_menu      = ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c ui_shell
 DEPS_modes     = app_modes.c ui_shell.c hw_caps.c chipgate.c
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir modes
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes
 
 .PHONY: all strict lint clean chipdb
 all: $(addprefix run-,$(SUITES))
@@ -63,7 +69,7 @@ $(BUILD):
 # `return g_fail != 0`, so the status was always correct; only the pipe lost it.
 define SUITE_rule
 $(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) | $(BUILD)
-	@$$(CC) $$(CFLAGS) -o $$@ $$< $$(addprefix src/,$$(DEPS_$(1)))
+	@$$(CC) $$(CFLAGS) $$(EXTRA_$(1)) -o $$@ $$< $$(addprefix src/,$$(DEPS_$(1)))
 run-$(1): $(BUILD)/test_$(1)
 	@printf '%-14s ' $(1); \
 	if ./$$< $$(ARG_$(1)) > $(BUILD)/$(1).out 2>&1; then \
@@ -106,6 +112,13 @@ $(foreach s,$(SUITES),$(eval $(call STRICT_rule,$(s))))
 # covers the files no suite can reach.
 lint:
 	@./qemu/lint.sh
+
+# A compile database, so an editor resolves the same includes the build does.
+# Without it clangd cannot find src/*.h and reports cascading "unknown type
+# uint16_t" errors that look like broken code.
+compile-commands:
+	@python3 tools/gen_compile_commands.py
+.PHONY: compile-commands
 
 strict: $(addprefix strict-,$(SUITES))
 	@echo "-O0     -O2     -O3+lto asan/ubsan"

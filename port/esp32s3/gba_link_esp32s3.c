@@ -39,8 +39,11 @@
 #include "driver/dedic_gpio.h"
 #include "driver/gpio.h"
 #include "esp_attr.h"
+#include "esp_check.h"          /* ESP_ERROR_CHECK */
 #include "esp_cpu.h"
+#include "board.h"
 #include "esp_log.h"
+#include "esp_private/esp_clk.h" /* esp_clk_cpu_freq, for us -> cycles */
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -60,10 +63,10 @@ static const char *TAG = "gba_link";
  *   5 SC   shared clock
  *   6 GND
  */
-#define PIN_SC 4
-#define PIN_SD 5
-#define PIN_SI 6
-#define PIN_SO 7
+#define PIN_SC PIN_LINK_SC
+#define PIN_SD PIN_LINK_SD
+#define PIN_SI PIN_LINK_SI
+#define PIN_SO PIN_LINK_SO
 
 /* Multi-Play supports 9600 / 38400 / 57600 / 115200. As master we pick. */
 #define LINK_BAUD 115200u

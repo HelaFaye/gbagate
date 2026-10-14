@@ -1,7 +1,9 @@
 /*
  * test_mb_e2e.c -- the multiboot feature, end to end, with a real ROM.
  *
- *   cc -std=c11 -Wall -Wextra -o test_mb_e2e test_mb_e2e.c \
+ *   cc -I/home/hela/gbagate/src -std=c11 -Wall -Wextra -o test_mb_e2e test_mb_e2e.c \
+#include <stdbool.h>
+#include <stdint.h>
  *      rom_catalog.c gba_multiboot.c
  *   ./test_mb_e2e rom/tester.gba
  *
