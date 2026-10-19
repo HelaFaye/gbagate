@@ -131,3 +131,32 @@ int zshim_storage_erase(size_t off, size_t len) {
     memset(s_mirror + off, 0xFF, len);
     return 0;
 }
+
+/* ---- gbagate extension identity (0x4F, src/gbx_proto.h) ------------------------ */
+
+#include "gbx_proto.h"
+#include "variant.h"
+
+uint32_t gbagate_ext_caps(void) {
+    uint32_t c = 0;
+    const variant_t *v = variant_get(VARIANT);
+    uint32_t f = v ? v->features : 0;
+    if (BOARD_HAS_SD_ALT)      c |= GBX_CAP_SD_ALT;
+    if (BOARD_HAS_RGB_LED)     c |= GBX_CAP_RGB_LED;
+    if (BOARD_HAS_VCC_SWITCH)  c |= GBX_CAP_VCC_SWITCH;
+    if (BOARD_HAS_DISPLAY && (f & FEAT_DISPLAY)) c |= GBX_CAP_DISPLAY;
+    if ((f & FEAT_SD_STORAGE && BOARD_HAS_SD) || (f & FEAT_USB_MSC)) c |= GBX_CAP_STORAGE;
+    if (f & FEAT_ESPNOW)       c |= GBX_CAP_ESPNOW;
+    if (f & FEAT_MULTIBOOT)    c |= GBX_CAP_MULTIBOOT;
+    return c;
+}
+
+uint8_t gbagate_ext_board(void) {
+#if defined(BOARD_SUPERMINI)
+    return GBX_BOARD_SUPERMINI;
+#else
+    return GBX_BOARD_DEVKIT;
+#endif
+}
+
+uint8_t gbagate_ext_image(void) { return (uint8_t)VARIANT; }

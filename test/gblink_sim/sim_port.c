@@ -121,3 +121,11 @@ int zshim_storage_erase(size_t off, size_t len) {
     memset(s_flash + off, 0xFF, len);
     return 0;
 }
+
+/* ---- gbagate extension identity -------------------------------------------- */
+
+#include "gbx_proto.h"
+
+uint32_t gbagate_ext_caps(void)  { return GBX_CAP_SD_ALT | GBX_CAP_RGB_LED; }
+uint8_t  gbagate_ext_board(void) { return GBX_BOARD_HOST; }
+uint8_t  gbagate_ext_image(void) { return 1; /* gate */ }

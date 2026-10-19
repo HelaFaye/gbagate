@@ -22,8 +22,8 @@ VSRC_CPP := $(V)/layers/packetLayer.cpp $(V)/layers/transport.cpp \
             $(wildcard $(V)/sections/*.cpp) $(wildcard $(V)/module/*.cpp) \
             $(V)/persist.cpp
 VSRC_C   := $(wildcard $(V)/payloads/*.c) $(V)/linkWrongPinWatchdog.c
-PSRC_CPP := $(P)/serial_layer.cpp $(P)/hardware_port.cpp $(P)/gblink_glue.cpp
-PSRC_C   := $(P)/zshim_common.c $(P)/link_layer_core.c $(ROOT)/src/gblink_frame.c
+PSRC_CPP := $(P)/serial_layer.cpp $(P)/hardware_port.cpp $(P)/gblink_glue.cpp $(P)/gbagate_ext.cpp
+PSRC_C   := $(P)/zshim_common.c $(P)/link_layer_core.c $(ROOT)/src/gblink_frame.c $(ROOT)/src/chipgate.c
 SSRC_C   := zshim_posix.c sim_port.c sim_gba.c sim_main.c
 
 all: $(OUT)/gblink_sim $(OUT)/usbdesc_dump

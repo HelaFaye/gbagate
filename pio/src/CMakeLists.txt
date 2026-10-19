@@ -107,6 +107,7 @@ else()
         ../../port/gblink/serial_layer.cpp
         ../../port/gblink/hardware_port.cpp
         ../../port/gblink/gblink_glue.cpp
+        ../../port/gblink/gbagate_ext.cpp
         ../../port/esp32s3/usb_gblink_esp32s3.c
         ../../port/esp32s3/gblink_hw_esp32s3.c
         ../../port/esp32s3/gblink_gbspi_esp32s3.c)
@@ -179,11 +180,21 @@ if(NOT GBAGATE_QEMU)
     list(APPEND INCS "../../port/gblink" "../../third_party/gblink-firmware/src")
 endif()
 
+# WHOLE_ARCHIVE, because gate_app.c and app_main.c give weak defaults for
+# drivers only some images build (chip_reader_probe, ir_*, msc_storage_init,
+# mb_spi_transfer, ...). ESP-IDF links a component as a static archive, and a
+# linker never extracts an archive member to satisfy a symbol that already
+# has a definition -- weak or not. So the real driver was silently dropped
+# whenever the weak default was found first: the full image's infrared and
+# chip reader were never linked, and its binary matched the gate image's.
+# Linking the whole archive lets the strong definitions win, which is what
+# the weak defaults were written to rely on.
 idf_component_register(
     SRCS ${SRCS}
     INCLUDE_DIRS ${INCS}
     EMBED_FILES ${EMBEDS}
     REQUIRES ${REQS}
+    WHOLE_ARCHIVE
 )
 
 if(NOT GBAGATE_QEMU)

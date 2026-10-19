@@ -14,6 +14,8 @@ upstream file. The fixes are offered back upstream as patches in
 | P5 | `payloads/pokemon.cpp` `partnerPartyConstruct` | no bound on the 600-byte partner party | a partner sending past three 200-byte chunks overruns it | covered with P4 |
 | P6 | `sections/tradeConnection.hpp` | the 2 s block-request `k_timer` is never stopped when the section is destroyed | an armed timer fires into a dead stack frame; on Zephyr the timer node itself sits in the kernel timeout list, so it corrupts that list | by inspection; the shim's timer pool asserts no live timer is re-initialised |
 
+| P7 | `control.hpp` | (extension, not a defect) two hooks: unknown modes go to `gbagate::executeMode()`, unknown `0x4x` commands to `gbagate::hardwareCommand()` | none upstream; this is how gbagate's own features (the Battle Chip Gate mode, `0x4F` device info) reach GB-Link hosts without touching any upstream mode | `test_gblink.py` gbagate_* tests |
+
 P3 also holds a connect that arrives early until the adapter has sent eight
 `0xB9A0` rounds, the margin the netplay bridge measured a child GBA needs. A
 host that already waits is unaffected.

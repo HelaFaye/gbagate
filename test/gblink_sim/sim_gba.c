@@ -42,8 +42,14 @@ enum {
     SIM_GBA_NONE   = 0,  /* nothing plugged in                          */
     SIM_GBA_CHILD  = 1,  /* a Gen 3 game, waiting as child               */
     SIM_GBA_PARENT = 2,  /* a Gen 3 game, driving the bus as parent      */
-    SIM_GBA_ECHO   = 3   /* answers every word with the word it was sent */
+    SIM_GBA_ECHO   = 3,  /* answers every word with the word it was sent */
+    SIM_GBA_MMBN   = 4   /* a Battle Network game polling a chip gate:
+                            parent; pings 0x8FFF until a gate answers, echoes
+                            the gate's ID to open the session, then clocks */
 };
+
+static uint16_t s_mmbn_gate;          /* gate ID the game has seen, 0 = none */
+static int      s_mmbn_phase;         /* 0 ping, 1 ack, 2 session            */
 
 #define HS_SLAVE   0xB9A0u
 #define HS_MASTER  0x8FFFu
@@ -222,6 +228,23 @@ static void *bus_thread(void *arg) {
         }
 
         if ((mode == GBL_PHY_SLAVE || mode == GBL_PHY_SLAVE_EREADER) &&
+            model == SIM_GBA_MMBN) {
+            uint16_t gw = s_mmbn_phase == 0 ? 0x8FFF
+                        : s_mmbn_phase == 1 ? s_mmbn_gate : 0x0000;
+            uint16_t tx = gbl_phy_next_tx(NULL);
+            report_word(tx, gw);
+            gbl_phy_word_done(gw);
+            if (s_mmbn_phase == 0 && (tx & 0xFF00) == 0xFF00 && tx != 0xFFFF) {
+                s_mmbn_gate = tx;            /* a gate announced itself */
+                s_mmbn_phase = 1;
+            } else if (s_mmbn_phase == 1) {
+                s_mmbn_phase = 2;
+            }
+            sleep_ns(2000000);               /* faster than a frame, for tests */
+            continue;
+        }
+
+        if ((mode == GBL_PHY_SLAVE || mode == GBL_PHY_SLAVE_EREADER) &&
             model == SIM_GBA_PARENT) {
             pthread_mutex_lock(&s_mx);
             uint16_t gw = gba_word_out();
@@ -374,7 +397,12 @@ void sim_gba_control(const uint8_t *d, size_t len) {
     pthread_mutex_lock(&s_mx);
     switch (d[0]) {
     case 0x01:
-        if (len >= 2) { atomic_store(&s_model, d[1]); reset_link(); }
+        if (len >= 2) {
+            atomic_store(&s_model, d[1]);
+            reset_link();
+            s_mmbn_phase = 0;
+            s_mmbn_gate = 0;
+        }
         break;
     case 0x02:
         if (len >= 17 && s_q_count < 64) {

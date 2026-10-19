@@ -540,6 +540,82 @@ def trade_emu_pk3_upload_any_split():
         s.close()
 
 
+# ---- gbagate extensions (src/gbx_proto.h) ------------------------------------------
+
+MMBN = 4
+
+
+@test
+def gbagate_extended_info():
+    """0x4F answers GBX identity and caps on the data endpoint; a GB-Link
+    stays silent, which is how a host tells the two apart."""
+    s = Sim()
+    try:
+        s.cmd(0x4F)
+        d = s.wait_data(lambda d: d[0] == 0x4F)
+        check(len(d) == 16 and d[1:4] == b'GBX', 'GBX block: %s' % d.hex())
+        check(d[4] == 1, 'extension version 1')
+        caps = struct.unpack('<I', d[8:12])[0]
+        check(caps & 1, 'chip gate capability')
+        # It must not disturb the upstream identity.
+        s.cmd(0x0F)
+        f = s.wait_data(lambda d: d[0] == 0x0F)
+        check(tuple(f[1:4]) == (2, 2, 3), 'GetFirmwareInfo unchanged')
+    finally:
+        s.close()
+
+
+@test
+def gbagate_chip_gate_session():
+    """Mode 0x80: the game pings, the gate answers with its ID, the game
+    echoes it, and an inserted chip goes out in nine rotations."""
+    s = Sim()
+    try:
+        s.gba(0x01, MMBN)
+        s.cmd(0x00, 0x80, 4)        # MMBN6 US/EU
+        s.wait_status(ST['AwaitMode'])
+        s.wait_status(ST['LinkConnected'], 5)
+        gate = [tx for tx, rx in s.words() if (tx & 0xFF00) == 0xFF00 and tx != 0xFFFF]
+        check(gate and gate[0] == 0xFF00, 'announced as the US Beast Link Gate: %s' % gate[:1])
+        s.cmd(0x50, 0x2A, 0x01)
+        check(s.wait_data(lambda d: d[0] == 0x50)[1] == 1, 'chip accepted')
+        s.cmd(0x50, 0x2B, 0x01)
+        mark = len(s.data)
+        check(s.wait_data(lambda d: d[0] == 0x50, start=mark - 1)[1] in (0, 1), 'second insert answered')
+        e = s.wait_data(lambda d: d[0] == 0x54, 5)
+        check(e[1:3] == b'\x2a\x01', 'CHIP_SENT 0x012A')
+        n = sum(1 for tx, rx in s.words() if tx == 0x012A)
+        check(n == 9, 'nine rotations, got %d' % n)
+        s.cmd(0x52)
+        st = s.wait_data(lambda d: d[0] == 0x52)
+        check(st[1] == 2 and st[5] == 4, 'state ACTIVE, game 4: %s' % st.hex())
+        check(struct.unpack('<I', st[6:10])[0] == 1, 'one session')
+    finally:
+        s.close()
+
+
+@test
+def gbagate_chip_gate_busy_and_drop():
+    """One chip at a time, as a real gate; a game that stops clocking ends the
+    session (LinkReconnecting) instead of leaving it open for ever."""
+    s = Sim()
+    try:
+        s.gba(0x01, MMBN)
+        s.cmd(0x00, 0x80, 3)
+        s.wait_status(ST['LinkConnected'], 5)
+        s.cmd(0x50, 0x01, 0x00)
+        s.cmd(0x50, 0x02, 0x00)
+        time.sleep(0.2)
+        answers = [d[1] for d in s.data if d[0] == 0x50]
+        check(answers[:2] == [1, 0], 'second chip refused while busy: %s' % answers)
+        s.gba(0x01, 0)              # the game goes away
+        s.wait_status(ST['LinkReconnecting'], 3)
+        s.cmd(0x01)
+        s.wait_status(ST['LinkClosed'], 3)
+    finally:
+        s.close()
+
+
 def main(argv):
     pick = argv[argv.index('-k') + 1] if '-k' in argv else ''
     fails = 0
