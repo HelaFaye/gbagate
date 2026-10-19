@@ -1,39 +1,40 @@
-// gbagate replacement for upstream layers/serialLayer.hpp (see ../../PATCHES.md).
-//
-// Same class, same public surface, same wire format. Upstream reads a Zephyr
-// CDC-ACM UART from an interrupt; here bytes arrive through
-// gblink_cdc_on_receive() and the framing is the portable decoder in
-// src/gblink_frame.c, so the parser that runs on the board is the one the host
-// suite tests byte for byte.
-//
-//     | 0x47 0x42 | channel:1 | len:2 LE | payload[len] |
-//        sync 'GB'    0=cmd,1=data,2=status
 #pragma once
 
 #include <cstdint>
 #include <span>
-
+#include <array>
+#include <zephyr/device.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/ring_buffer.h>
 
 #include "transport.hpp"
 
-extern "C" {
-#include "gblink_frame.h"
-}
-
+// Framed byte-stream transport, in two instances: USB CDC-ACM to a host PC
+// (WebSerial) and the bridge UART to a companion MCU. Mirrors UsbLayer's
+// handler shapes so the rest of the firmware sees the same per-packet API
+// regardless of which transport delivered the message.
+//
+// Frame format on the wire (both are byte streams, so framing is needed to
+// preserve logical packet boundaries):
+//
+//     | 0x47 0x42 | channel:1 | len:2 LE | payload[len] |
+//        sync 'GB'    0=cmd,1=data,2=status
 class SerialLayer
 {
 public:
-    static constexpr size_t maxPayload = GBLINK_FRAME_MAX_PAYLOAD;
+    static constexpr size_t maxPayload = 64;
 
-    static constexpr uint8_t syncByte0 = GBLINK_SYNC0; // 'G'
-    static constexpr uint8_t syncByte1 = GBLINK_SYNC1; // 'B'
+    static constexpr uint8_t syncByte0 = 0x47; // 'G'
+    static constexpr uint8_t syncByte1 = 0x42; // 'B'
 
-    static constexpr uint8_t channelCommand = GBLINK_CH_COMMAND;
-    static constexpr uint8_t channelData = GBLINK_CH_DATA;
-    static constexpr uint8_t channelStatus = GBLINK_CH_STATUS;
+    static constexpr uint8_t channelCommand = 0x00;
+    static constexpr uint8_t channelData = 0x01;
+    static constexpr uint8_t channelStatus = 0x02;
 
+    // USB CDC-ACM.
     static SerialLayer& getInstance();
+    // The hardware UART named by the gblink,bridge-uart chosen node.
+    static SerialLayer& getBridgeInstance();
 
     SerialLayer(const SerialLayer&) = delete;
     SerialLayer& operator=(const SerialLayer&) = delete;
@@ -46,22 +47,29 @@ public:
     void setReceiveCommandHandler(Transport::ReceiveHandler handler, void* userData);
     void setReceiveDataHandler(Transport::ReceiveHandler handler, void* userData);
 
-    // Bytes from the CDC stream, any fragmentation.
-    void receiveBytes(std::span<const uint8_t> bytes);
+    // Called from the UART IRQ trampoline. Public so the C-callable wrapper
+    // can reach it; not part of the public API.
+    void onUartIrq();
 
-    // gbagate's channel-3 traffic (link_proto over the same port). NULL to
-    // drop it, which is also what upstream does with an unknown channel.
-    using ExtensionHandler = void(*)(uint8_t channel, std::span<const uint8_t>, void*);
-    void setExtensionHandler(ExtensionHandler handler, void* userData);
-    bool sendFrame(uint8_t channel, std::span<const uint8_t> payload);
+    // Drains the receive ring and dispatches its frames. Public for the thread
+    // trampoline only.
+    void drainReceive();
 
-    uint32_t framesReceived() const { return m_rx.frames; }
-    uint32_t framesRejected() const { return m_rx.oversize; }
+    // Receive-ring overflows: each one lost bytes, i.e. at least one inbound
+    // frame, silently. Nonzero means the drain thread was starved.
+    static volatile uint32_t s_rxOverflows;
 
 private:
-    SerialLayer();
+    // With an empty rxRing, frames dispatch straight from the UART callback,
+    // which CDC-ACM runs on the USB workqueue. A hardware UART calls back in
+    // interrupt context, where a handler must not run (a command can enter a
+    // whole link mode), so its bytes go through rxRing to a drain thread.
+    SerialLayer(const struct device* dev, Transport::Id id, std::span<uint8_t> rxRing);
 
-    void dispatchFrame(const gblink_frame_t& frame);
+    void initIfNeeded();
+    bool sendFrame(uint8_t channel, std::span<const uint8_t> payload);
+    void processIncomingByte(uint8_t b);
+    void dispatchFrame();
 
     struct ReceiveDelegate
     {
@@ -69,11 +77,28 @@ private:
         void* userData = nullptr;
     };
 
+    enum class RxState : uint8_t { sync1, sync2, channel, lenLo, lenHi, payload };
+
+    const struct device* const m_target;
+    const Transport::Id m_id;
+    const bool m_rxOnThread;
+    const struct device* m_dev = nullptr;
+    bool m_ready = false;
+
     ReceiveDelegate m_commandHandler;
     ReceiveDelegate m_dataHandler;
-    ExtensionHandler m_extHandler = nullptr;
-    void* m_extUserData = nullptr;
 
-    gblink_rx_t m_rx;
+    RxState m_rxState = RxState::sync1;
+    uint8_t m_rxChannel = 0;
+    uint16_t m_rxLen = 0;
+    uint16_t m_rxPos = 0;
+    std::array<uint8_t, maxPayload> m_rxBuf{};
+
+    static constexpr size_t txRingSize = 512;
+    uint8_t m_txRingMem[txRingSize] = {};
+    struct ring_buf m_txRing;
     struct k_mutex m_txMutex;
+
+    struct ring_buf m_rxRing;
+    struct k_sem m_rxReady;
 };

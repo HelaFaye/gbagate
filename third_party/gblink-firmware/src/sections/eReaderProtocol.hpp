@@ -53,6 +53,10 @@ enum class Profile : uint8_t
     sma4EURGer     = 7,
     sma4EUREsp     = 8,
     sma4EURIta     = 9,
+    pokemonEmerald    = 10,
+    pokemonEmeraldJPN = 11,
+    pokemonEmeraldFra = 12, // (Émeraude) / Emerald
+    pokemonEmeraldGer = 13, // (Smaragd) / Emerald
 };
 
 inline bool isSma4Profile(Profile p)
@@ -128,6 +132,12 @@ constexpr uint16_t kReadyAdvance    = 0xAAAA; // e-reader block advance; the LIN
 constexpr uint16_t kSendKeys        = LINKCMD_BLENDER_SEND_KEYS;
 
 constexpr uint32_t kLinkTypeRuby = LINKTYPE_MYSTERY_EVENT;
+constexpr uint8_t  kVersionRuby     = 0;
+constexpr uint8_t  kVersionEmerald  = 3;
+constexpr uint8_t  kLanguageJapanese = 1;
+constexpr uint8_t  kLanguageEnglish  = 2;
+constexpr uint8_t  kLanguageFrench   = 3;
+constexpr uint8_t  kLanguageGerman   = 5;
 }
 
 inline bool isIdleWord(uint16_t w)
@@ -168,8 +178,25 @@ struct PokemonConfig
 
 inline PokemonConfig pokemonConfigFor(Profile p)
 {
-    const uint8_t language = (p == Profile::pokemonRubyJPN) ? 1 : 2;
-    return { poke::kLinkTypeRuby, 0, language };
+    const bool emerald =
+        p == Profile::pokemonEmerald
+        || p == Profile::pokemonEmeraldJPN
+        || p == Profile::pokemonEmeraldGer
+        || p == Profile::pokemonEmeraldFra;
+
+    uint8_t language = poke::kLanguageEnglish;
+    if (p == Profile::pokemonRubyJPN || p == Profile::pokemonEmeraldJPN)
+        language = poke::kLanguageJapanese;
+    else if (p == Profile::pokemonEmeraldGer)
+        language = poke::kLanguageGerman;
+    else if (p == Profile::pokemonEmeraldFra)
+        language = poke::kLanguageFrench;
+
+    return {
+        poke::kLinkTypeRuby,
+        emerald ? poke::kVersionEmerald : poke::kVersionRuby,
+        language,
+    };
 }
 
 inline void buildLinkPlayerBlock(uint8_t* block, const PokemonConfig& cfg)

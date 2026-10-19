@@ -88,14 +88,6 @@ namespace party
         {
             data = data.first(nextThreshold - g_partnerReceivedBytes);
         }
-        // gbagate (PATCHES.md P5): a fourth 200-byte chunk (a partner that
-        // keeps sending after the party is complete) wrote past the 600-byte
-        // party.
-        if (g_partnerReceivedBytes >= g_partnerParty.size()) return;
-        if (data.size() > g_partnerParty.size() - g_partnerReceivedBytes)
-        {
-            data = data.first(g_partnerParty.size() - g_partnerReceivedBytes);
-        }
         std::ranges::copy(data, std::span(g_partnerParty).subspan(g_partnerReceivedBytes).begin());
         g_partnerReceivedBytes += data.size();
     }
@@ -111,20 +103,11 @@ namespace party
 
     void usbReceivePkmFile(std::span<const uint8_t> data, void*)
     {
-        // gbagate (PATCHES.md P4): upstream copied each chunk at
-        // g_receivedBytes with no bound, so any split other than two 50-byte
-        // writes (one 64-byte USB packet after a 50) ran past the 100-byte
-        // buffer. Treat the data as a stream of 100-byte records instead.
         static std::array<uint8_t, 0x64> encryptedPkm;
-        while (!data.empty())
+        std::ranges::copy(data, std::span(encryptedPkm).subspan(g_receivedBytes).begin());
+        g_receivedBytes += data.size();
+        if (g_receivedBytes >= 0x64)
         {
-            const size_t room = encryptedPkm.size() - g_receivedBytes;
-            const size_t n = data.size() < room ? data.size() : room;
-            std::ranges::copy(data.first(n), std::span(encryptedPkm).subspan(g_receivedBytes).begin());
-            g_receivedBytes += n;
-            data = data.subspan(n);
-            if (g_receivedBytes < encryptedPkm.size()) break;
-
             for (size_t i = 0; i < numberOfSlots; i++)
             {
                 if (isPartySlotEmpty(i))

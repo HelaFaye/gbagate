@@ -10,15 +10,6 @@ void PacketLayer::onTransiveDone(uint16_t rxBytes, uint16_t txBytes)
         case TransiveState::handshake:
             m_transmitedHandShake = txBytes;
             m_receivedHandshake = rxBytes;
-            // gbagate (PATCHES.md P3): count enabled-handshake rounds and
-            // release a ConnectLink that arrived early.
-            if (txBytes == LINK_SLAVE_HANDSHAKE && m_slaveHandshakesSent < 0xFFFF) m_slaveHandshakesSent++;
-            if (m_connectPending && m_handshakeState == HandShakeState::enabled
-                && m_slaveHandshakesSent >= minSlaveHandshakes)
-            {
-                m_connectPending = false;
-                m_handshakeState = HandShakeState::connect;
-            }
             k_sem_give(&m_handshakeSemaphore);
             m_timingUs = timingHandshake;
 

@@ -2,8 +2,6 @@
 #include "../link_defines.h"
 #include "zephyr/kernel.h"
 
-#include <cstring>
-
 static uint8_t g_index = 0;
 
 static uint16_t g_packet[8] = {};
@@ -16,17 +14,10 @@ K_MSGQ_DEFINE(g_packetQueue, 16, 200, 1);
 
 void usbLink_receiveHandler(std::span<const uint8_t> data, void*)
 {
-    // gbagate (PATCHES.md P1): subspan<48, 16>() on a dynamic-extent span is
-    // undefined for anything shorter than 64 bytes, and read whatever was left
-    // in the endpoint buffer from the previous packet -- replaying stale
-    // commands at the GBA. Hosts send whole 64-byte packets; anything shorter
-    // is zero-padded (an all-zero frame is the relay's "nothing to send").
-    uint8_t packet[64] = {};
-    std::memcpy(packet, data.data(), data.size() < sizeof packet ? data.size() : sizeof packet);
-    k_msgq_put(&g_packetQueue, &packet[0], K_NO_WAIT);
-    k_msgq_put(&g_packetQueue, &packet[16], K_NO_WAIT);
-    k_msgq_put(&g_packetQueue, &packet[32], K_NO_WAIT);
-    k_msgq_put(&g_packetQueue, &packet[48], K_NO_WAIT);
+    k_msgq_put(&g_packetQueue, data.subspan<0, 16>().data(), K_NO_WAIT);
+    k_msgq_put(&g_packetQueue, data.subspan<16, 16>().data(), K_NO_WAIT);
+    k_msgq_put(&g_packetQueue, data.subspan<32, 16>().data(), K_NO_WAIT);
+    k_msgq_put(&g_packetQueue, data.subspan<48, 16>().data(), K_NO_WAIT);
 }
 
 static void loadTransivePacket()

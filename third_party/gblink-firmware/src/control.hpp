@@ -7,7 +7,11 @@
 #include "module/gb.hpp"
 #include "module/advanceWars.hpp"
 #include "module/eReader.hpp"
+#include "module/battleChipGate.hpp"
+#include "module/rfuWireless.hpp"
 #include "sections/eReaderProtocolSection.hpp"
+#include "sections/battleChipGateSection.hpp"
+#include "sections/rfuProtocolSection.hpp"
 #include "linkStatus.hpp"
 #include "callbacks/commands.hpp"
 #include "payloads/pokemon.hpp"
@@ -15,7 +19,6 @@
 #include "hardware.hpp"
 #include "persist.hpp"
 #include "firmware_version.hpp"
-#include "gbagate_ext.hpp" // gbagate (PATCHES.md P7)
 
 class Control
 {
@@ -35,6 +38,8 @@ class Control
         gbPrinter = 0x03,
         advanceWars = 0x04,
         gbaEreader = 0x05,
+        battleChipGate = 0x06,
+        rfuWireless = 0x07,
     };
 
     static constexpr uint8_t callSetModeId = 0x01;
@@ -145,7 +150,11 @@ public:
                     modeVariant == 6 ? erproto::Profile::sma4EURFra :
                     modeVariant == 7 ? erproto::Profile::sma4EURGer :
                     modeVariant == 8 ? erproto::Profile::sma4EUREsp :
-                    modeVariant == 9 ? erproto::Profile::sma4EURIta
+                    modeVariant == 9 ? erproto::Profile::sma4EURIta :
+                    modeVariant == 10 ? erproto::Profile::pokemonEmerald :
+                    modeVariant == 11 ? erproto::Profile::pokemonEmeraldJPN :
+                    modeVariant == 12 ? erproto::Profile::pokemonEmeraldFra :
+                    modeVariant == 13 ? erproto::Profile::pokemonEmeraldGer
                                    : erproto::Profile::sma4;
                 EReaderModule ereaderModule(profile);
                 m_currentModule = &ereaderModule;
@@ -155,12 +164,44 @@ public:
                 break;
             }
 
-            // gbagate (PATCHES.md P7): modes upstream does not define (the
-            // gbagate range, 0x80 and up) go to the extension; anything it
-            // does not know either is ignored, as upstream ignored it.
-            default:
-                gbagate::executeMode(static_cast<uint8_t>(mode), modeVariant, &m_currentModule);
+            case Mode::battleChipGate:
+            {
+                applyLedForSlot(LED_SLOT_BATTLE_CHIP_GATE);
+                link_detectCableType();
+
+                Transport::registerDataHandler(bcgProto_receiveHandler, nullptr);
+
+                BattleChipGateModule battleChipGateModule(
+                    bcgproto::gateTypeFromVariant(modeVariant));
+                m_currentModule = &battleChipGateModule;
+                battleChipGateModule.execute();
+
+                sendLinkStatus(LinkStatus::LinkClosed);
                 break;
+            }
+
+            // Wireless adapter (AGB-015) emulation, driven over the bridge UART
+            // by a companion MCU rather than a host PC.
+            case Mode::rfuWireless:
+            {
+                // No slot of its own: the stored palette holds seven entries and
+                // an eighth would change the settings layout.
+                applyLedForSlot(LED_SLOT_GBA);
+
+                // The cable type is detected for the report only: this mode
+                // watches both SD pins whichever cable is attached.
+                link_detectCableType();
+
+                Transport::registerDataHandler(rfuProto_receiveHandler, nullptr);
+
+                // Variant = role hint for the relay: 0 symmetric, 1 host, 2 client.
+                RfuWirelessModule rfuModule(modeVariant);
+                m_currentModule = &rfuModule;
+                rfuModule.execute();
+
+                sendLinkStatus(LinkStatus::LinkClosed);
+                break;
+            }
         }
 
         m_currentModule = nullptr;
@@ -193,6 +234,7 @@ private:
         SetCableOverride = 0x49,
         GetCableType = 0x4a,
         SetCableSelection = 0x4b,
+        GetRfuIsrStats = 0x4c,
     };
 
     void receiveCommand(std::span<const uint8_t> data)
@@ -216,7 +258,10 @@ private:
             // Optional third byte selects a game variant within the mode
             // (Advance Wars: 1 = AW1, 2 = AW2; e-reader: 1 = SMA4 US,
             // 2 = Pokemon RS US, 3 = SMA4 JPN, 4 = Pokemon RS JPN,
-            // 5-9 = SMA4 EUR En/Fr/De/Es/It; defaults to the first variant
+            // 5-9 = SMA4 EUR En/Fr/De/Es/It, 10 = Pokemon Emerald US,
+            // 11 = Pokemon Emerald JPN, 12 = (Émeraude) / Emerald,
+            // 13 = (Smaragd) / Emerald;
+            // defaults to the first variant
             // for older clients that send only [command, mode]).
             case ControlCommand::SetMode:
                 if (data.size() < 2) return;
@@ -273,8 +318,23 @@ private:
             case HardwareCommand::SetCableOverride:
                 if (data.size() >= 2) {
                     link_setCableOverride(data[1]);
+                    bcgProto_requestRearm();
                 }
                 break;
+            case HardwareCommand::GetRfuIsrStats:
+            {
+                // Transfer-path timing: whether replies are staged inside the
+                // GBA's inter-word gap.
+                uint32_t v[5];
+                rfuLink_isrStats(v);
+                uint8_t resp[1 + sizeof(v)];
+                resp[0] = 0x4c;
+                for (unsigned i = 0; i < 5; i++)
+                    for (unsigned b = 0; b < 4; b++)
+                        resp[1 + i * 4 + b] = static_cast<uint8_t>(v[i] >> (8 * b));
+                Transport::sendData(std::span<const uint8_t>(resp, sizeof(resp)));
+                break;
+            }
             case HardwareCommand::GetCableType:
             {
                 // Report-only: the cable is sampled once at mode entry (a GBA
@@ -289,12 +349,10 @@ private:
                 if (data.size() >= 2 && data[1] <= CABLE_FORCE_GBC) {
                     setCableSelection(data[1]);
                     link_setCableOverride(data[1]);
+                    bcgProto_requestRearm();
                 }
                 break;
-            // gbagate (PATCHES.md P7): 0x4x commands upstream does not define.
-            default:
-                gbagate::hardwareCommand(data);
-                break;
+            default: break;
         }
     }
 

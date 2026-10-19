@@ -126,31 +126,9 @@ public:
 
     void enableHandshake() { m_handshakeState = HandShakeState::enabled; }
 
-    // gbagate (PATCHES.md P3): a child GBA needs some 0xB9A0 rounds before it
-    // will take the connect word (the netplay bridge measured ~150 ms and
-    // waits that long before sending ConnectLink). A host that does not wait
-    // used to get a link that never came up; now the connect is held until
-    // the adapter has sent minSlaveHandshakes of them.
-    static constexpr uint16_t minSlaveHandshakes = 8;
-
-    void connectHandshake()
-    {
-        if (m_handshakeState == HandShakeState::enabled && m_slaveHandshakesSent >= minSlaveHandshakes)
-            m_handshakeState = HandShakeState::connect;
-        else
-            m_connectPending = true;
-    }
+    void connectHandshake() { m_handshakeState = HandShakeState::connect; }
 
     bool isHandshakeEnabled() { return m_transmitedHandShake == LINK_SLAVE_HANDSHAKE; }
-
-    // gbagate (PATCHES.md P3): the connect word has gone out, or the link has
-    // already moved past the handshake.
-    bool isConnectSent()
-    {
-        return m_transmitedHandShake == LINK_MASTER_HANDSHAKE
-            || m_receivedHandshake == LINK_MASTER_HANDSHAKE
-            || m_state != TransiveState::handshake;
-    }
 
     void setMode(Mode mode) 
     {   
@@ -285,8 +263,6 @@ private:
     TransiveStruct m_handler = emptyCommand();
     TransiveState m_state = TransiveState::handshake;
     HandShakeState m_handshakeState = HandShakeState::disabled;
-    uint16_t m_slaveHandshakesSent = 0;   // gbagate, P3
-    bool m_connectPending = false;        // gbagate, P3
 
     struct k_timer m_timeoutTimer;
     #ifdef CONFIG_STM32F0
