@@ -16,6 +16,8 @@ upstream file. The fixes are offered back upstream as patches in
 
 | P7 | `control.hpp` | (extension, not a defect) two hooks: unknown modes go to `gbagate::executeMode()`, unknown `0x4x` commands to `gbagate::hardwareCommand()` | none upstream; this is how gbagate's own features (the Battle Chip Gate mode, `0x4F` device info) reach GB-Link hosts without touching any upstream mode | `test_gblink.py` gbagate_* tests |
 
+| P8 | `layers/transport.{hpp,cpp}` | (extension) a third route, `Local`, for a host that lives in the firmware: `injectCommand`/`injectData` reach the registered handlers as USB would, and replies go to a sink | none upstream; it is how the wireless link cable (`src/gbl_peer.c`) drives the relay with no PC | `test_peer.py` |
+
 P3 also holds a connect that arrives early until the adapter has sent eight
 `0xB9A0` rounds, the margin the netplay bridge measured a child GBA needs. A
 host that already waits is unaffected.

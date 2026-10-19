@@ -108,6 +108,8 @@ else()
         ../../port/gblink/hardware_port.cpp
         ../../port/gblink/gblink_glue.cpp
         ../../port/gblink/gbagate_ext.cpp
+        ../../port/gblink/peer_glue.cpp
+        ../../port/esp32s3/peer_espnow_esp32s3.c
         ../../port/esp32s3/usb_gblink_esp32s3.c
         ../../port/esp32s3/gblink_hw_esp32s3.c
         ../../port/esp32s3/gblink_gbspi_esp32s3.c)
@@ -165,7 +167,7 @@ if(NOT GBAGATE_QEMU)
     list(APPEND REQS espressif__esp_tinyusb esp_driver_rmt)
     # transport_esp32s3.c's ESP-NOW backend. Missing from the list since the
     # file was written, so it had never compiled.
-    list(APPEND REQS esp_wifi)
+    list(APPEND REQS esp_wifi esp_netif esp_event)
 endif()
 
 # The chip reader's expander sits on I2C, and IDF 6.0 split that out too.

@@ -65,6 +65,21 @@ void gblink_usb_on_configured(bool configured);
 /* Bytes from the CDC-ACM stream, any fragmentation. */
 void gblink_cdc_on_receive(const uint8_t *data, size_t len);
 
+/* ---- wireless link cable (port/gblink/peer_glue.cpp, src/gbl_peer.c) --------- */
+
+/* Run GB-Link mode `mode` (0x01 Gen 3 relay, 0x04 Advance Wars) against a peer
+ * board instead of a host. nonce decides the roles: draw it at random. */
+void gblink_peer_start(uint8_t mode, uint8_t variant, uint32_t nonce);
+void gblink_peer_stop(void);
+/* A datagram from the peer (radio callback context is fine). */
+void gblink_peer_radio_rx(const uint8_t *dgram, size_t len);
+/* Supplied by the port: one datagram to the peer. False if refused. */
+bool gblink_peer_radio_send(const uint8_t *dgram, size_t len);
+/* Optional: every status word the local firmware reports while the cable
+ * runs, for a UI (or a test) to watch. Weak default does nothing. Called from
+ * the firmware's own threads; must not block. */
+void gblink_peer_observe_status(uint16_t status);
+
 /* ---- lifecycle ---------------------------------------------------------------- */
 
 /* Start the GB-Link control thread: run SYS_INITs, start static threads, then

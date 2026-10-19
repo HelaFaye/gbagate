@@ -49,9 +49,10 @@ DEPS_menu      = ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c ui_shell
 DEPS_modes     = app_modes.c ui_shell.c hw_caps.c chipgate.c
 DEPS_frame     = gblink_frame.c
 DEPS_usbdesc   = gblink_usbdesc.c
+DEPS_peer      = gbl_peer.c
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer
 
 .PHONY: all strict lint clean chipdb gblink gblink-asan compat
 all: $(addprefix run-,$(SUITES)) gblink
@@ -62,6 +63,7 @@ all: $(addprefix run-,$(SUITES)) gblink
 gblink:
 	@$(MAKE) -s -C test/gblink_sim
 	@python3 -I test/gblink_sim/test_gblink.py | tail -1
+	@python3 -I test/gblink_sim/test_peer.py | tail -1
 
 # GB-Link's own host software -- the netplay bridge engine, Celio-Server and
 # Celio-Client, the e-Reader, Pokemon and distributor web apps -- unmodified,

@@ -31,6 +31,7 @@ class Sim:
         self.events = []      # (code, bytes)
         self.cdc = bytearray()
         self.serial = serial
+        self.on_radio = None   # callable(bytes): datagrams the peer engine sends
         self.t = threading.Thread(target=self._reader, daemon=True)
         self.t.start()
         self.wait_event(EV_READY)
@@ -53,6 +54,9 @@ class Sim:
                 elif kind == ord('C'):
                     self.cdc += body
                     self._parse_cdc()
+                elif kind == ord('P'):
+                    if self.on_radio:
+                        self.on_radio(body)
                 elif kind == ord('E'):
                     self.events.append((ep, body))
                 self.cv.notify_all()
@@ -101,6 +105,12 @@ class Sim:
 
     def raw_cdc(self, body):
         self._send('C', 0, bytes(body))
+
+    def radio(self, dgram):
+        self._send('P', 0, bytes(dgram))
+
+    def start_peer(self, nonce, mode=1, variant=0):
+        self._send('S', 0, struct.pack('<IBB', nonce, mode, variant))
 
     def gba(self, *b):
         self._send('G', 0, bytes(b))

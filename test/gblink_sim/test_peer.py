@@ -1,0 +1,194 @@
+"""test_peer.py -- the wireless link cable (src/gbl_peer.c), end to end.
+
+Two simulated gbagate boards, each running GB-Link's adapter firmware with a
+GBA behind it, and nothing between them but a simulated radio that this test
+controls -- clean, lossy, duplicating. No host, no Celio: each board's
+gbl_peer plays Celio's part for its own firmware.
+
+The board with the larger nonce becomes master, so it gets the child GBA and
+the other the parent GBA, as a cable between the two GBAs would.
+"""
+import os
+import random
+import struct
+import sys
+import threading
+import time
+import traceback
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from simdrv import Sim, ST  # noqa: E402
+
+TESTS = []
+
+
+def test(fn):
+    TESTS.append(fn)
+    return fn
+
+
+def check(cond, what):
+    if not cond:
+        raise AssertionError(what)
+
+
+class Air:
+    """Joins two sims' radios, losing and duplicating on request."""
+
+    def __init__(self, a, b, loss=0.0, dup=0.0, seed=1):
+        self.rng = random.Random(seed)
+        self.loss, self.dup = loss, dup
+        self.lock = threading.Lock()
+        self.sent = 0
+        self.dropped = 0
+        a.on_radio = lambda d: self.carry(b, d)
+        b.on_radio = lambda d: self.carry(a, d)
+
+    def carry(self, to, d):
+        with self.lock:
+            self.sent += 1
+            if self.rng.random() < self.loss:
+                self.dropped += 1
+                return
+            n = 2 if self.rng.random() < self.dup else 1
+        for _ in range(n):
+            try:
+                to.radio(d)
+            except (BrokenPipeError, ValueError):
+                return  # the other board has been shut down
+
+
+def pair(loss=0.0, dup=0.0, mode=1, variant=0, models=(1, 2)):
+    a, b = Sim(), Sim()
+    air = Air(a, b, loss, dup)
+    a.gba(0x06, 1); b.gba(0x06, 1)
+    a.gba(0x01, models[0])       # A is master: child GBA
+    b.gba(0x01, models[1])       # B is slave: parent GBA
+    b.gba(0x03, 6)
+    a.start_peer(0x90000000, mode, variant)
+    b.start_peer(0x10000000, mode, variant)
+    return a, b, air
+
+
+PEER_STATUS = 10
+
+
+def peer_status(sim):
+    with sim.cv:
+        return [b[0] | (b[1] << 8) for c, b in sim.events if c == PEER_STATUS]
+
+
+def wait_peer_status(sim, word, timeout, start=0):
+    end = time.time() + timeout
+    while time.time() < end:
+        if word in peer_status(sim)[start:]:
+            return
+        time.sleep(0.05)
+    raise TimeoutError('no %04x (saw %s)' % (word, [hex(x) for x in peer_status(sim)[start:]]))
+
+
+def frame(tag):
+    return struct.pack('<8H', 0xBBBB, tag, 0x0080, 0, 0, 0, 0, 0)
+
+
+def exchange(a, b, timeout=20):
+    """Wait for the link, then have each GBA send a tagged block frame and
+    check it reaches the other GBA's wire."""
+    end = time.time() + timeout
+    while time.time() < end and not (len(a.words()) > 60 and len(b.words()) > 60
+                                     and any(tx == 0x8FFF for tx, _ in a.words())):
+        time.sleep(0.05)
+    for _ in range(4):
+        a.gba(0x02, *frame(0xA11A))
+        b.gba(0x02, *frame(0xB22B))
+    while time.time() < end:
+        if any(tx == 0xB22B for tx, _ in a.words()) and any(tx == 0xA11A for tx, _ in b.words()):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+@test
+def wireless_cable_clean_air():
+    a, b, air = pair()
+    try:
+        check(exchange(a, b), 'frames crossed both ways')
+        check(ST['LinkConnected'] in peer_status(a) and ST['LinkConnected'] in peer_status(b), 'both linked')
+        check(not a.status and not b.status, 'nothing went to USB: the cable is the host')
+        # Roles as negotiated: A's adapter drove SC (master), B's answered.
+        check(any(rx == 0xB9A0 for tx, rx in a.words()), 'A heard its child GBA handshake')
+    finally:
+        a.close(); b.close()
+
+
+@test
+def wireless_cable_lossy_air():
+    """One datagram in five lost and one in ten duplicated: the reliable
+    channel must still deliver every frame, once and in order."""
+    a, b, air = pair(loss=0.2, dup=0.1)
+    try:
+        check(exchange(a, b, timeout=40), 'frames crossed both ways on a lossy radio')
+        time.sleep(3)  # let the retransmissions finish
+        check(air.dropped > 0, 'the air really did drop datagrams (%d of %d)' % (air.dropped, air.sent))
+        # In-order, exactly-once: each tagged frame reached the other GBA's wire
+        # as many times as it was queued (4), not more.
+        got_b = [tx for tx, _ in b.words()].count(0xA11A)
+        check(got_b == 4, 'A->B frames delivered exactly once each: %d' % got_b)
+    finally:
+        a.close(); b.close()
+
+
+@test
+def wireless_cable_peer_restart():
+    """A board that reboots mid-session is noticed (new epoch) and both sides
+    start a fresh session rather than resuming a dead one."""
+    a, b, air = pair()
+    try:
+        check(exchange(a, b), 'first session')
+        mark_a = len(peer_status(a))
+        b.start_peer(0x10000000)            # B "reboots" its cable
+        # Both games see the link drop and the players walk back into the
+        # Cable Club: the GBAs start their handshake over.
+        a.gba(0x01, 1)
+        b.gba(0x01, 2)
+        wait_peer_status(a, ST['LinkConnected'], 20, start=mark_a)
+        check(exchange(a, b), 'second session carries frames')
+    finally:
+        a.close(); b.close()
+
+
+@test
+def wireless_cable_peer_gone():
+    """The peer disappearing ends the local session after the timeout instead
+    of leaving the GBA waiting on a link that cannot finish."""
+    a, b, air = pair()
+    try:
+        check(exchange(a, b), 'linked')
+        mark = len(peer_status(a))
+        air.loss = 1.0                       # B falls silent
+        wait_peer_status(a, ST['LinkClosed'], 8, start=mark)
+    finally:
+        a.close(); b.close()
+
+
+def main(argv):
+    pick = argv[argv.index('-k') + 1] if '-k' in argv else ''
+    fails = ran = 0
+    for t in TESTS:
+        if pick and pick not in t.__name__:
+            continue
+        ran += 1
+        t0 = time.time()
+        try:
+            t()
+            print('  ok    %-40s %5.2fs' % (t.__name__, time.time() - t0))
+        except Exception:
+            fails += 1
+            print('  FAIL  %s' % t.__name__)
+            traceback.print_exc()
+    print('peer           %s' % ('all %d checks passed' % ran if not fails else '%d of %d FAILED' % (fails, ran)))
+    return 1 if fails else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

@@ -8,7 +8,10 @@
 // dispatch layer so call sites don't need to know which transport is active.
 namespace Transport
 {
-    enum class Id : uint8_t { Usb, Serial };
+    // gbagate (PATCHES.md P8): Local is an in-firmware host -- the wireless
+    // link cable (src/gbl_peer.c) drives the adapter through it exactly as a
+    // PC would through USB.
+    enum class Id : uint8_t { Usb, Serial, Local };
 
     using ReceiveHandler = void(*)(std::span<const uint8_t>, void*);
 
@@ -25,4 +28,12 @@ namespace Transport
     // Route a send to whichever transport the host last spoke on.
     bool sendStatus(std::span<const uint8_t, 2> data);
     bool sendData(std::span<const uint8_t> data);
+
+    // gbagate (PATCHES.md P8). The local host's receive side, and its way in:
+    // inject* hand a command or data packet to the same handlers USB reaches,
+    // and make Local the active transport so the replies come back to it.
+    using LocalSink = void(*)(bool status, std::span<const uint8_t>, void*);
+    void setLocalSink(LocalSink sink, void* userData);
+    void injectCommand(std::span<const uint8_t> data);
+    void injectData(std::span<const uint8_t> data);
 }
