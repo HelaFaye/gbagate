@@ -53,7 +53,7 @@ DEPS_usbdesc   = gblink_usbdesc.c
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
           render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc
 
-.PHONY: all strict lint clean chipdb gblink gblink-asan
+.PHONY: all strict lint clean chipdb gblink gblink-asan compat
 all: $(addprefix run-,$(SUITES)) gblink
 	@./qemu/lint.sh
 
@@ -62,6 +62,13 @@ all: $(addprefix run-,$(SUITES)) gblink
 gblink:
 	@$(MAKE) -s -C test/gblink_sim
 	@python3 -I test/gblink_sim/test_gblink.py | tail -1
+
+# GB-Link's own host software -- the netplay bridge engine, Celio-Server and
+# Celio-Client, the e-Reader, Pokemon and distributor web apps -- unmodified,
+# against the firmware. Needs node and npm, and network access the first time
+# (it clones the GB-Link repos into build/; set GBLINK_SRC to use checkouts).
+compat:
+	@test/gblink_compat/run.sh
 
 gblink-asan:
 	@$(MAKE) -s -C test/gblink_sim clean

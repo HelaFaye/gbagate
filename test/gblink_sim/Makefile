@@ -26,7 +26,11 @@ PSRC_CPP := $(P)/serial_layer.cpp $(P)/hardware_port.cpp $(P)/gblink_glue.cpp
 PSRC_C   := $(P)/zshim_common.c $(P)/link_layer_core.c $(ROOT)/src/gblink_frame.c
 SSRC_C   := zshim_posix.c sim_port.c sim_gba.c sim_main.c
 
-all: $(OUT)/gblink_sim
+all: $(OUT)/gblink_sim $(OUT)/usbdesc_dump
+
+$(OUT)/usbdesc_dump: usbdesc_dump.c $(ROOT)/src/gblink_usbdesc.c $(ROOT)/src/gblink_usbdesc.h
+	@mkdir -p $(OUT)
+	@$(CC) -std=c11 $(WARN) -I$(ROOT)/src -o $@ usbdesc_dump.c $(ROOT)/src/gblink_usbdesc.c
 
 $(OUT)/gblink_sim: $(VSRC_CPP) $(VSRC_C) $(PSRC_CPP) $(PSRC_C) $(SSRC_C) $(wildcard *.h) $(wildcard $(P)/*.h)
 	@mkdir -p $(OUT)/obj
