@@ -53,6 +53,37 @@
 #define PIN_LINK_SI   6
 #define PIN_LINK_SO   7
 
+/*
+ * GB-Link's second SD path. Their adapter takes SD on one pin for a GBA cable
+ * and on another for a GBC cable, which leaves pin 4 of the plug unconnected;
+ * the firmware picks by sampling SI, by the persisted 0x4B selection, and by
+ * its wrong-pin watchdog. A board that wires this pin to the connector the way
+ * the GB-Link DIY board does (see doc/GBLINK.md) gets all of that; one that
+ * does not reports a GBA cable whatever is plugged in, which is the truth.
+ */
+#define PIN_LINK_SD_ALT 1
+#ifndef BOARD_HAS_SD_ALT
+#define BOARD_HAS_SD_ALT 0
+#endif
+
+/*
+ * Status LED for the GB-Link personality (mode colours, the 0x42/0x46
+ * commands). The DevKitC-1 v1.0 has its WS2812 on GPIO 48. v1.1 moved it to
+ * 38, which this map gives to the Start button, so on a v1.1 board the LED
+ * stays dark rather than fighting a switch.
+ */
+#define PIN_RGB_LED 48
+#ifndef BOARD_HAS_RGB_LED
+#define BOARD_HAS_RGB_LED 1
+#endif
+
+/* GB-Link switches link VCC between 3.3 V and 5 V with two load switches;
+ * no gbagate board has them (nor does the GB-Link DIY board, which uses a
+ * slide switch). 0x40/0x41 are then accepted and do nothing. */
+#ifndef BOARD_HAS_VCC_SWITCH
+#define BOARD_HAS_VCC_SWITCH 0
+#endif
+
 /* Display and card share SPI2; only the chip selects differ. */
 #define PIN_SPI_SCK   12
 #define PIN_SPI_MOSI  11
@@ -132,6 +163,14 @@
 
 #define PIN_I2C_SDA   1
 #define PIN_I2C_SCL   2
+
+/* No pin for GB-Link's second SD path, and the Supermini's own WS2812 is on
+ * GPIO 48, which is the display's DC line here. Neither can be fitted. */
+#define PIN_LINK_SD_ALT (-1)
+#define BOARD_HAS_SD_ALT 0
+#define PIN_RGB_LED (-1)
+#define BOARD_HAS_RGB_LED 0
+#define BOARD_HAS_VCC_SWITCH 0
 
 #define BOARD_BUTTONS_ON_EXPANDER 1
 

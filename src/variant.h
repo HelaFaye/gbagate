@@ -66,10 +66,18 @@ typedef enum {
      * filesystem as a callback, so only the backend differs and a board can
      * have either.
      */
-    FEAT_SD_STORAGE  = 1u << 16
+    FEAT_SD_STORAGE  = 1u << 16,
+    /*
+     * The GB-Link personality: GB-Link's own adapter firmware (vendored in
+     * third_party/gblink-firmware) on this PHY, behind GB-Link's USB identity,
+     * so the GB-Link web apps, the netplay bridge and Celio drive this board as
+     * they drive theirs. Its relay mode puts the adapter on either end of the
+     * cable, so it needs both link roles.
+     */
+    FEAT_GBLINK      = 1u << 17
 } feature_t;
 
-#define FEATURE_COUNT 17
+#define FEATURE_COUNT 18
 
 /* ---- variants --------------------------------------------------------- */
 

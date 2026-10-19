@@ -12,6 +12,7 @@ upstream file. The fixes are offered back upstream as patches in
 | P3 | `layers/packetLayer.{hpp,cpp}`, `sections/usbSection.cpp` | a `0x13` that arrives before the first `0xB9A0` has been transmitted makes `isHandshakeEnabled()` unreachable | link never comes up; the netplay bridge avoids it only by waiting 150 ms (`CONNECT_GRACE_MS`) | `relay_connect_without_grace` (hangs upstream) |
 | P4 | `payloads/pokemon.cpp` `usbReceivePkmFile` | chunks copied at `g_receivedBytes` with no bound | any split but 50+50 (e.g. one 64-byte USB packet after a 50) overruns a static buffer | `trade_emu_pk3_upload_any_split` (ASan upstream) |
 | P5 | `payloads/pokemon.cpp` `partnerPartyConstruct` | no bound on the 600-byte partner party | a partner sending past three 200-byte chunks overruns it | covered with P4 |
+| P6 | `sections/tradeConnection.hpp` | the 2 s block-request `k_timer` is never stopped when the section is destroyed | an armed timer fires into a dead stack frame; on Zephyr the timer node itself sits in the kernel timeout list, so it corrupts that list | by inspection; the shim's timer pool asserts no live timer is re-initialised |
 
 P3 also holds a connect that arrives early until the adapter has sent eight
 `0xB9A0` rounds, the margin the netplay bridge measured a child GBA needs. A

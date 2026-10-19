@@ -48,9 +48,10 @@ ARG_mbe2e      = rom/tester.gba
 DEPS_menu      = ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c ui_shell.c hw_caps.c chipgate.c
 DEPS_modes     = app_modes.c ui_shell.c hw_caps.c chipgate.c
 DEPS_frame     = gblink_frame.c
+DEPS_usbdesc   = gblink_usbdesc.c
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc
 
 .PHONY: all strict lint clean chipdb gblink gblink-asan
 all: $(addprefix run-,$(SUITES)) gblink
@@ -81,7 +82,10 @@ $(BUILD):
 # and make exited 0 without an Error line. Each suite's main() does
 # `return g_fail != 0`, so the status was always correct; only the pipe lost it.
 define SUITE_rule
-$(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) | $(BUILD)
+# Headers are dependencies too: without them a header-only change (a constant,
+# a struct layout) leaves every test binary stale, and a suite reports on code
+# that no longer exists. Found when a corrected descriptor length kept failing.
+$(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) $(wildcard src/*.h) | $(BUILD)
 	@$$(CC) $$(CFLAGS) $$(EXTRA_$(1)) -o $$@ $$< $$(addprefix src/,$$(DEPS_$(1)))
 run-$(1): $(BUILD)/test_$(1)
 	@printf '%-14s ' $(1); \
@@ -110,7 +114,7 @@ strict-$(1): | $(BUILD)
 	@printf '%-14s' $(1); : > $(BUILD)/s_$(1).log; \
 	for cfg in "-O0" "-O2" "-O3 -flto" "-g -fsanitize=address,undefined"; do \
 	  echo "=== $$$$cfg ===" >> $(BUILD)/s_$(1).log; \
-	  if ! $$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wshadow $$$$cfg -Isrc \
+	  if ! $$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wshadow $$$$cfg -Isrc $$(EXTRA_$(1)) \
 	       -o $(BUILD)/s_$(1) test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) \
 	       >> $(BUILD)/s_$(1).log 2>&1; \
 	  then printf ' BUILD  '; \

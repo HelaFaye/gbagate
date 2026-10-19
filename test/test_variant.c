@@ -32,10 +32,17 @@ static void test_link(void) {
     check("adapter emulation", has(r.resolved, FEAT_RFU_EMU), 1);
 
     /*
-     * A link cable is a parent; it never has to answer someone else's clock.
-     * Keeping the child role out is what makes this image the small one.
+     * This used to assert the opposite: "a link cable is a parent; it never
+     * has to answer someone else's clock", which kept this image small.
+     *
+     * GB-Link's relay changed that. When the netplay bridge or Celio hosts a
+     * session the local GBA is the parent and the adapter answers as child,
+     * and the GB-Link personality is in every image. The cost that justified
+     * leaving the role out is also gone: both roles are one PHY engine now
+     * (gba_link_esp32s3.c), so the child role adds no module.
      */
-    check("no child role", has(r.resolved, FEAT_LINK_SLAVE), 0);
+    check("GB-Link adapter", has(r.resolved, FEAT_GBLINK), 1);
+    check("child role, for GB-Link's relay host side", has(r.resolved, FEAT_LINK_SLAVE), 1);
     check("no chip gate", has(r.resolved, FEAT_CHIPGATE), 0);
     check("no chip reader", has(r.resolved, FEAT_CHIP_READER), 0);
     check("no storage", has(r.resolved, FEAT_USB_MSC), 0);

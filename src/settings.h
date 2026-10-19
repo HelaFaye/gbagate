@@ -62,7 +62,24 @@ typedef struct {
     uint32_t logo_crc;
 
     uint8_t  favorites[SETTINGS_FAV_BYTES];
+    /*
+     * What the USB-C port is. The ESP32-S3 has one USB controller and four
+     * IN endpoints, so it can be a GB-Link adapter (WebUSB + WebSerial, for
+     * the GB-Link web apps, the netplay bridge and Celio) or a USB drive for
+     * dropping programs on, not both. Read at boot; changing it reboots.
+     * Appended to the blob's tail, so a version-2 blob without it reads as
+     * the default.
+     */
+    uint8_t  usb_mode;
 } settings_t;
+
+typedef enum {
+    USB_MODE_GBLINK = 0,   /* default: be a GB-Link adapter */
+    USB_MODE_DRIVE,        /* USB mass storage for the ROM catalogue */
+    USB_MODE_COUNT
+} usb_mode_t;
+
+const char *usb_mode_name(usb_mode_t m);
 
 /* Everything a device with no stored blob should start with. */
 void settings_defaults(settings_t *s);

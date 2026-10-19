@@ -42,7 +42,10 @@
 #if defined(GBAGATE_QEMU)
 static mb_xfer_fn mb_spi_transfer(void) { return NULL; }
 #else
-extern mb_xfer_fn mb_spi_transfer(void);
+/* Weak, because the link image has no multiboot and does not build
+ * mb_spi_esp32s3.c; NULL is Send Program's "unavailable" path. */
+mb_xfer_fn mb_spi_transfer(void);
+__attribute__((weak)) mb_xfer_fn mb_spi_transfer(void) { return NULL; }
 #endif
 #include "ui_shell.h"
 #include "app_modes.h"
@@ -77,6 +80,18 @@ __attribute__((weak)) bool chip_reader_detect(bool *a, bool *b) {
     if (b) *b = false;
     return false;
 }
+/*
+ * Same for the bus the reader sits on. gate_scan_chip() names both, and only
+ * the full image builds i2c_esp32s3.c, so without these the gate and link
+ * hardware images failed to link (found by the first idf.py hardware build).
+ * NULL is gate_scan_chip()'s "no reader" path.
+ */
+#if !defined(GBAGATE_QEMU)
+const chip_bus_io_t *chip_reader_bus(void);
+void                *chip_reader_ctx(void);
+__attribute__((weak)) const chip_bus_io_t *chip_reader_bus(void) { return NULL; }
+__attribute__((weak)) void                *chip_reader_ctx(void) { return NULL; }
+#endif
 static uint16_t gate_scan_chip(bool advance, bool beast);
 #include "variant.h"
 

@@ -18,6 +18,22 @@ extern "C" {
 #include "main.cpp"
 #undef main
 
+extern "C" {
+#include "gblink_usbdesc.h"
+}
+
+// One version, reported two ways: GetFirmwareInfo (firmware_version.hpp,
+// vendored) and bcdDevice (gblink_usbdesc.h). The launcher reads both.
+static_assert(fw::versionMajor == GBLINK_PROTO_MAJOR && fw::versionMinor == GBLINK_PROTO_MINOR &&
+              fw::versionPatch == GBLINK_PROTO_PATCH && fw::bcdDevice == GBLINK_USB_BCD_DEVICE,
+              "GB-Link protocol level disagrees between firmware_version.hpp and gblink_usbdesc.h");
+
+// The persisted 0x44 setting, for the USB port to build the BOS with.
+extern "C" bool gblink_landing_page_enabled(void)
+{
+    return landingPageEnabled();
+}
+
 extern "C" void gblink_usb_on_receive(uint8_t ep_out, const uint8_t* data, size_t len)
 {
     UsbLayer::getInstance().receive(ep_out, std::span<const uint8_t>(data, len));

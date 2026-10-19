@@ -1,0 +1,4 @@
+# The mini image keeps its programs on an SD card, not a USB drive, so TinyUSB's
+# mass-storage class has nothing to serve. Left enabled, the class is linked and
+# its callbacks are not, and the image does not link.
+CONFIG_TINYUSB_MSC_ENABLED=n

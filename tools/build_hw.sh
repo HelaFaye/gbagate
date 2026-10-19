@@ -35,11 +35,15 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="pio/${PARTS}"
 CFG
 
+# Per-image overrides, the same files PlatformIO applies (sdkconfig.defaults.<env>).
+DEFAULTS="$ROOT/pio/sdkconfig.defaults"
+[ -f "$ROOT/pio/sdkconfig.defaults.$VARIANT" ] && DEFAULTS="$DEFAULTS;$ROOT/pio/sdkconfig.defaults.$VARIANT"
+
 EXTRA=""
 [ "$BOARD" = supermini ] && EXTRA="-D BUTTONS_ON_EXPANDER=1 -D GBAGATE_BOARD=supermini"
 
 idf.py -B "$BUILD" \
     -D SDKCONFIG="$BUILD/sdkconfig" \
-    -D SDKCONFIG_DEFAULTS="$ROOT/pio/sdkconfig.defaults;$BUILD/sdkconfig.hw" \
+    -D SDKCONFIG_DEFAULTS="$DEFAULTS;$BUILD/sdkconfig.hw" \
     -D VARIANT="$VARIANT" -D GBAGATE_QEMU=0 -D IDF_TARGET=esp32s3 $EXTRA \
     build

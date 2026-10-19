@@ -96,6 +96,8 @@ static const claim_t k_devkit[] = {
     { PIN_BTN_SELECT, "btn Select" }, { PIN_BTN_START, "btn Start" },
     { PIN_BTN_L, "btn L" }, { PIN_BTN_R, "btn R" },
     { PIN_IR_TX_GPIO, "IR TX" }, { PIN_IR_RX_GPIO, "IR RX" },
+    { PIN_LINK_SD_ALT, "link SD (GBC cable path)" },
+    { PIN_RGB_LED, "RGB LED" },
 };
 
 /* The Supermini map, checked in a second translation unit so both sets of

@@ -64,10 +64,59 @@ else()
     else()
         list(APPEND SRCS ../../port/esp32s3/buttons_esp32s3.c)
     endif()
+    # The GB-Link personality, in every hardware image (FEAT_GBLINK): GB-Link's
+    # firmware from third_party/, the Zephyr shim it runs on, and this board's
+    # USB, PHY and hardware glue. Listed rather than globbed for the same reason
+    # as APP: third_party/ also holds files that must not be built here (their
+    # main.cpp is compiled via gblink_glue.cpp, renamed).
+    set(GBL ../../third_party/gblink-firmware/src)
+    list(APPEND SRCS
+        ${GBL}/layers/packetLayer.cpp
+        ${GBL}/layers/transport.cpp
+        ${GBL}/callbacks/blockCommand.cpp
+        ${GBL}/callbacks/blockCommandRequestCommand.cpp
+        ${GBL}/callbacks/blockRequestCommand.cpp
+        ${GBL}/callbacks/emptyCommand.cpp
+        ${GBL}/callbacks/moveCommand.cpp
+        ${GBL}/callbacks/readyCloseLinkCommand.cpp
+        ${GBL}/callbacks/readyExitStandbyCommand.cpp
+        ${GBL}/callbacks/sendDummyCommand.cpp
+        ${GBL}/callbacks/sendLinkTypeCommand.cpp
+        ${GBL}/callbacks/usbLinkCommand.cpp
+        ${GBL}/payloads/linkPlayer.c
+        ${GBL}/payloads/trainerCard.c
+        ${GBL}/payloads/pokemon.cpp
+        ${GBL}/payloads/mail.cpp
+        ${GBL}/sections/tradeSetup.cpp
+        ${GBL}/sections/tradeConnection.cpp
+        ${GBL}/sections/tradeDisconnected.cpp
+        ${GBL}/sections/tradeLounge.cpp
+        ${GBL}/sections/usbSection.cpp
+        ${GBL}/sections/awProtocolSection.cpp
+        ${GBL}/sections/eReaderProtocolSection.cpp
+        ${GBL}/module/link.cpp
+        ${GBL}/module/emu.cpp
+        ${GBL}/module/gb.cpp
+        ${GBL}/module/advanceWars.cpp
+        ${GBL}/module/eReader.cpp
+        ${GBL}/persist.cpp
+        ${GBL}/linkWrongPinWatchdog.c
+        ../../port/gblink/zshim_common.c
+        ../../port/gblink/zshim_freertos.c
+        ../../port/gblink/link_layer_core.c
+        ../../port/gblink/serial_layer.cpp
+        ../../port/gblink/hardware_port.cpp
+        ../../port/gblink/gblink_glue.cpp
+        ../../port/esp32s3/usb_gblink_esp32s3.c
+        ../../port/esp32s3/gblink_hw_esp32s3.c
+        ../../port/esp32s3/gblink_gbspi_esp32s3.c)
     if(VARIANT STREQUAL "gate" OR VARIANT STREQUAL "full")
-        list(APPEND SRCS
-            ../../port/esp32s3/usb_msc_esp32s3.c
-            ../../port/esp32s3/mb_spi_esp32s3.c)
+        list(APPEND SRCS ../../port/esp32s3/usb_msc_esp32s3.c)
+    endif()
+    # Multiboot's SPI master. The mini image has Send Program too (from its SD
+    # card) but was left out here, so its Send Program reported "unavailable".
+    if(VARIANT STREQUAL "gate" OR VARIANT STREQUAL "full" OR VARIANT STREQUAL "mini")
+        list(APPEND SRCS ../../port/esp32s3/mb_spi_esp32s3.c)
     endif()
     # The expander only exists on hardware; QEMU has no I2C at all.
     if(VARIANT STREQUAL "full")
@@ -77,7 +126,9 @@ else()
 endif()
 
 set(EMBEDS "")
-if(VARIANT STREQUAL "gate" OR VARIANT STREQUAL "full")
+# mini has the gate and all six databases too (GBAGATE_HAS_CHIPDB=1); it was
+# missing here, so its image referenced databases it never embedded.
+if(VARIANT STREQUAL "gate" OR VARIANT STREQUAL "full" OR VARIANT STREQUAL "mini")
     set(EMBEDS
         ../../data/chipdb/bn4r.chdb
         ../../data/chipdb/bn4b.chdb
@@ -105,7 +156,15 @@ set(REQS driver esp_driver_gpio esp_driver_spi esp_driver_uart
 # there is no USB peripheral, so none of this is built and none of it is
 # required.
 if(NOT GBAGATE_QEMU AND (VARIANT STREQUAL "gate" OR VARIANT STREQUAL "full"))
-    list(APPEND REQS fatfs wear_levelling esp_partition espressif__esp_tinyusb)
+    list(APPEND REQS fatfs wear_levelling esp_partition)
+endif()
+# Every hardware image is a GB-Link adapter, so every one needs TinyUSB, and
+# the RMT driver for the status LED.
+if(NOT GBAGATE_QEMU)
+    list(APPEND REQS espressif__esp_tinyusb esp_driver_rmt)
+    # transport_esp32s3.c's ESP-NOW backend. Missing from the list since the
+    # file was written, so it had never compiled.
+    list(APPEND REQS esp_wifi)
 endif()
 
 # The chip reader's expander sits on I2C, and IDF 6.0 split that out too.
@@ -113,9 +172,25 @@ if(NOT GBAGATE_QEMU AND VARIANT STREQUAL "full")
     list(APPEND REQS esp_driver_i2c)
 endif()
 
+set(INCS "." "../../src" "../../port/esp32s3")
+if(NOT GBAGATE_QEMU)
+    # port/gblink first: its zephyr/ and hardware/ shims must win over any
+    # same-named header elsewhere on the path.
+    list(APPEND INCS "../../port/gblink" "../../third_party/gblink-firmware/src")
+endif()
+
 idf_component_register(
     SRCS ${SRCS}
-    INCLUDE_DIRS "." "../../src" "../../port/esp32s3"
+    INCLUDE_DIRS ${INCS}
     EMBED_FILES ${EMBEDS}
     REQUIRES ${REQS}
 )
+
+if(NOT GBAGATE_QEMU)
+    # GB-Link's firmware is C++20 (std::span, ranges) and builds with
+    # CONFIG_SECTIONS_USE_MASTER_MODE=y upstream (prj.conf).
+    target_compile_options(${COMPONENT_LIB} PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++20>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-missing-field-initializers>)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_SECTIONS_USE_MASTER_MODE=1)
+endif()

@@ -42,6 +42,15 @@ void settings_defaults(settings_t *s) {
     s->input_mode = (uint8_t)INPUT_ENCODER;
 
     s->logo_crc = 0;   /* no donor supplied: the logo check stays off */
+    s->usb_mode = (uint8_t)USB_MODE_GBLINK;
+}
+
+const char *usb_mode_name(usb_mode_t m) {
+    switch (m) {
+    case USB_MODE_GBLINK: return "GB-Link";
+    case USB_MODE_DRIVE:  return "drive";
+    default:              return "?";
+    }
 }
 
 /* ---- blob format --------------------------------------------------------
@@ -84,6 +93,7 @@ static size_t pack_payload(const settings_t *s, uint8_t *p) {
     put32(p + n, s->logo_crc); n += 4;
     memcpy(p + n, s->favorites, SETTINGS_FAV_BYTES);
     n += SETTINGS_FAV_BYTES;
+    p[n++] = s->usb_mode;      /* tail extension, see settings_t */
     return n;
 }
 
@@ -147,6 +157,11 @@ bool settings_unpack(settings_t *s, const uint8_t *buf, size_t len) {
     if (plen >= n + SETTINGS_FAV_BYTES) {
         memcpy(s->favorites, p + n, SETTINGS_FAV_BYTES);
     }
+    n += SETTINGS_FAV_BYTES;
+    if (plen >= n + 1) {
+        s->usb_mode = p[n];
+    }
+    if (s->usb_mode >= USB_MODE_COUNT) s->usb_mode = (uint8_t)USB_MODE_GBLINK;
 
     /*
      * Clamp rather than trust. A blob can be intact and still hold a value this

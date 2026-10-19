@@ -1,437 +1,467 @@
 /*
- * gba_link_esp32s3.c -- GBA Multi-Play PHY for ESP32-S3, both roles.
+ * gba_link_esp32s3.c -- GBA Multi-Play PHY for the ESP32-S3: one engine, two
+ * clients.
  *
- * Framing is now spec-derived rather than guessed. GBATEK, SIO Multi-Player
- * Mode, "Transfer Protocol":
+ *   gate    the Battle Chip Gate (and anything else gbagate answers for
+ *           itself), through link_source's gba_link_poll/stage/last;
+ *   gblink  GB-Link's link layer (port/gblink/link_layer_core.c), through
+ *           the gbl_phy_driver_t installed by gba_link_install_gblink().
  *
- *   - The master's SI pin is always LOW.
- *   - When all GBAs are in multiplayer mode (ready), SD is HIGH.
- *   - When the master starts a transfer it sets SC=LOW; slaves see the Busy bit.
- *   - Step A: the master outputs a Startbit (LOW), 16 data bits, and a Stopbit
- *     (HIGH) through SD. This lands in SIOMULTI0 of every GBA. The master then
- *     forwards LOW from its SO to the first child's SI.
- *   - Step B: the first child does the same into SIOMULTI1, then forwards LOW
- *     from its SO to the second child's SI. And so on.
- *   - The transfer ends if the next child does not output data within a
- *     certain time.
+ * Only one owns the port at a time. A GB-Link host that selects a link mode
+ * takes it; leaving the mode hands it back.
  *
- * And from SIO Normal Mode, which shares the bit clocking convention:
- * data is driven when the master takes SC LOW, and sampled when SC goes HIGH.
+ * The wire, as GB-Link's RP2040 PIO programs drive it
+ * ---------------------------------------------------
+ * The previous version of this file clocked SC once per bit and sent data MSB
+ * first. Neither is how Multi-Play works, and GB-Link's firmware -- proven
+ * against real games -- shows what does:
  *
- * So a word is 18 bits on the wire, not 16, and a missing player is not an
- * error -- the transfer just ends early and that slot reads 0xFFFF.
+ *   - SC is not a bit clock. The parent pulls it low for the whole transfer
+ *     (it is the "busy" signal) and lets it go afterwards.
+ *   - SD carries asynchronous serial at 115200 baud, 8.68 us a bit: start bit
+ *     low, 16 data bits LEAST significant first, stop bit high. The receiver
+ *     times bits from the start edge and samples mid-bit, like a UART.
+ *   - SD is driven push-pull while a side transmits, then released. An open
+ *     drain with the GBA's pull-up rises far too slowly for 8.68 us bits on a
+ *     cable.
+ *   - The parent sends, drops SO to pass the token, waits up to ~170 us for
+ *     the child's start bit, receives one word, then releases SC. A child that
+ *     never starts reads as 0xFFFF.
+ *   - As child, the adapter holds SO low (which is what tells the GBA it is
+ *     the parent), times the parent's word from SC falling, waits ~17 us after
+ *     it, and answers.
  *
- * Roles
- * -----
- * SLAVE  is what a Battle Chip Gate is. The local GBA sets the pace and we
- *        must have our word staged before it starts. Fine for a device that
- *        generates its own answers; useless for relaying a remote player.
+ * The constants below are the PIO programs' delays converted at their
+ * 542.5 ns per instruction, so each is traceable to pio_master_mode.pio /
+ * pio_slave_mode.pio upstream.
  *
- * MASTER is the mode that makes networking work. We own SC, so we choose when
- *        each transfer begins, and GBATEK explicitly says the parent may need
- *        to insert delays between transfers. Remote latency turns into a pause
- *        rather than a missed slot. Wire the adapter into the parent connector
- *        position; the local GBA then comes up as a child on its own.
+ * Roles on the ESP32-S3
+ * ---------------------
+ * Child: a GPIO interrupt on SC falling, on core 1, IRAM, does the whole
+ * exchange (~330 us) -- the answer must already be staged, so the client is
+ * asked for it right after the previous word completes (see link_phy.h for
+ * why that ordering is equivalent to upstream's).
+ *
+ * Parent: a task on core 1 at top priority does each word with interrupts off
+ * on that core, then spends the inter-word gap sleeping when it is long and
+ * spinning when it is short.
+ *
+ * NOT YET RUN ON HARDWARE. Everything above the bit level is exercised by the
+ * host simulator (test/gblink_sim); the bit level is traceable to upstream's
+ * PIO but has not been on a scope.
  */
-
+#include <stdatomic.h>
 #include <string.h>
 
-#include "driver/dedic_gpio.h"
 #include "driver/gpio.h"
 #include "esp_attr.h"
-#include "esp_check.h"          /* ESP_ERROR_CHECK */
 #include "esp_cpu.h"
-#include "board.h"
 #include "esp_log.h"
-#include "esp_private/esp_clk.h" /* esp_clk_cpu_freq, for us -> cycles */
+#include "esp_private/esp_clk.h"
+#include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
+#include "soc/gpio_struct.h"
 
+#include "board.h"
+#include "link_phy.h"
 #include "link_proto.h"
-#include "link_session.h"
 
-static const char *TAG = "gba_link";
+static const char *TAG = "mp_phy";
 
-/* ---- wiring ----------------------------------------------------------
- *
- * Link port, looking into the socket:
- *   1 VCC (3.3 V, milliamps only -- never run the radio from it)
- *   2 SO   -> next device's SI
- *   3 SI   <- previous device's SO
- *   4 SD   shared data bus, open drain, pull-up required
- *   5 SC   shared clock
- *   6 GND
- */
-#define PIN_SC PIN_LINK_SC
-#define PIN_SD PIN_LINK_SD
-#define PIN_SI PIN_LINK_SI
-#define PIN_SO PIN_LINK_SO
+/* ---- timing, from the PIO programs (542.5 ns per instruction) ------------ */
 
-/* Multi-Play supports 9600 / 38400 / 57600 / 115200. As master we pick. */
-#define LINK_BAUD 115200u
+#define NS_BIT            8680u   /* 16 instructions: 115200 baud            */
+#define NS_SLAVE_SAMPLE0  13020u  /* "irq [23]": 24 instr after SC falls     */
+#define NS_SLAVE_TURN     17360u  /* "nop [31]": 32 instr before answering   */
+#define NS_MASTER_HOLD    16820u  /* "set pins [30]": SC low after the reply */
+#define NS_CHILD_TIMEOUT  168000u /* 31 x 10-instr wait loop                 */
+#define NS_START_TO_MID   12480u  /* "set x [22]": 23 instr, edge to mid-bit */
 
-#define WORD_BITS  16
-#define FRAME_BITS 18 /* start + 16 + stop */
+/* ---- pins ------------------------------------------------------------------ */
 
-/* A word is 18 * 8.68 us = 156 us; four of them plus turnaround is under 1 ms.
- * A game that transfers once per VBlank therefore leaves ~15.7 ms of slack,
- * which is the budget the network has to fit inside. */
+static int s_pin_sd = PIN_LINK_SD;
 
-/* If a child does not start driving within this, the transfer ends. */
-#define CHILD_TIMEOUT_US 100
+static inline uint32_t IRAM_ATTR in_word(void) { return GPIO.in; }
 
-/* ---- dedicated GPIO --------------------------------------------------
- * Single-cycle GPIO that skips the GPIO matrix. This is what makes a spin
- * loop viable at 8.68 us/bit without PIO. */
+static inline bool IRAM_ATTR pin_get(int pin) { return (GPIO.in >> pin) & 1u; }
 
-enum { IN_SC = 0, IN_SD = 1, IN_SI = 2 };
-enum { OUT_SC = 0, OUT_SD = 1, OUT_SO = 2 };
-
-static dedic_gpio_bundle_handle_t s_in;
-static dedic_gpio_bundle_handle_t s_out;
-static uint32_t s_out_shadow;
-
-static gba_role_t     s_role;
-static link_session_t s_session;
-static uint32_t       s_cyc_per_half_bit;
-
-/* Supplied by the transport layer (USB CDC / ESP-NOW). */
-extern void gba_link_report(const gba_transfer_t *xfer, uint16_t seq, bool underran);
-extern void gba_link_pump(void); /* service the transport; must not block */
-
-/* ---- primitives ------------------------------------------------------ */
-
-static inline uint32_t IRAM_ATTR rd(void) {
-    return dedic_gpio_bundle_read_in(s_in);
+static inline void IRAM_ATTR pin_set(int pin, bool high) {
+    if (high) GPIO.out_w1ts = 1u << pin;
+    else      GPIO.out_w1tc = 1u << pin;
 }
 
-static inline void IRAM_ATTR wr(uint32_t mask, bool high) {
-    s_out_shadow = high ? (s_out_shadow | mask) : (s_out_shadow & ~mask);
-    dedic_gpio_bundle_write(s_out, mask, high ? mask : 0u);
+static inline void IRAM_ATTR pin_drive(int pin, bool on) {
+    if (on) GPIO.enable_w1ts = 1u << pin;
+    else    GPIO.enable_w1tc = 1u << pin;
 }
 
-static inline void IRAM_ATTR sc(bool high) { wr(1u << OUT_SC, high); }
-static inline void IRAM_ATTR so(bool high) { wr(1u << OUT_SO, high); }
+/* Every link pin is a plain GPIO below 32 on both boards; the fast paths above
+ * rely on that, so refuse to build otherwise. */
+_Static_assert(PIN_LINK_SC < 32 && PIN_LINK_SD < 32 && PIN_LINK_SI < 32 &&
+               PIN_LINK_SO < 32 && PIN_LINK_SD_ALT < 32,
+               "link pins must be GPIO 0..31");
 
-/* SD is shared by every device on the bus, so it is open drain: drive low, or
- * release and let the pull-up do the rest. Never drive it high. */
-static inline void IRAM_ATTR sd(bool high) { wr(1u << OUT_SD, high); }
+static uint32_t s_cyc_per_us;
 
-static inline bool IRAM_ATTR sd_in(void) { return (rd() >> IN_SD) & 1u; }
-static inline bool IRAM_ATTR sc_in(void) { return (rd() >> IN_SC) & 1u; }
-static inline bool IRAM_ATTR si_in(void) { return (rd() >> IN_SI) & 1u; }
+static inline uint32_t IRAM_ATTR ns_to_cyc(uint32_t ns) {
+    return (uint32_t)(((uint64_t)ns * s_cyc_per_us) / 1000u);
+}
 
-static inline void IRAM_ATTR spin(uint32_t cycles) {
-    uint32_t t0 = esp_cpu_get_cycle_count();
-    while (esp_cpu_get_cycle_count() - t0 < cycles) {
-        /* nothing */
+static inline void IRAM_ATTR wait_until(uint32_t t) {
+    while ((int32_t)(esp_cpu_get_cycle_count() - t) < 0) { }
+}
+
+/* ---- one word on the wire ---------------------------------------------------- */
+
+/* Drive start, 16 bits LSB first, stop on the active SD pin, push-pull. */
+static void IRAM_ATTR send_word(uint16_t w, uint32_t t) {
+    const uint32_t bit = ns_to_cyc(NS_BIT);
+    pin_set(s_pin_sd, false);
+    pin_drive(s_pin_sd, true);
+    t += bit;
+    wait_until(t);
+    for (int i = 0; i < 16; i++) {
+        pin_set(s_pin_sd, (w >> i) & 1u);
+        t += bit;
+        wait_until(t);
     }
+    pin_set(s_pin_sd, true);
+    t += bit;
+    wait_until(t);
 }
 
-static inline bool IRAM_ATTR wait_for(int bit, bool want, uint32_t cycles) {
-    uint32_t t0 = esp_cpu_get_cycle_count();
-    while (((rd() >> bit) & 1u) != (uint32_t)want) {
-        if (esp_cpu_get_cycle_count() - t0 > cycles) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static uint32_t us_to_cyc(uint32_t us) {
-    return (uint32_t)((uint64_t)us * (uint64_t)esp_clk_cpu_freq() / 1000000ULL);
-}
-
-/* ---- master role ----------------------------------------------------- */
-
-/* Clock out one 18-bit frame: start bit, 16 data bits MSB first, stop bit.
- * Data changes while SC is low; everyone samples on the rising edge. */
-static void IRAM_ATTR m_send_frame(uint16_t w) {
-    for (int i = FRAME_BITS - 1; i >= 0; i--) {
-        bool bit;
-        if (i == FRAME_BITS - 1) {
-            bit = false;               /* start */
-        } else if (i == 0) {
-            bit = true;                /* stop  */
-        } else {
-            bit = (w >> (i - 1)) & 1u; /* data, MSB first */
-        }
-        sc(false);
-        sd(bit);
-        spin(s_cyc_per_half_bit);
-        sc(true);
-        spin(s_cyc_per_half_bit);
-    }
-    sd(true); /* release the bus */
-}
-
-/*
- * Clock in one frame from whichever child currently holds the bus.
- * Returns false if the child never asserted a start bit, which per GBATEK
- * ends the transfer -- that is how the master learns the player count.
- */
-static bool IRAM_ATTR m_recv_frame(uint16_t *out) {
-    /* Look for the start bit. The child drives SD low when SC is low. */
-    uint32_t deadline = us_to_cyc(CHILD_TIMEOUT_US);
-    uint32_t t0 = esp_cpu_get_cycle_count();
-    for (;;) {
-        sc(false);
-        spin(s_cyc_per_half_bit);
-        bool start_low = !sd_in();
-        sc(true);
-        spin(s_cyc_per_half_bit);
-        if (start_low) {
-            break;
-        }
-        if (esp_cpu_get_cycle_count() - t0 > deadline) {
-            return false; /* nobody home; transfer ends here */
-        }
-    }
-
+/* Sample 16 bits LSB first, the first at t. */
+static uint16_t IRAM_ATTR recv_bits(uint32_t t) {
+    const uint32_t bit = ns_to_cyc(NS_BIT);
     uint16_t w = 0;
-    for (int i = 0; i < WORD_BITS; i++) {
-        sc(false);
-        spin(s_cyc_per_half_bit);
-        sc(true);
-        w = (uint16_t)((w << 1) | (sd_in() ? 1u : 0u));
-        spin(s_cyc_per_half_bit);
+    for (int i = 0; i < 16; i++) {
+        wait_until(t);
+        w |= (uint16_t)(pin_get(s_pin_sd) ? 1u : 0u) << i;
+        t += bit;
     }
-
-    /* Stop bit. */
-    sc(false);
-    spin(s_cyc_per_half_bit);
-    sc(true);
-    spin(s_cyc_per_half_bit);
-
-    *out = w;
-    return true;
+    return w;
 }
 
-/*
- * Run one full transfer as parent. our_word goes in slot 0; children fill the
- * rest. Never called until the remote word is in hand (or the stall budget
- * expired), which is the entire point of being master.
- */
-static bool IRAM_ATTR m_transfer(uint16_t our_word, gba_transfer_t *out) {
-    memset(out, 0, sizeof *out);
-    for (int i = 0; i < 4; i++) {
-        out->word[i] = GBA_WORD_EMPTY;
-    }
-    out->self_id = 0;
+/* Parent: our word, then one child's. Interrupts must be off on this core. */
+static uint16_t IRAM_ATTR master_word(uint16_t tx) {
+    uint32_t t = esp_cpu_get_cycle_count();
+    pin_set(PIN_LINK_SC, false);           /* busy                        */
+    send_word(tx, t);
+    pin_drive(s_pin_sd, false);            /* release SD for the child    */
+    pin_set(PIN_LINK_SO, false);           /* pass the token              */
 
-    /* SD high means everyone is in multiplayer mode and idle. */
-    if (!sd_in()) {
-        return false;
-    }
-
-    so(true); /* hold the token until our word is out */
-    m_send_frame(our_word);
-    out->word[0] = our_word;
-    out->players = 1;
-
-    so(false); /* hand the bus to child 1 */
-
-    for (int p = 1; p < 4; p++) {
-        uint16_t w;
-        if (!m_recv_frame(&w)) {
+    uint16_t rx = 0xFFFF;
+    uint32_t t0 = esp_cpu_get_cycle_count();
+    const uint32_t limit = ns_to_cyc(NS_CHILD_TIMEOUT);
+    while (esp_cpu_get_cycle_count() - t0 < limit) {
+        if (!pin_get(s_pin_sd)) {
+            rx = recv_bits(esp_cpu_get_cycle_count() + ns_to_cyc(NS_START_TO_MID));
             break;
         }
-        out->word[p] = w;
-        out->players = (uint8_t)(p + 1);
     }
 
-    so(true);
-    sc(true);
-    return true;
+    pin_set(PIN_LINK_SO, true);
+    wait_until(esp_cpu_get_cycle_count() + ns_to_cyc(NS_MASTER_HOLD));
+    pin_set(PIN_LINK_SC, true);            /* idle                        */
+    return rx;
 }
 
-/* ---- slave role ------------------------------------------------------
- * Kept because device mode (Battle Chip Gate, e-Reader) needs it. Here the
- * local GBA is parent and we have no say in the timing. */
+/* ---- engine state ------------------------------------------------------------- */
 
-static bool IRAM_ATTR s_transfer(uint16_t our_word, gba_transfer_t *out) {
-    memset(out, 0, sizeof *out);
-    for (int i = 0; i < 4; i++) {
-        out->word[i] = GBA_WORD_EMPTY;
-    }
+typedef enum { OWNER_NONE = 0, OWNER_GATE, OWNER_GBLINK } owner_t;
 
-    uint32_t frame_cyc = us_to_cyc(400); /* generous per-edge timeout */
+static volatile gbl_phy_mode_t s_mode = GBL_PHY_OFF;
+static volatile owner_t        s_owner = OWNER_NONE;
+static volatile uint16_t       s_staged = 0xFFFF;   /* child's next answer   */
+static volatile uint16_t       s_last_tx = 0xFFFF;
+static QueueHandle_t           s_words;             /* ISR -> task: rx words */
+static TaskHandle_t            s_task;
+static portMUX_TYPE            s_mux = portMUX_INITIALIZER_UNLOCKED;
 
-    /* The master pulling SC low is the busy signal that opens a transfer. */
-    if (!wait_for(IN_SC, false, us_to_cyc(20000))) {
-        return false;
-    }
+/* Counters for the diagnostics screen. */
+static volatile uint32_t s_words_done, s_rx_dropped, s_late_stage;
+static volatile bool     s_stage_fresh;
 
-    /* Listen to the master's frame: start bit, 16 bits, stop bit. */
-    uint16_t master = 0;
-    for (int i = 0; i < FRAME_BITS; i++) {
-        if (!wait_for(IN_SC, false, frame_cyc)) return false;
-        if (!wait_for(IN_SC, true,  frame_cyc)) return false;
-        if (i > 0 && i < FRAME_BITS - 1) {
-            master = (uint16_t)((master << 1) | (sd_in() ? 1u : 0u));
-        }
-    }
-    out->word[0] = master;
-    out->players = 1;
+/* ---- child: the SC-falling interrupt -------------------------------------------- */
 
-    /* Our SI going low is the token arriving. */
-    if (!wait_for(IN_SI, false, frame_cyc)) {
-        return false;
-    }
-
-    /* Drive our frame. The master is still generating SC. */
-    for (int i = FRAME_BITS - 1; i >= 0; i--) {
-        bool bit = (i == FRAME_BITS - 1) ? false
-                 : (i == 0)              ? true
-                 : ((our_word >> (i - 1)) & 1u);
-        if (!wait_for(IN_SC, false, frame_cyc)) { sd(true); so(true); return false; }
-        sd(bit);
-        if (!wait_for(IN_SC, true, frame_cyc))  { sd(true); so(true); return false; }
-    }
-    sd(true);
-    so(false); /* pass the token downstream */
-
-    /* self_id is the slot we drove. With one adapter on the bus that is 1. */
-    out->self_id = 1;
-    out->word[1] = our_word;
-    out->players = 2;
-
-    so(true);
-    return true;
-}
-
-/* ---- the link task --------------------------------------------------- */
-
-static void IRAM_ATTR gba_link_task(void *arg) {
+static void IRAM_ATTR sc_isr(void *arg) {
     (void)arg;
-    const uint32_t stall_cyc = us_to_cyc(s_session.stall_budget_us);
+    uint32_t t_isr = esp_cpu_get_cycle_count();
+    GPIO.status_w1tc = 1u << PIN_LINK_SC;
 
-    for (;;) {
-        gba_transfer_t xfer;
-        bool underran = false;
-        uint16_t seq = s_session.seq;
+    gbl_phy_mode_t mode = s_mode;
+    if (mode != GBL_PHY_SLAVE && mode != GBL_PHY_SLAVE_EREADER) return;
 
-        if (s_role == GBA_ROLE_MASTER) {
-            /*
-             * The stall that makes this whole thing work. GBATEK sanctions it:
-             * the parent may insert delays between transfers. We spend the
-             * peer's latency here, where it is harmless, instead of missing a
-             * slot, where it is fatal.
-             */
-            uint32_t t0 = esp_cpu_get_cycle_count();
-            uint32_t waited_us = 0;
-            while (!ls_ready(&s_session)) {
-                gba_link_pump();
-                if (esp_cpu_get_cycle_count() - t0 > stall_cyc) {
-                    break;
-                }
-            }
-            if (esp_cpu_get_cycle_count() - t0 > us_to_cyc(1)) {
-                waited_us = (uint32_t)((esp_cpu_get_cycle_count() - t0) /
-                                       (uint32_t)(esp_clk_cpu_freq() / 1000000));
-            }
+    /* ISR entry costs ~1 us on this part; sample from the estimated edge. */
+    uint32_t t_fall = t_isr - s_cyc_per_us;
+    uint16_t rx = recv_bits(t_fall + ns_to_cyc(NS_SLAVE_SAMPLE0));
 
-            uint16_t w = ls_take_word(&s_session, waited_us, &underran);
-            if (m_transfer(w, &xfer)) {
-                ls_complete(&s_session);
-                gba_link_report(&xfer, seq, underran);
-            } else {
-                vTaskDelay(1); /* bus not ready; back off so the WDT is fed */
-            }
-        } else {
-            uint16_t w = ls_ready(&s_session)
-                             ? ls_take_word(&s_session, 0, &underran)
-                             : GBA_WORD_EMPTY;
-            if (s_transfer(w, &xfer)) {
-                ls_complete(&s_session);
-                gba_link_report(&xfer, seq, underran);
-            } else {
-                vTaskDelay(1);
-            }
-        }
+    uint16_t tx = s_staged;
+    if (!s_stage_fresh) s_late_stage++;
+    s_stage_fresh = false;
+
+    uint32_t t = esp_cpu_get_cycle_count() + ns_to_cyc(NS_SLAVE_TURN);
+    wait_until(t);
+    send_word(tx, t);
+    pin_drive(s_pin_sd, false);
+
+    s_last_tx = tx;
+    BaseType_t woken = pdFALSE;
+    if (xQueueSendFromISR(s_words, &rx, &woken) != pdTRUE) s_rx_dropped++;
+    portYIELD_FROM_ISR(woken);
+}
+
+/* ---- pin states per mode ---------------------------------------------------------- */
+
+static void cfg_input(int pin, bool pullup) {
+    if (pin < 0) return;
+    gpio_reset_pin(pin);
+    gpio_set_direction(pin, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(pin, pullup ? GPIO_PULLUP_ONLY : GPIO_FLOATING);
+}
+
+static void cfg_output(int pin, bool level) {
+    if (pin < 0) return;
+    gpio_reset_pin(pin);
+    gpio_set_level(pin, level);
+    /* Input-output so pin_get() still reads it, and so pin_drive() can turn
+     * the driver off without touching the matrix. */
+    gpio_set_direction(pin, GPIO_MODE_INPUT_OUTPUT);
+}
+
+static void apply_pins(gbl_phy_mode_t mode, bool sd_alt) {
+    gpio_intr_disable(PIN_LINK_SC);
+    int sd = (sd_alt && BOARD_HAS_SD_ALT) ? PIN_LINK_SD_ALT : PIN_LINK_SD;
+    int other = (sd == PIN_LINK_SD) ? (BOARD_HAS_SD_ALT ? PIN_LINK_SD_ALT : -1) : PIN_LINK_SD;
+    s_pin_sd = sd;
+
+    switch (mode) {
+    case GBL_PHY_MASTER:
+        cfg_output(PIN_LINK_SC, true);
+        cfg_output(PIN_LINK_SO, true);
+        cfg_input(PIN_LINK_SI, true);
+        cfg_output(sd, true);
+        pin_drive(sd, false);          /* driven only while sending */
+        gpio_set_pull_mode(sd, GPIO_PULLUP_ONLY);
+        cfg_input(other, false);
+        break;
+    case GBL_PHY_SLAVE:
+    case GBL_PHY_SLAVE_EREADER:
+        cfg_input(PIN_LINK_SC, true);
+        cfg_input(PIN_LINK_SI, true);
+        cfg_output(PIN_LINK_SO, false); /* SO low: the GBA becomes parent */
+        cfg_output(sd, true);
+        pin_drive(sd, false);
+        gpio_set_pull_mode(sd, GPIO_PULLUP_ONLY);
+        cfg_input(other, false);
+        gpio_set_intr_type(PIN_LINK_SC, GPIO_INTR_NEGEDGE);
+        gpio_intr_enable(PIN_LINK_SC);
+        break;
+    case GBL_PHY_PRESENCE:
+        cfg_input(PIN_LINK_SC, true);
+        cfg_input(PIN_LINK_SI, true);
+        cfg_output(PIN_LINK_SO, false);
+        cfg_output(PIN_LINK_SD, true);
+        if (BOARD_HAS_SD_ALT) cfg_output(PIN_LINK_SD_ALT, true);
+        break;
+    case GBL_PHY_OFF:
+    default:
+        cfg_input(PIN_LINK_SC, true);
+        cfg_input(PIN_LINK_SI, false);
+        cfg_input(PIN_LINK_SO, false);
+        cfg_input(PIN_LINK_SD, true);
+        if (BOARD_HAS_SD_ALT) cfg_input(PIN_LINK_SD_ALT, false);
+        break;
     }
 }
 
-/* ---- setup ----------------------------------------------------------- */
+/* ---- the task: parent transfers, and child bookkeeping -------------------------- */
 
-void gba_link_start(gba_role_t role, uint32_t stall_budget_us) {
-    s_role = role;
-    ls_init(&s_session, stall_budget_us);
+static void deliver(uint16_t rx);
 
-    /* Half a bit period, in CPU cycles. */
-    s_cyc_per_half_bit =
-        (uint32_t)((uint64_t)esp_clk_cpu_freq() / (uint64_t)LINK_BAUD / 2ULL);
+static void IRAM_ATTR phy_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        gbl_phy_mode_t mode = s_mode;
 
-    gpio_config_t shared = {
-        .pin_bit_mask = (1ULL << PIN_SD),
-        .mode         = GPIO_MODE_INPUT_OUTPUT_OD,
-        .pull_up_en   = GPIO_PULLUP_ENABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&shared));
+        if (mode == GBL_PHY_MASTER && s_owner == OWNER_GBLINK) {
+            uint32_t gap = 0;
+            uint16_t tx = gbl_phy_next_tx(&gap);
+            portENTER_CRITICAL(&s_mux);
+            uint16_t rx = master_word(tx);
+            portEXIT_CRITICAL(&s_mux);
+            s_last_tx = tx;
+            s_words_done++;
+            gbl_phy_word_done(rx);
 
-    /* SC is an output when we are parent, an input when we are child. It is
-     * open drain either way so that plugging into the wrong connector cannot
-     * put two drivers in contention. */
-    gpio_config_t clk = {
-        .pin_bit_mask = (1ULL << PIN_SC),
-        .mode         = GPIO_MODE_INPUT_OUTPUT_OD,
-        .pull_up_en   = GPIO_PULLUP_ENABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&clk));
+            /* The gap after this word: sleep the whole ticks of it, spin the
+             * rest. 0.75 ms between words spins; 7 and 16 ms mostly sleep. */
+            uint64_t ns = gbl_phy_loops_to_ns(gap);
+            uint32_t end = esp_cpu_get_cycle_count() + ns_to_cyc((uint32_t)(ns > 0xFFFFFFFFull ? 0xFFFFFFFFu : ns));
+            uint32_t ms = (uint32_t)(ns / 1000000u);
+            if (ms >= 2) vTaskDelay(pdMS_TO_TICKS(ms - 1));
+            wait_until(end);
+            continue;
+        }
 
-    gpio_config_t in = {
-        .pin_bit_mask = (1ULL << PIN_SI),
-        .mode         = GPIO_MODE_INPUT,
-        .pull_up_en   = GPIO_PULLUP_ENABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&in));
+        if (mode == GBL_PHY_SLAVE || mode == GBL_PHY_SLAVE_EREADER) {
+            uint16_t rx;
+            if (xQueueReceive(s_words, &rx, pdMS_TO_TICKS(10)) == pdTRUE) {
+                s_words_done++;
+                deliver(rx);
+            }
+            continue;
+        }
 
-    gpio_config_t out = {
-        .pin_bit_mask = (1ULL << PIN_SO),
-        .mode         = GPIO_MODE_OUTPUT,
-    };
-    ESP_ERROR_CHECK(gpio_config(&out));
-
-    int in_pins[]  = { PIN_SC, PIN_SD, PIN_SI };
-    int out_pins[] = { PIN_SC, PIN_SD, PIN_SO };
-
-    dedic_gpio_bundle_config_t in_cfg = {
-        .gpio_array = in_pins,
-        .array_size = 3,
-        .flags = { .in_en = 1 },
-    };
-    dedic_gpio_bundle_config_t out_cfg = {
-        .gpio_array = out_pins,
-        .array_size = 3,
-        .flags = { .out_en = 1 },
-    };
-    ESP_ERROR_CHECK(dedic_gpio_new_bundle(&in_cfg, &s_in));
-    ESP_ERROR_CHECK(dedic_gpio_new_bundle(&out_cfg, &s_out));
-
-    sc(true);
-    sd(true);
-    so(true);
-
-    /*
-     * Core 1, top priority, everything IRAM_ATTR. WiFi, BLE, USB and the
-     * display stay on core 0. The IRAM part is not optional: any flash write
-     * anywhere in the system suspends the instruction cache, and a stall in
-     * the middle of clocking 18 bits corrupts the frame.
-     */
-    xTaskCreatePinnedToCore(gba_link_task, "gba_link", 4096, NULL,
-                            configMAX_PRIORITIES - 1, NULL, 1);
-
-    ESP_LOGI(TAG, "link up as %s, %u baud, stall budget %u us",
-             role == GBA_ROLE_MASTER ? "parent" : "child",
-             (unsigned)LINK_BAUD, (unsigned)s_session.stall_budget_us);
+        /* Off or presence: nothing to clock. */
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+    }
 }
 
-/* Called by the transport when a peer word arrives. */
-bool gba_link_feed(uint16_t seq, uint16_t word) {
-    return ls_push_word(&s_session, seq, word);
+/* ---- gate client: link_source's hardware source ------------------------------------ */
+
+static QueueHandle_t  s_gate_words;
+static gba_transfer_t s_gate_last;
+
+static void deliver(uint16_t rx) {
+    if (s_owner == OWNER_GBLINK) {
+        gbl_phy_word_done(rx);
+        s_staged = gbl_phy_next_tx(NULL);
+        s_stage_fresh = true;
+        return;
+    }
+    if (s_owner == OWNER_GATE) {
+        memset(&s_gate_last, 0, sizeof s_gate_last);
+        s_gate_last.word[0] = rx;
+        s_gate_last.word[1] = s_last_tx;
+        s_gate_last.word[2] = GBA_WORD_EMPTY;
+        s_gate_last.word[3] = GBA_WORD_EMPTY;
+        s_gate_last.players = 2;
+        s_gate_last.self_id = 1;
+        xQueueOverwrite(s_gate_words, &rx);
+    }
 }
 
-const link_session_t *gba_link_stats(void) {
-    return &s_session;
+static void set_mode(owner_t owner, gbl_phy_mode_t mode, bool sd_alt) {
+    s_owner = owner;
+    s_mode = GBL_PHY_OFF;          /* the ISR ignores edges while we rewire */
+    xQueueReset(s_words);
+    apply_pins(mode, sd_alt);
+    s_mode = mode;
+    if (s_task) xTaskNotifyGive(s_task);
+}
+
+/* Wait for the parent's next word. The gate answers it through stage(). */
+bool gba_link_poll(uint16_t *from_game, uint32_t timeout_ms) {
+    if (s_owner == OWNER_GBLINK) {     /* a GB-Link host has the port */
+        vTaskDelay(pdMS_TO_TICKS(timeout_ms));
+        return false;
+    }
+    if (s_owner != OWNER_GATE) set_mode(OWNER_GATE, GBL_PHY_SLAVE, false);
+    uint16_t w;
+    if (xQueueReceive(s_gate_words, &w, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) return false;
+    *from_game = w;
+    return true;
+}
+
+/* The answer for the parent's next word. */
+void gba_link_stage(uint16_t word) {
+    s_staged = word;
+    s_stage_fresh = true;
+}
+
+void gba_link_last(gba_transfer_t *out) { *out = s_gate_last; }
+
+/* ---- GB-Link client --------------------------------------------------------------------- */
+
+static void gbl_configure(gbl_phy_mode_t mode, bool sd_alt) {
+    /* Called with the shim lock held, from GB-Link's module thread. Taking
+     * the port from the gate is deliberate: the host asked for this mode. */
+    if (mode == GBL_PHY_OFF) {
+        set_mode(OWNER_NONE, GBL_PHY_OFF, false);
+        return;
+    }
+    set_mode(OWNER_GBLINK, mode, sd_alt);
+    if (mode == GBL_PHY_SLAVE || mode == GBL_PHY_SLAVE_EREADER) {
+        /* Stage the first answer before the GBA's first edge. */
+        s_staged = gbl_phy_next_tx(NULL);
+        s_stage_fresh = true;
+    }
+}
+
+static bool gbl_si_seen_high(uint32_t window_us) {
+    gpio_set_direction(PIN_LINK_SI, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIN_LINK_SI, GPIO_PULLUP_ONLY);
+    esp_rom_delay_us(10);                    /* settle, as upstream */
+    int64_t end = esp_timer_get_time() + window_us;
+    while (esp_timer_get_time() < end) {
+        if (pin_get(PIN_LINK_SI)) return true;
+    }
+    return false;
+}
+
+static uint8_t gbl_read_pins(void) {
+    uint32_t in = in_word();
+    uint8_t m = 0;
+    if (!((in >> PIN_LINK_SC) & 1u)) m |= 0x01;
+    if ((in >> PIN_LINK_SI) & 1u)    m |= 0x02;
+    if ((in >> PIN_LINK_SO) & 1u)    m |= 0x04;
+    if ((in >> PIN_LINK_SD) & 1u)    m |= 0x08;
+#if BOARD_HAS_SD_ALT
+    if ((in >> PIN_LINK_SD_ALT) & 1u) m |= 0x10;
+#endif
+    return m;
+}
+
+static void gbl_release(void) {
+    cfg_input(PIN_LINK_SO, false);
+    cfg_input(PIN_LINK_SD, false);
+    if (BOARD_HAS_SD_ALT) cfg_input(PIN_LINK_SD_ALT, false);
+}
+
+static const gbl_phy_driver_t k_gblink_driver = {
+    .configure    = gbl_configure,
+    .si_seen_high = gbl_si_seen_high,
+    .read_pins    = gbl_read_pins,
+    .release      = gbl_release,
+    .has_sd_alt   = BOARD_HAS_SD_ALT,
+};
+
+/* ---- setup -------------------------------------------------------------------------------- */
+
+static void install_isr_on_core1(void *arg) {
+    /* An interrupt is serviced on the core that allocated it; the child
+     * exchange must run where WiFi and USB do not. */
+    ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3));
+    ESP_ERROR_CHECK(gpio_isr_handler_add(PIN_LINK_SC, sc_isr, NULL));
+    xTaskNotifyGive((TaskHandle_t)arg);
+    vTaskDelete(NULL);
+}
+
+void gba_link_start(void) {
+    if (s_task) return;
+    s_cyc_per_us = (uint32_t)(esp_clk_cpu_freq() / 1000000);
+    s_words = xQueueCreate(8, sizeof(uint16_t));
+    s_gate_words = xQueueCreate(1, sizeof(uint16_t));
+    apply_pins(GBL_PHY_OFF, false);
+
+    xTaskCreatePinnedToCore(install_isr_on_core1, "mp_isr", 3072,
+                            xTaskGetCurrentTaskHandle(), configMAX_PRIORITIES - 1, NULL, 1);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    xTaskCreatePinnedToCore(phy_task, "mp_phy", 4096, NULL,
+                            configMAX_PRIORITIES - 1, &s_task, 1);
+    gbl_phy_install(&k_gblink_driver);
+    ESP_LOGI(TAG, "Multi-Play PHY on core 1: SC=%d SD=%d SI=%d SO=%d SD_ALT=%d",
+             PIN_LINK_SC, PIN_LINK_SD, PIN_LINK_SI, PIN_LINK_SO,
+             BOARD_HAS_SD_ALT ? PIN_LINK_SD_ALT : -1);
+}
+
+void gba_link_counters(uint32_t *words, uint32_t *dropped, uint32_t *late) {
+    if (words)   *words = s_words_done;
+    if (dropped) *dropped = s_rx_dropped;
+    if (late)    *late = s_late_stage;
 }

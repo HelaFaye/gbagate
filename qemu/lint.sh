@@ -23,6 +23,12 @@ COMMON="-std=c11 -Wall -Wextra -Wshadow -Werror -fsyntax-only
 # Files the stubs cover. The rest of port/esp32s3 pulls in SPI, TinyUSB and
 # WiFi headers; stubbing those faithfully enough to be worth anything is a
 # bigger job than it sounds, and they are on the bench list anyway.
+#
+# gba_link_esp32s3.c (the PHY) and the GB-Link port files (usb_gblink_*,
+# gblink_hw_*, gblink_gbspi_*) touch the GPIO register block, RMT and
+# TinyUSB's class-driver API, which no stub here models. They are compiled for
+# real instead: tools/build_hw.sh builds every hardware image with ESP-IDF, and
+# that build is the check for them (see AUDIT.md, round 3).
 QEMU_FILES="pio/src/gate_app.c
             pio/src/link_source.c
             pio/src/tasks.c
@@ -42,7 +48,6 @@ HW_FILES="pio/src/gate_app.c
           port/esp32s3/buttons_esp32s3.c
           port/esp32s3/sd_esp32s3.c
           port/esp32s3/buttons_mcp.c
-          port/esp32s3/gba_link_esp32s3.c
           port/esp32s3/transport_esp32s3.c
           port/esp32s3/i2c_esp32s3.c
           port/esp32s3/mb_spi_esp32s3.c"
