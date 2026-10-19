@@ -13,3 +13,4 @@ rom/*.o
 rom/*.map
 rom/*.bak
 rom/tester.sav
+__pycache__/

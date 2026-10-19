@@ -20,9 +20,14 @@ set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/pio")
 add_compile_options(-I"${CMAKE_CURRENT_LIST_DIR}/pio/include" -I"${CMAKE_CURRENT_LIST_DIR}/pio/src")
 set(COMPONENTS src)
 
-# These images are always for the emulator: no pins, no USB-OTG. The component
-# CMakeLists reads GBAGATE_QEMU to swap the PHY/USB glue for the UART transport.
-set(GBAGATE_QEMU 1)
+# By default these images are for the emulator: no pins, no USB-OTG. The
+# component CMakeLists reads GBAGATE_QEMU to swap the PHY/USB glue for the UART
+# transport. tools/build_hw.sh passes -D GBAGATE_QEMU=0 to build the hardware
+# images with idf.py directly -- the same sources PlatformIO builds, without
+# needing PlatformIO's package registry.
+if(NOT DEFINED GBAGATE_QEMU)
+  set(GBAGATE_QEMU 1)
+endif()
 
 # Translate the variant into the compile-time macros the C sources expect,
 # mirroring the -D build_flags each qemu-<variant> env sets in platformio.ini.
@@ -34,10 +39,17 @@ elseif(VARIANT STREQUAL "gate")
   add_compile_definitions(VARIANT=VARIANT_GATE GBAGATE_VARIANT_NAME="gate" GBAGATE_HAS_CHIPDB=1)
 elseif(VARIANT STREQUAL "full")
   add_compile_definitions(VARIANT=VARIANT_FULL GBAGATE_VARIANT_NAME="full" GBAGATE_HAS_CHIPDB=1)
+elseif(VARIANT STREQUAL "mini")
+  add_compile_definitions(VARIANT=VARIANT_MINI GBAGATE_VARIANT_NAME="mini" GBAGATE_HAS_CHIPDB=1)
 else()
-  message(FATAL_ERROR "VARIANT must be link, gate or full (got '${VARIANT}')")
+  message(FATAL_ERROR "VARIANT must be link, gate, full or mini (got '${VARIANT}')")
 endif()
-add_compile_definitions(GBAGATE_QEMU=1)
+if(GBAGATE_QEMU)
+  add_compile_definitions(GBAGATE_QEMU=1)
+endif()
+if(DEFINED GBAGATE_BOARD AND GBAGATE_BOARD STREQUAL "supermini")
+  add_compile_definitions(BOARD_SUPERMINI=1)
+endif()
 
 # Which UART carries the framebuffer out and the keystrokes back
 # (port/esp32s3/st7735_qemu.c and input_qemu.c share one port).
