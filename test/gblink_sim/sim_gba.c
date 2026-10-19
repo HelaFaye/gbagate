@@ -71,6 +71,7 @@ static uint16_t s_queue[64][8];
 static int      s_q_head, s_q_count;
 static int      s_hs_seen;
 static int      s_connect_after = 3;
+static bool     s_close_out, s_close_in; /* READY_CLOSE_LINK seen each way */
 
 /* GB SPI replies. */
 static uint8_t s_gb_reply[4096];
@@ -89,6 +90,7 @@ static void reset_link(void) {
     s_crc_acc = 0;
     s_last_crc = HS_SLAVE; /* packetLayer's first crc is the handshake */
     s_hs_seen = 0;
+    s_close_out = s_close_in = false;
 }
 
 static void load_frame(void) {
@@ -129,10 +131,20 @@ static void gba_word_in(uint16_t out, uint16_t in) {
         s_crc_acc = 0;
     } else {
         s_crc_acc = (uint16_t)(s_crc_acc + out + in);
+        if (s_word_index == 1) {
+            if (out == 0x5FFF) s_close_out = true;
+            if (in == 0x5FFF)  s_close_in = true;
+        }
     }
     if (++s_word_index == 9) {
         s_word_index = 0;
         s_last_crc = s_crc_acc;
+        /* Like the game: once both sides have said READY_CLOSE_LINK the link
+         * is torn down and the next session starts from the handshake. */
+        if (s_close_out && s_close_in) {
+            reset_link();
+            return;
+        }
         load_frame();
     }
 }
@@ -269,23 +281,51 @@ void gb_link_transfer(const uint8_t *tx, uint8_t *rx, uint32_t len, uint32_t us_
  *
  * The Game Boy is the SPI master in printer mode: it drives SC and SI (our
  * input) and samples our SO on each rising edge. A thread plays that part at
- * the DMG's 8 kHz serial clock, MSB first. */
+ * a slower clock than the DMG's 8 kHz, MSB first: a host thread can be
+ * descheduled for longer than a real half-bit, which would read as a line
+ * error rather than the protocol fault a test is looking for. */
 
 static atomic_int s_pin_sc = 1, s_pin_si = 0, s_pin_so = 0;
+static atomic_int s_so_puts, s_si_reads;
+
+/* Lockstep with the firmware's own pin accesses: after each SC edge, wait
+ * (bounded) until gb.cpp has acted on it -- it drives SO once per low phase
+ * and reads SI once per high phase. On the board the loop runs undisturbed on
+ * core 1 and keeps up with the DMG; a host thread can be descheduled for
+ * longer than a half-bit, and the test would then be measuring the host
+ * scheduler instead of the protocol code. */
+static void wait_counter(atomic_int *c, int from) {
+    for (int i = 0; i < 20000 && atomic_load(c) == from; i++) sleep_ns(5000);
+}
 static uint8_t s_pr_tx[8192];
 static size_t  s_pr_len, s_pr_pos;
 static uint8_t s_pr_rx[8192];
 
+/* gb.cpp's printer timeouts are loop counts (10M idle, 2M mid-packet) sized
+ * for an RP2040, where one gpio_get() iteration is ~64 ns: 2M is ~128 ms. A
+ * host does the iteration in under a nanosecond, which shrinks the mid-packet
+ * timeout to ~1 ms and makes a scheduling hiccup abort a print. Charge each
+ * read roughly what the RP2040 pays, so the vendored constants mean here what
+ * they mean on the board. (The ESP32-S3 port calibrates the same way.) */
+static void rp2040_read_cost(void) {
+    int64_t t = zshim_now_us();
+    for (volatile int i = 0; i < 12; i++) { (void)t; }
+}
+
 bool gblink_pin_get(gblink_signal_t sig) {
+    rp2040_read_cost();
     switch (sig) {
     case GBLINK_SIG_SC: return atomic_load(&s_pin_sc);
-    case GBLINK_SIG_SI: return atomic_load(&s_pin_si);
+    case GBLINK_SIG_SI: atomic_fetch_add(&s_si_reads, 1); return atomic_load(&s_pin_si);
     default:            return true;
     }
 }
 
 void gblink_pin_put(gblink_signal_t sig, bool high) {
-    if (sig == GBLINK_SIG_SO) atomic_store(&s_pin_so, high);
+    if (sig == GBLINK_SIG_SO) {
+        atomic_store(&s_pin_so, high);
+        atomic_fetch_add(&s_so_puts, 1);
+    }
 }
 
 void gblink_pin_init(gblink_signal_t sig)            { (void)sig; }
@@ -304,11 +344,15 @@ static void *printer_thread(void *arg) {
         uint8_t in = 0;
         for (int b = 7; b >= 0; b--) {
             atomic_store(&s_pin_si, (byte >> b) & 1);
+            int puts = atomic_load(&s_so_puts);
             atomic_store(&s_pin_sc, 0);
             sleep_ns(61000);
+            wait_counter(&s_so_puts, puts);
+            int reads = atomic_load(&s_si_reads);
             atomic_store(&s_pin_sc, 1);
             in = (uint8_t)((in << 1) | (atomic_load(&s_pin_so) & 1));
             sleep_ns(61000);
+            wait_counter(&s_si_reads, reads);
         }
         pthread_mutex_lock(&s_mx);
         s_pr_rx[s_pr_pos] = in;

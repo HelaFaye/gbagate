@@ -47,13 +47,26 @@ DEPS_mbe2e     = rom_catalog.c gba_multiboot.c
 ARG_mbe2e      = rom/tester.gba
 DEPS_menu      = ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c ui_shell.c hw_caps.c chipgate.c
 DEPS_modes     = app_modes.c ui_shell.c hw_caps.c chipgate.c
+DEPS_frame     = gblink_frame.c
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame
 
-.PHONY: all strict lint clean chipdb
-all: $(addprefix run-,$(SUITES))
+.PHONY: all strict lint clean chipdb gblink gblink-asan
+all: $(addprefix run-,$(SUITES)) gblink
 	@./qemu/lint.sh
+
+# The GB-Link personality: GB-Link's own firmware (third_party/) on the
+# gbagate shim, driven end to end the way the GB-Link host apps drive it.
+gblink:
+	@$(MAKE) -s -C test/gblink_sim
+	@python3 -I test/gblink_sim/test_gblink.py | tail -1
+
+gblink-asan:
+	@$(MAKE) -s -C test/gblink_sim clean
+	@$(MAKE) -s -C test/gblink_sim SAN="-fsanitize=address,undefined -fno-omit-frame-pointer"
+	@ASAN_OPTIONS=detect_leaks=0 python3 -I test/gblink_sim/test_gblink.py | tail -1
+	@$(MAKE) -s -C test/gblink_sim clean
 
 $(BUILD):
 	@mkdir -p $(BUILD)

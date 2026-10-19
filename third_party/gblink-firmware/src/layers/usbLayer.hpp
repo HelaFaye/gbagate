@@ -93,6 +93,14 @@ public:
 
     bool configured() const { return m_configured; }
 
+    bool hasCommandHandler()
+    {
+        const unsigned key = irq_lock();
+        const bool has = m_command.handler != nullptr;
+        irq_unlock(key);
+        return has;
+    }
+
     // Called from gblink_usb_on_receive().
     void receive(uint8_t endpoint, std::span<const uint8_t> data)
     {

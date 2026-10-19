@@ -52,4 +52,12 @@ extern "C" void gblink_start(void)
     // Zephyr's main thread runs at priority 0, with the wrong-pin watchdog at
     // 12 below it; keep that ordering.
     zshim_thread_start("gblink", control_thread, 8192, 0);
+
+    // Control registers its command handler in its constructor, on that
+    // thread. Until then a command is dropped on the floor, so do not report
+    // the personality as started -- and so do not let USB enumerate -- before
+    // it can answer. Bounded, because a firmware that never registers must
+    // still boot far enough to say so.
+    for (int i = 0; i < 1000 && !UsbLayer::getInstance().hasCommandHandler(); i++)
+        k_sleep(K_MSEC(1));
 }

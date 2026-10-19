@@ -12,7 +12,11 @@ void UsbSection::establishConncection()
 
     sendLinkStatus(LinkStatus::HandshakeReceived);
 
-    while (!m_packetLayer.isHandshakeEnabled())
+    // gbagate (PATCHES.md P3): isHandshakeEnabled() means "the last word we
+    // sent was 0xB9A0". If ConnectLink lands before the transmit ISR has sent
+    // one, the layer goes straight from 0xD15E to 0x8FFF and this loop never
+    // ends. 0x8FFF going out implies the handshake was enabled, so accept it.
+    while (!m_packetLayer.isHandshakeEnabled() && !m_packetLayer.isConnectSent())
     { 
         k_sleep(K_MSEC(50));
         if (m_cancel) return; 
