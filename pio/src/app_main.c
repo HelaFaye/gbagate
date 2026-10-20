@@ -101,6 +101,10 @@ void app_main(void) {
          * runs, and its SD interrupt uses the ISR service that one installed. */
         extern void rfu_link_start(void);
         rfu_link_start();
+        /* The bridge UART to a companion such as GB-Link-Switch-LDN
+         * (BOARD_HAS_BRIDGE; a no-op without it). */
+        extern void bridge_uart_start(void);
+        bridge_uart_start();
     }
 
     /*

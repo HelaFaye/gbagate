@@ -9,6 +9,8 @@
  *   kind 'U'  a vendor-endpoint transfer. To the device: ep 0x01 or 0x02.
  *             From the device: ep 0x81 (status) or 0x82 (data).
  *   kind 'C'  CDC-ACM bytes, either way; ep is 0.
+ *   kind 'B'  bridge UART bytes (a companion MCU, as GB-Link-Switch-LDN),
+ *             either way; ep is 0.
  *   kind 'E'  an event from the simulator (ep = event code), see sim.h.
  *   kind 'G'  a GBA-model control record to the simulator, see sim_gba.c.
  *
@@ -51,6 +53,12 @@ bool gblink_usb_write(uint8_t ep_in, const uint8_t *data, size_t len, uint32_t t
 
 bool gblink_cdc_write(const uint8_t *data, size_t len) {
     sim_emit('C', 0, data, len);
+    return true;
+}
+
+/* The bridge UART to a companion MCU (GB-Link-Switch-LDN): raw bytes, 'B'. */
+bool gblink_bridge_write(const uint8_t *data, size_t len) {
+    sim_emit('B', 0, data, len);
     return true;
 }
 

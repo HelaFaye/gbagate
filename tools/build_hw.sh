@@ -17,7 +17,10 @@ set -eu
 VARIANT="${1:-gate}"
 BOARD="${BOARD:-devkit}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD="$ROOT/build/hw-$VARIANT-$BOARD"
+# Overrides get their own build directory: CMake caches -D values, so a
+# BOARD_HAS_* given once would otherwise stick to every later build.
+OVR=$(env | sed -n 's/^BOARD_HAS_\([A-Z_]*\)=\(.*\)/\1\2/p' | sort | tr 'A-Z\n' 'a-z-' | sed 's/-$//')
+BUILD="$ROOT/build/hw-$VARIANT-$BOARD${OVR:+-$OVR}"
 
 case "$VARIANT" in link|gate|full|mini) ;; *)
     echo "usage: $0 {link|gate|full|mini}" >&2; exit 1 ;; esac
@@ -41,6 +44,8 @@ DEFAULTS="$ROOT/pio/sdkconfig.defaults"
 
 EXTRA=""
 [ "$BOARD" = supermini ] && EXTRA="-D BUTTONS_ON_EXPANDER=1 -D GBAGATE_BOARD=supermini"
+# Board overrides from the environment, e.g. BOARD_HAS_BRIDGE=1 tools/build_hw.sh gate
+for f in $(env | sed -n 's/^\(BOARD_HAS_[A-Z_]*\)=.*/\1/p'); do EXTRA="$EXTRA -D $f=${!f}"; done
 
 idf.py -B "$BUILD" \
     -D SDKCONFIG="$BUILD/sdkconfig" \

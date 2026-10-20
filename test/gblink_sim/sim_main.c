@@ -73,6 +73,7 @@ int main(int argc, char **argv) {
             else gblink_usb_on_receive(hdr[1], buf, len);
             break;
         case 'C': gblink_cdc_on_receive(buf, len); break;
+        case 'B': gblink_bridge_on_receive(buf, len); break;
         case 'G': sim_gba_control(buf, len); break;
         case 'P': gblink_peer_radio_rx(buf, len); break;
         case 'S':

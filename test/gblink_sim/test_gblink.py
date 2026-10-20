@@ -642,6 +642,38 @@ def chip_gate_upstream_mode():
         s.close()
 
 
+@test
+def bridge_uart_companion():
+    """GB-Link 2.2.7's bridge UART, the way GB-Link-Switch-LDN uses it
+    (firmware/common/pico_link.c): 'GB' frames on a second serial port.
+    SetMode(rfuWireless) over the bridge enters mode 0x07 and the replies come
+    back on the bridge, not on USB; a USB host's GetFirmwareInfo afterwards is
+    answered on USB again."""
+    s = Sim()
+    try:
+        s.bridge_send(0, [0x0F])
+        end = time.time() + 2
+        while time.time() < end and not any(ch == 1 and p[:1] == b'\x0f' for ch, p in s.bridge_frames):
+            time.sleep(0.02)
+        info = [p for ch, p in s.bridge_frames if ch == 1 and p[:1] == b'\x0f']
+        check(info and tuple(info[0][1:4]) == (2, 2, 7), 'GetFirmwareInfo answered on the bridge: %s' % info)
+        usb_before = len(s.data)
+        s.bridge_send(0, [0x00, 0x07, 0x00])
+        end = time.time() + 3
+        while time.time() < end and not any(ch == 2 and p == bytes([0x02, 0xFF]) for ch, p in s.bridge_frames):
+            time.sleep(0.02)
+        check(any(ch == 2 and p == bytes([0x02, 0xFF]) for ch, p in s.bridge_frames), 'AwaitMode on the bridge')
+        time.sleep(0.6)
+        check(any(ch == 1 and p[:1] == b'\x0e' and len(p) == 16 for ch, p in s.bridge_frames),
+              "the wireless mode's telemetry goes to the companion")
+        check(len(s.data) == usb_before, 'nothing on USB meanwhile')
+        s.cmd(0x0F)
+        d = s.wait_data(lambda d: d[0] == 0x0F, start=usb_before)
+        check(tuple(d[1:4]) == (2, 2, 7), 'a USB host is answered on USB')
+    finally:
+        s.close()
+
+
 def main(argv):
     pick = argv[argv.index('-k') + 1] if '-k' in argv else ''
     fails = 0

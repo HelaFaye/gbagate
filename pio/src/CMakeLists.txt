@@ -118,7 +118,8 @@ else()
         ../../port/esp32s3/usb_gblink_esp32s3.c
         ../../port/esp32s3/gblink_hw_esp32s3.c
         ../../port/esp32s3/gblink_gbspi_esp32s3.c
-        ../../port/esp32s3/rfu_link_esp32s3.c)
+        ../../port/esp32s3/rfu_link_esp32s3.c
+        ../../port/esp32s3/bridge_uart_esp32s3.c)
     if(VARIANT STREQUAL "gate" OR VARIANT STREQUAL "full")
         list(APPEND SRCS ../../port/esp32s3/usb_msc_esp32s3.c)
     endif()

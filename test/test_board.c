@@ -98,6 +98,7 @@ static const claim_t k_devkit[] = {
     { PIN_IR_TX_GPIO, "IR TX" }, { PIN_IR_RX_GPIO, "IR RX" },
     { PIN_LINK_SD_ALT, "link SD (GBC cable path)" },
     { PIN_RGB_LED, "RGB LED" },
+    { PIN_BRIDGE_TX, "bridge UART TX" }, { PIN_BRIDGE_RX, "bridge UART RX" },
 };
 
 /* The Supermini map, checked in a second translation unit so both sets of

@@ -67,6 +67,20 @@
 #endif
 
 /*
+ * GB-Link's bridge UART (2.2.7): the 'GB'-framed transport to a companion MCU,
+ * GP8/GP9 at 921600 on the RP2040 board. With it, a GB-Link-Switch-LDN board
+ * wired here drives the Wireless Adapter mode exactly as it drives an RP2040
+ * GB-Link -- FireRed/LeafGreen against a Switch. Off unless built with
+ * -DBOARD_HAS_BRIDGE=1, so an unwired board does not listen on a floating pin.
+ * Cross the pair: our TX to the companion's RX.
+ */
+#define PIN_BRIDGE_TX 47
+#define PIN_BRIDGE_RX 2
+#ifndef BOARD_HAS_BRIDGE
+#define BOARD_HAS_BRIDGE 0
+#endif
+
+/*
  * Status LED for the GB-Link personality (mode colours, the 0x42/0x46
  * commands). The DevKitC-1 v1.0 has its WS2812 on GPIO 48. v1.1 moved it to
  * 38, which this map gives to the Start button, so on a v1.1 board the LED
@@ -171,6 +185,9 @@
 #define PIN_RGB_LED (-1)
 #define BOARD_HAS_RGB_LED 0
 #define BOARD_HAS_VCC_SWITCH 0
+#define PIN_BRIDGE_TX (-1)       /* no pins left: see below */
+#define PIN_BRIDGE_RX (-1)
+#define BOARD_HAS_BRIDGE 0
 
 #define BOARD_BUTTONS_ON_EXPANDER 1
 

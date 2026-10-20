@@ -30,6 +30,8 @@ class Sim:
         self.data = []        # bytes objects from the data IN endpoint / channel 1
         self.events = []      # (code, bytes)
         self.cdc = bytearray()
+        self.bridge = bytearray()   # raw bytes on the bridge UART
+        self.bridge_frames = []     # (channel, payload) parsed from them
         self.serial = serial
         self.on_radio = None   # callable(bytes): datagrams the peer engine sends
         self.t = threading.Thread(target=self._reader, daemon=True)
@@ -54,6 +56,9 @@ class Sim:
                 elif kind == ord('C'):
                     self.cdc += body
                     self._parse_cdc()
+                elif kind == ord('B'):
+                    self.bridge += body
+                    self._parse_bridge()
                 elif kind == ord('P'):
                     if self.on_radio:
                         self.on_radio(body)
@@ -76,6 +81,22 @@ class Sim:
                 self.status.append(body[0] | (body[1] << 8))
             elif ch == 1:
                 self.data.append(body)
+
+    def _parse_bridge(self):
+        while True:
+            i = self.bridge.find(b'GB')
+            if i < 0 or len(self.bridge) < i + 5:
+                return
+            n = self.bridge[i + 3] | (self.bridge[i + 4] << 8)
+            if len(self.bridge) < i + 5 + n:
+                return
+            self.bridge_frames.append((self.bridge[i + 2], bytes(self.bridge[i + 5:i + 5 + n])))
+            del self.bridge[:i + 5 + n]
+
+    def bridge_send(self, channel, payload):
+        """A 'GB' frame on the bridge UART, as a companion MCU sends one."""
+        payload = bytes(payload)
+        self._send('B', 0, b'GB' + bytes([channel]) + struct.pack('<H', len(payload)) + payload)
 
     def _send(self, kind, ep, body=b''):
         self.p.stdin.write(struct.pack('<BBH', ord(kind), ep, len(body)) + bytes(body))
