@@ -1,5 +1,46 @@
 # Audit
 
+## Round 4 — 20 October 2026: review before the pull request
+
+**Scope:** everything on the branch: the hardware code no test runs, the
+protocol core and the wireless cable, the vendored firmware and its patches,
+the tests, CI and the docs.
+**Method:** three independent code reviews (hardware, protocol core, tests),
+each finding confirmed by reading the code path or reproducing it, then a fix
+with a test that fails without it wherever a host test can reach the code;
+every suite run from a fresh clone; flaky tests looped until the cause was
+found.
+
+**Result: 1 blocker and 14 other defects fixed, plus 1 in GB-Link's firmware
+(P9).** Nothing has run on hardware.
+
+| # | Where | Defect | Fix, and how it is checked |
+|---|---|---|---|
+| 1 | `rfu_link_esp32s3.c` | **Blocker.** As clock master the adapter task spun on `taskYIELD()` at top priority on core 1, above every GB-Link thread: the section that posts the delivery never ran again | sleeps on its notification. FreeRTOS scheduling; needs a board to see run |
+| 2 | `rfu_link_esp32s3.c` | a role change posted to the task while the caller held `irq_lock`, which the task takes per word: deadlock | the caller switches SC itself; the task only drops TX. Inspection |
+| 3 | `rfu_link_esp32s3.c` | a watch begun mid-word (ID exchange) delivered a misframed word, and every later one at the same offset | 20 us without an edge mid-word drops the capture. Inspection |
+| 4 | `sdkconfig.defaults` | TinyUSB's task was on core 1, under the link tasks | core 0. The built sdkconfig |
+| 5 | `app_main.c` | Link: Wireless did nothing with USB set to drive | GB-Link's firmware always starts. Inspection |
+| 6 | `gbl_peer.c` | a peer restart kept the old roles: both boards could be master for good | roles drawn again. `test_peer.c` |
+| 7 | `peer_espnow_esp32s3.c` | the radio locked to the first 'GP' sender, so a board in another mode blocked pairing | locks to a sender gbl_peer accepted. `test_peer.c` |
+| 8 | `gbl_peer.c` | a full reliable queue dropped a message silently | the session restarts. `test_peer.c` |
+| 9 | `peer_glue.cpp` | start/stop raced the peer thread | carried out on that thread. Inspection |
+| 10 | transport (P8) | a USB host could draw the cable's replies or cancel its session | refused while the cable runs. `wireless_cable_refuses_a_usb_host` |
+| 11 | `usb_gblink_esp32s3.c` | an IN in flight could be overwritten; TinyUSB's task waited on itself; CDC could send part of a frame | fixed. Inspection |
+| 12 | `gblink_hw_esp32s3.c` | the LED encoded from a dead stack buffer, with no reset gap | static buffer, spaced frames. Inspection |
+| 13 | `gblink_bench.py` | the `led` step sent four bytes and did nothing, but said ok | five bytes. `bench_led` |
+| 14 | tests | UBSan reports and sanitizer aborts passed; skips counted as passes; upstream unpinned; assertions that could not fail; fixed sleeps | see the commit; CI sets `GBLINK_NO_SKIP` |
+| 15 | `sim_rfu.c` | the RFU flake (~1 in 7): the adapter took the clock before the simulated GBA ran its serial handler | waits for it. 0/70 failing, was 14/80 |
+| P9 | `pokemon.cpp` (upstream) | a trade slot index from the link word, unchecked: out of bounds | bounded; backport 0007. `trade_emu_party_index_bounded` |
+
+**Open, for a board:** the Multi-Play child's ISR latency, the adapter's
+response time at 2 MHz, and the DevKitC v1.1 LED (GPIO 38, the Start button).
+The section takes the clock 150 us after the GBA's last word, as upstream
+does; that relies on the game servicing its serial IRQ within that time.
+**Open, for the owner:** the repository has no top-level licence. The
+hardware images include GB-Link's GPL-3.0 firmware, so they are GPL-3.0 as a
+whole.
+
 ## Round 3 — 20 October 2026: the GB-Link adapter
 
 **Scope:** the GB-Link personality. That is GB-Link's vendored firmware
