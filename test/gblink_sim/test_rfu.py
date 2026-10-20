@@ -378,6 +378,68 @@ def rfu_data_both_ways():
         b.close()
 
 
+def game_api(sim, phase_ok, timeout):
+    """The HOST/JOIN scenario's events (rfu_game.cpp, kind 8) once it ends."""
+    end = time.time() + timeout
+    while time.time() < end:
+        with sim.cv:
+            evs = [e for c, e in sim.events if c == EV_RFU and e[0] in (0, 8)]
+        if any(e[0] == 0 for e in evs):
+            raise Skip('librfu not built in (test/gblink_sim/fetch_librfu.sh)')
+        if any(e[1] in (5, 0xFF) for e in evs):
+            return evs
+        time.sleep(0.1)
+    raise AssertionError('scenario did not finish: %s' % [e.hex() for e in evs])
+
+
+def game_api_session(a, b, frames=120):
+    """librfu's game API (librfu_rfu.c) on both GBAs, the way FireRed's link
+    code drives it: rfu_initializeAPI, checkID, reset, configure; the host
+    searches for a child, the other searches for the host's game name and
+    connects; then `frames` frames of UNI data each way through recvData /
+    readySendData / sendData. Returns (host result, join result)."""
+    gname = b'GBAGATE TEST\0'
+    a.gba(0x30, *gname, *b'BROCK\0\0\0', *struct.pack('<H', frames))
+    time.sleep(0.3)
+    b.gba(0x31, *gname, *struct.pack('<H', frames))
+    ha = game_api(a, None, 40)
+    hb = game_api(b, None, 40)
+    for name, evs in (('host', ha), ('join', hb)):
+        failed = [e for e in evs if e[1] == 0xFF]
+        check(not failed, '%s failed at step %d (err %#x)' % (
+            name, failed[0][2], failed[0][3] | (failed[0][4] << 8)) if failed else '')
+    found = [e for e in hb if e[1] == 3][0]
+    check(found[4:16] == gname[:12], 'the joining game found the host room by name: %r' % found[4:17])
+    check(found[17:22] == b'BROCK', 'with the host user name: %r' % found[17:25])
+    check(any(e[1] == 2 for e in ha), 'the host saw a child join')
+    res = []
+    for evs in (ha, hb):
+        n, good, bad = struct.unpack('<3H', [e for e in evs if e[1] == 5][0][2:8])
+        res.append((n, good, bad))
+    return res
+
+
+@test
+def rfu_game_api_host_and_join():
+    """librfu's game-facing layer over two adapters and a relay: room found by
+    name, connected, and UNI frames delivered in order both ways."""
+    a, b = Sim(), Sim()
+    relay = None
+    try:
+        enter_wireless(a)
+        enter_wireless(b)
+        relay = Relay(a, b)
+        (n, hg, hbad), (_, jg, jbad) = game_api_session(a, b)
+        check(hbad == 0 and jbad == 0, 'no frame out of order or foreign: host %d, join %d' % (hbad, jbad))
+        check(hg >= n * 9 // 10 and jg >= n * 9 // 10,
+              'frames delivered each way: host got %d/%d, join %d/%d' % (hg, n, jg, n))
+    finally:
+        if relay:
+            relay.close()
+        a.close()
+        b.close()
+
+
 def main(argv):
     pick = argv[argv.index('-k') + 1] if '-k' in argv else ''
     fails = skips = ran = 0

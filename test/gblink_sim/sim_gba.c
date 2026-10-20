@@ -25,7 +25,7 @@
  *   0x06 0|1          GBA cable (SI grounded) or GBC cable (SI floats high);
  *                     also puts the GBA's SD on the matching path
  *   0x07 0|1          SD on the alternate path (wrong-pin scenarios)
- *   0x20-0x2F         the wireless adapter's game (rfu_game.c)
+ *   0x20-0x3F         the wireless adapter's game (rfu_game.cpp)
  */
 #include <pthread.h>
 #include <stdatomic.h>
@@ -400,7 +400,7 @@ static void *printer_thread(void *arg) {
 
 void sim_gba_control(const uint8_t *d, size_t len) {
     if (len == 0) return;
-    if ((d[0] & 0xF0) == 0x20) {       /* the wireless adapter's game */
+    if (d[0] >= 0x20 && d[0] <= 0x3F) { /* the wireless adapter's game */
         sim_rfu_game_control(d, len);
         return;
     }

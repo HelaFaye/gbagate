@@ -215,6 +215,28 @@ def wireless_adapter_over_the_cable():
         b.close()
 
 
+@test
+def wireless_adapter_game_api_over_the_cable():
+    """The same with librfu's game-facing layer on both GBAs (test_rfu.py
+    game_api_session): FireRed's sequence, over the air."""
+    import test_rfu as T
+    a, b = Sim(), Sim()
+    Air(a, b)
+    try:
+        a.start_peer(0x90000000, 0x07, 0)
+        b.start_peer(0x10000000, 0x07, 0)
+        wait_peer_status(a, ST['LinkConnected'], 10)
+        wait_peer_status(b, ST['LinkConnected'], 10)
+        (n, hg, hbad), (_, jg, jbad) = T.game_api_session(a, b)
+        check(hbad == 0 and jbad == 0, 'nothing out of order: %d %d' % (hbad, jbad))
+        check(hg >= n * 9 // 10 and jg >= n * 9 // 10, 'delivered: host %d/%d, join %d/%d' % (hg, n, jg, n))
+    except T.Skip as e:
+        print('  (skipped: %s)' % e)
+    finally:
+        a.close()
+        b.close()
+
+
 def main(argv):
     pick = argv[argv.index('-k') + 1] if '-k' in argv else ''
     fails = ran = 0

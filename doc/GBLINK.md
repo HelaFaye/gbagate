@@ -91,7 +91,9 @@ The simulator models the GBA's serial port, timers and interrupts
 model as the game: the STWI command layer, the SIO interrupt handler and the
 Sio32ID exchange that FireRed, LeafGreen and Emerald link in. The tests fetch
 librfu from pret/pokefirered at a pinned commit (`fetch_librfu.sh`) and do not
-redistribute it. Without it, these tests skip.
+redistribute it. `port_librfu.py` makes the few mechanical edits a 64-bit
+host needs (each must match exactly, or the build stops). Without librfu,
+these tests skip.
 
 - `test_rfu.py`:
   - checkID converges on 0x8001 against the adapter's ID dance;
@@ -100,6 +102,12 @@ redistribute it. Without it, these tests skip.
   - MS_Change hands the clock to the adapter, which hands it back;
   - two adapters joined only by their RFU1 streams host a room, find it,
     connect, and pass data both ways.
+  - librfu's game-facing layer too (`librfu_rfu.c`, driven as FireRed's
+    `AgbRfu_LinkManager.c` drives it): one GBA hosts, the other finds the
+    room by name, connects, and both pass 120 frames of UNI data. For this
+    the model dispatches interrupts the way FireRed's `IntrMain` does
+    (prioritised, nested), since librfu issues commands from inside its
+    serial interrupt.
 - `test_peer.py`: the same, between two boards over the ESP-NOW cable.
 - `test_rfu_netplay.mjs`: the same, with GB-Link's netplay bridge engine at
   both ends of a RetroArch netplay session.

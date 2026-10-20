@@ -31,7 +31,7 @@ enum {
 };
 uint32_t sim_rfu_counter(int which);
 
-/* rfu_game.c: 'G' control ops 0x20-0x2F. */
+/* rfu_game.cpp: 'G' control ops 0x20-0x3F. */
 void sim_rfu_game_init(void);
 void sim_rfu_game_control(const uint8_t *data, size_t len);
 #ifdef __cplusplus

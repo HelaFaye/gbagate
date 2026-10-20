@@ -205,7 +205,7 @@ static void sd_update(int64_t now) {
  * after the write that enabled it, as on the GBA. */
 static void irq_check(void) {
     if (s_cpu_set && (*IO16(R_IME) & 1) && (atomic_load(&s_if) & *IO16(R_IE)) &&
-        !atomic_load(&s_in_irq) && !atomic_exchange(&s_irq_sent, 1)) {
+        !atomic_exchange(&s_irq_sent, 1)) {
         pthread_kill(s_cpu, SIGUSR1);
     }
 }
@@ -230,10 +230,12 @@ uint32_t sim_gba_io_read(uintptr_t addr, unsigned size, uint32_t stored) {
     sigset_t old;
     model_lock(&old);
     uint32_t v = stored;
-    if (off >= R_TM0CNT && off < R_TM0CNT + 16 && (off & 3) == 0 && size == 2) {
+    if (off >= R_TM0CNT && off < R_TM0CNT + 16 && (off & 3) == 0 && (size == 2 || size == 4)) {
+        /* L reads the count; a 32-bit read is the count with H above it. */
         const int n = (int)(off - R_TM0CNT) / 4;
         tm_advance(n, now_ns());
         v = (uint16_t)s_tm[n].base_count;
+        if (size == 4) v |= (uint32_t)s_tm[n].ctl << 16;
     } else if (off == R_SIOCNT) {
         v = (*IO16(R_SIOCNT) & ~CNT_SI) | (adapter_si() ? CNT_SI : 0);
         if (size == 1) v &= 0xFF;
@@ -249,7 +251,13 @@ void sim_gba_io_write(uintptr_t addr, unsigned size, uint32_t value) {
     const int64_t now = now_ns();
     sigset_t old;
     model_lock(&old);
-    if (off >= R_TM0CNT && off < R_TM0CNT + 16 && size == 2) {
+    if (off >= R_TM0CNT && off < R_TM0CNT + 16 && (off & 3) == 0 && size == 4) {
+        /* A 32-bit write sets the reload and the control together. */
+        const int n = (int)(off - R_TM0CNT) / 4;
+        s_tm[n].reload = (uint16_t)value;
+        tm_write_ctl(n, (uint16_t)(value >> 16), now);
+        pthread_cond_signal(&s_hw_cv);
+    } else if (off >= R_TM0CNT && off < R_TM0CNT + 16 && size == 2) {
         const int n = (int)(off - R_TM0CNT) / 4;
         if (off & 2) tm_write_ctl(n, (uint16_t)value, now);
         else s_tm[n].reload = (uint16_t)value;
@@ -339,20 +347,60 @@ static void *hw_thread(void *arg) {
     return NULL;
 }
 
-/* The IRQ, on the game's thread. */
+/* The IRQ, on the game's thread, dispatched as FireRed's IntrMain does it
+ * (pokefirered src/crt0.s): the highest-priority pending interrupt only, its
+ * IF bit acknowledged, and -- while its handler runs -- IE narrowed to the
+ * interrupts allowed to nest (VCount, HBlank, serial, timer 3, STWI's timer,
+ * Game Pak) minus the one being handled, with IRQs enabled again. librfu
+ * depends on that: a REQ callback inside the serial handler sends the next
+ * command (STWI_start_Command sets serial back in IE) and waits for it,
+ * and only nested serial interrupts can finish it. IE and IME are restored
+ * on the way out. The signal is not deferred (SA_NODEFER), so a nested IRQ
+ * is a nested signal; it is blocked only while this code edits the
+ * registers. */
+enum { IRQ_VBLANK = 1 << 0, IRQ_HBLANK = 1 << 1, IRQ_VCOUNT = 1 << 2, IRQ_GAMEPAK = 1 << 13 };
+static const uint16_t k_irq_priority[] = {
+    IRQ_VCOUNT, IRQ_SERIAL, IRQ_TIMER0 << 3, IRQ_HBLANK, IRQ_VBLANK,
+    IRQ_TIMER0, IRQ_TIMER0 << 1, IRQ_TIMER0 << 2,
+};
+#define IRQ_NESTABLE (IRQ_VCOUNT | IRQ_HBLANK | IRQ_SERIAL | (IRQ_TIMER0 << 3) | IRQ_GAMEPAK)
+
 static void irq_handler(int sig) {
     (void)sig;
-    atomic_store(&s_in_irq, 1);
+    sigset_t block, old;
+    sigemptyset(&block);
+    sigaddset(&block, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &block, &old);
     atomic_store(&s_irq_sent, 0);
+    uint16_t bit = 0;
     if (*IO16(R_IME) & 1) {
-        const unsigned f = atomic_load(&s_if) & *IO16(R_IE);
-        atomic_fetch_and(&s_if, ~f);
-        if ((f & IRQ_SERIAL) && s_irq_serial) s_irq_serial();
-        for (int n = 0; n < 4; n++)
-            if ((f & (IRQ_TIMER0 << n)) && s_irq_timer[n]) s_irq_timer[n]();
+        const unsigned pending = atomic_load(&s_if) & *IO16(R_IE);
+        for (size_t k = 0; k < sizeof k_irq_priority / sizeof k_irq_priority[0] && !bit; k++)
+            if (pending & k_irq_priority[k]) bit = k_irq_priority[k];
     }
-    atomic_store(&s_in_irq, 0);
-    irq_check();   /* one that came due during this one is taken next */
+    if (!bit) {
+        pthread_sigmask(SIG_SETMASK, &old, NULL);
+        return;
+    }
+    atomic_fetch_and(&s_if, ~(unsigned)bit);
+    const uint16_t ie = *IO16(R_IE), ime = *IO16(R_IME);
+    *IO16(R_IE) = (uint16_t)(ie & ~bit & IRQ_NESTABLE);
+    *IO16(R_IME) = 1;
+    atomic_fetch_add(&s_in_irq, 1);
+    irq_check();                                  /* one that may nest now */
+    pthread_sigmask(SIG_SETMASK, &old, NULL);
+
+    if (bit == IRQ_SERIAL) { if (s_irq_serial) s_irq_serial(); }
+    else
+        for (int n = 0; n < 4; n++)
+            if (bit == (IRQ_TIMER0 << n) && s_irq_timer[n]) s_irq_timer[n]();
+
+    pthread_sigmask(SIG_BLOCK, &block, NULL);
+    atomic_fetch_sub(&s_in_irq, 1);
+    *IO16(R_IE) = ie;
+    *IO16(R_IME) = ime;
+    irq_check();                                  /* one that came due meanwhile */
+    pthread_sigmask(SIG_SETMASK, &old, NULL);
 }
 
 void sim_gba_set_irq(sim_gba_irq_t serial, int timer, sim_gba_irq_t timer_fn) {
@@ -364,11 +412,16 @@ void sim_gba_attach_cpu(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = irq_handler;
-    sa.sa_flags = SA_RESTART;
+    sa.sa_flags = SA_RESTART | SA_NODEFER;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGUSR1, &sa, NULL);
     s_cpu = pthread_self();
     s_cpu_set = true;
+}
+
+void sim_gba_cpufill16(uint16_t value, void *dst, size_t size) {
+    uint16_t *p = dst;
+    for (size_t i = 0; i < size / 2; i++) p[i] = value;
 }
 
 void sim_gba_cpufill32(uint32_t value, void *dst, size_t size) {

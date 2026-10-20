@@ -4,6 +4,7 @@
 # no source changes against port/gblink's Zephyr shim, so this is GB-Link's
 # own firmware logic running under test, not a re-implementation of it.
 ROOT    := ../..
+.DEFAULT_GOAL := all
 V       := $(ROOT)/third_party/gblink-firmware/src
 P       := $(ROOT)/port/gblink
 OUT     ?= $(ROOT)/build/gblink_sim
@@ -29,13 +30,12 @@ SSRC_CPP := rfu_game.cpp
 
 # pret's librfu, when fetch_librfu.sh has put it here: the wireless adapter
 # tests' game. Built as C++ against gba_shim/ (whose register types are the
-# hardware model's hooks) from copies with two mechanical changes: the three
-# naked "bx rN" trampolines (ARM assembly) become the calls they make, and the
-# volatile error field passed through callbackM's varargs is read first.
+# hardware model's hooks) from copies port_librfu.py makes, with the few
+# mechanical edits it lists; everything that talks to the adapter is pret's.
 LIBRFU  ?= $(ROOT)/build/ref/pokefirered
 GAME_FLAGS := -Igba_shim
-ifneq ($(wildcard $(LIBRFU)/src/librfu_stwi.c),)
-LIBRFU_SRC := $(OUT)/librfu/librfu_stwi.cpp $(OUT)/librfu/librfu_intr.cpp $(OUT)/librfu/librfu_sio32id.cpp
+ifneq ($(wildcard $(LIBRFU)/src/librfu_rfu.c),)
+LIBRFU_SRC := $(OUT)/librfu/librfu_stwi.cpp $(OUT)/librfu/librfu_intr.cpp $(OUT)/librfu/librfu_sio32id.cpp $(OUT)/librfu/librfu_rfu.cpp
 GAME_FLAGS += -DSIM_LIBRFU -I$(LIBRFU)/include -D__STDC_VERSION__=202311L
 endif
 
@@ -45,9 +45,8 @@ $(OUT)/usbdesc_dump: usbdesc_dump.c $(ROOT)/src/gblink_usbdesc.c $(ROOT)/src/gbl
 	@mkdir -p $(OUT)
 	@$(CC) -std=c11 $(WARN) -I$(ROOT)/src -o $@ usbdesc_dump.c $(ROOT)/src/gblink_usbdesc.c
 
-$(OUT)/librfu/%.cpp: $(LIBRFU)/src/%.c
-	@mkdir -p $(OUT)/librfu
-	@perl -0pe 's/asm\("bx r2"\);/callbackM(reqCommandId, error);/; s/asm\("bx r1"\);/callbackS(reqCommandId);/; s/asm\("bx r0"\);/callbackId();/; s/(callbackM\([^;]*?)gSTWIStatus->error/$$1(int)gSTWIStatus->error/g' $< > $@
+$(LIBRFU_SRC) &: $(wildcard $(LIBRFU)/src/librfu_*.c) port_librfu.py
+	@python3 -I port_librfu.py $(LIBRFU)/src $(OUT)/librfu
 
 $(OUT)/gblink_sim: $(VSRC_CPP) $(VSRC_C) $(PSRC_CPP) $(PSRC_C) $(SSRC_C) $(SSRC_CPP) $(LIBRFU_SRC) $(wildcard *.h) $(wildcard gba_shim/*.h) $(wildcard $(P)/*.h) $(wildcard $(ROOT)/src/*.h) $(wildcard $(V)/*.hpp $(V)/*/*.hpp $(V)/*/*.h)
 	@mkdir -p $(OUT)/obj

@@ -90,6 +90,7 @@ extern uint8_t gba_io[0x400];
 #define REG_ADDR_TMCNT_H  (REG_BASE + 0x102)
 #define REG_TMCNT_L(n)    (*(vu16 *)(REG_ADDR_TMCNT_L + (n) * 4))
 #define REG_TMCNT_H(n)    (*(vu16 *)(REG_ADDR_TMCNT_H + (n) * 4))
+#define REG_TMCNT(n)      (*(vu32 *)(REG_ADDR_TMCNT_L + (n) * 4))   /* L | H << 16 */
 #define REG_TM0CNT_L      REG_TMCNT_L(0)
 #define REG_TM0CNT_H      REG_TMCNT_H(0)
 #define REG_SIODATA32     (*(vu32 *)(REG_BASE + 0x120))
@@ -109,6 +110,7 @@ extern uint8_t gba_io[0x400];
 #define SIO_ENABLE         0x0080  /* start / busy                         */
 #define SIO_MULTI_BUSY     0x0080
 #define SIO_32BIT_MODE     0x1000
+#define SIO_MULTI_MODE     0x2000
 #define SIO_INTR_ENABLE    0x4000
 
 #define TIMER_1CLK         0x00
@@ -136,5 +138,12 @@ void sim_gba_cpufill32(u32 value, void *dst, size_t size);
 #define CpuFill32(value, dst, size) sim_gba_cpufill32((value), (dst), (size))
 #define DmaCopy16(ch, src, dst, size) memcpy((dst), (src), (size))
 #define CpuCopy32(src, dst, size) memcpy((dst), (src), (size))
+#define CpuCopy16(src, dst, size) memcpy((dst), (src), (size))
+#ifdef __cplusplus
+extern "C"
+#endif
+void sim_gba_cpufill16(u16 value, void *dst, size_t size);
+#define CpuFill16(value, dst, size) sim_gba_cpufill16((value), (dst), (size))
+#define Div(a, b) ((s32)(a) / (s32)(b))   /* the BIOS's SWI 6 */
 
 #endif
