@@ -556,6 +556,15 @@ def trade_emu_party_index_bounded():
     check(r.returncode == 0, 'party_check: %s%s' % (r.stdout, r.stderr[-800:]))
 
 
+@test
+def link_core_quiet_once_disabled():
+    """A word the PHY finishes after link_changeMode(DISABLED) must not reach
+    the packet layer, whose section is gone (test_link_core.c, alone)."""
+    exe = os.path.join(os.path.dirname(SIM), 'link_core_check')
+    r = subprocess.run([exe], capture_output=True, text=True, timeout=30)
+    check(r.returncode == 0, 'link_core_check: %s%s' % (r.stdout, r.stderr[-800:]))
+
+
 # ---- gbagate extensions (src/gbx_proto.h) ------------------------------------------
 
 MMBN = 4

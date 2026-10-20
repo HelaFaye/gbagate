@@ -39,7 +39,7 @@ LIBRFU_SRC := $(OUT)/librfu/librfu_stwi.cpp $(OUT)/librfu/librfu_intr.cpp $(OUT)
 GAME_FLAGS += -DSIM_LIBRFU -I$(LIBRFU)/include -D__STDC_VERSION__=202311L
 endif
 
-all: $(OUT)/gblink_sim $(OUT)/usbdesc_dump $(OUT)/party_check
+all: $(OUT)/gblink_sim $(OUT)/usbdesc_dump $(OUT)/party_check $(OUT)/link_core_check
 
 # The flags the simulator was built with: a change (SAN, CFLAGS) rebuilds it,
 # so a sanitized build is never reused as a plain one or the other way round.
@@ -48,6 +48,11 @@ $(OUT)/.flags: FORCE
 	@mkdir -p $(OUT)
 	@[ "$$(cat $@ 2>/dev/null)" = '$(FLAGS_NOW)' ] || printf '%s' '$(FLAGS_NOW)' > $@
 FORCE:
+
+# The link layer core alone, always sanitized (test_link_core.c).
+$(OUT)/link_core_check: test_link_core.c $(P)/link_layer_core.c $(P)/zshim_common.c zshim_posix.c $(wildcard $(P)/*.h)
+	@mkdir -p $(OUT)
+	@$(CC) -std=gnu11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all $(WARN) $(INC) $(DEFS) -o $@ test_link_core.c $(P)/link_layer_core.c $(P)/zshim_common.c zshim_posix.c -lpthread
 
 # The trade emulator's party store alone, always sanitized (test_party.cpp).
 $(OUT)/party_check: test_party.cpp $(V)/payloads/pokemon.cpp $(V)/payloads/pokemon.hpp
