@@ -1019,3 +1019,17 @@ USB MSC via `tusb_msc_storage` needs **ESP-IDF 5.x**. The official
 `espressif32` platform has historically pinned older IDF releases, so confirm
 what `pio run -e gate -v` reports. If it is 4.x, point `platform` at a fork
 shipping 5.x rather than trying to backport TinyUSB.
+
+## Licence
+
+gbagate is free software under the GNU General Public License, version 3
+only (`GPL-3.0-only`); the full text is in [LICENSE](LICENSE).
+
+- `third_party/gblink-firmware/` is GB-Link's adapter firmware, under its own
+  GPL-3.0 licence (the same text, in that directory). The shim files derived
+  from it (`port/gblink/link_layer_core.c`, `rfu_link_core.c`,
+  `serial_layer.cpp`) say so. The hardware images include it, and are
+  GPL-3.0 as a whole.
+- pret's decompiled librfu and GB-Link-Switch-LDN (AGPL-3.0) are not part of
+  gbagate: the tests fetch them into `build/` and nothing of them is
+  committed or shipped.

@@ -37,9 +37,9 @@ found.
 response time at 2 MHz, and the DevKitC v1.1 LED (GPIO 38, the Start button).
 The section takes the clock 150 us after the GBA's last word, as upstream
 does; that relies on the game servicing its serial IRQ within that time.
-**Open, for the owner:** the repository has no top-level licence. The
-hardware images include GB-Link's GPL-3.0 firmware, so they are GPL-3.0 as a
-whole.
+**Licence:** the repository had no top-level licence; gbagate is now
+GPL-3.0-only (`LICENSE`, README.md). The hardware images include GB-Link's
+GPL-3.0 firmware and are GPL-3.0 as a whole.
 
 ## Round 3 — 20 October 2026: the GB-Link adapter
 

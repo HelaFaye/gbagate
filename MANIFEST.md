@@ -7,6 +7,7 @@ gbagate/
   PROJECT_STATUS.md     what works, what does not, what is next
   AUDIT.md              current audit findings
   MANIFEST.md           this file
+  LICENSE               GPL-3.0 (gbagate is GPL-3.0-only; README.md, Licence)
 
   src/        30 modules   portable, host-tested, no hardware dependencies
   test/       28 suites    unit suites, plus gblink_sim/ and gblink_compat/

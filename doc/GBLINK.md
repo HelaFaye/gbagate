@@ -283,9 +283,9 @@ level shifter between the board and the port, as the GB-Link DIY board has
 
 ## Licences
 
-`third_party/gblink-firmware` is GB-Link's code under GPL-3.0, and everything
-built from it is too. The hardware images that include it are therefore
-GPL-3.0 as a whole.
+gbagate itself is GPL-3.0-only (`LICENSE`). `third_party/gblink-firmware` is
+GB-Link's code under GPL-3.0, and everything built from it is too. The
+hardware images that include it are therefore GPL-3.0 as a whole.
 
 GB-Link-Switch-LDN is AGPL-3.0. gbagate does not include any of it; the bridge
 UART only talks to a board running it. `make compat` clones it and builds its
