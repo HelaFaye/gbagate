@@ -1,5 +1,6 @@
 .reference/
 .*/
+!.github/
 *.obj
 *.a
 *.bin
