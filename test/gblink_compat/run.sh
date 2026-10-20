@@ -18,7 +18,7 @@ mkdir -p "$BUILD"
 # GB-Link checkouts: from $GBLINK_SRC (a directory holding them), else cloned.
 SRC="${GBLINK_SRC:-$BUILD/src}"
 mkdir -p "$SRC"
-for repo in gblink-netplay-bridge Celio-Client Celio-Server gblink-ereader gb-pokemon-web gblink-distributor gblink-launcher; do
+for repo in gblink-netplay-bridge Celio-Client Celio-Server gblink-ereader gb-pokemon-web gblink-distributor gblink-launcher GB-Link-Switch-LDN; do
     if [ ! -d "$SRC/$repo/.git" ] && [ ! -d "$SRC/$repo/src" ]; then
         git clone -q "https://github.com/GB-Link/$repo" "$SRC/$repo"
     fi
@@ -57,4 +57,12 @@ fail=0
 for t in "$HERE"/test_*.mjs; do
     if ! node "$t" "$BUILD"; then fail=1; fi
 done
+
+# GB-Link-Switch-LDN's link task (AGPL-3.0, built here from the clone, never
+# copied into gbagate) with its UART on the simulator's bridge UART.
+LDN="$SRC/GB-Link-Switch-LDN/firmware"
+cc -std=c11 -D_GNU_SOURCE -O1 -I "$LDN/tools/host_stubs" -I "$LDN/common" \
+    -DLDN_PICO_LINK="\"$LDN/common/pico_link.c\"" "$HERE/ldn_link_host.c" \
+    -o "$BUILD/ldn_link_host" -lpthread
+if ! python3 -I "$HERE/test_ldn.py" "$BUILD/ldn_link_host"; then fail=1; fi
 exit $fail

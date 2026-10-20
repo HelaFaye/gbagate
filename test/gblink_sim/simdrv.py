@@ -26,6 +26,7 @@ class Sim:
         args = [SIM] + ([flash] if flash else [])
         self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         self.cv = threading.Condition()
+        self._wlock = threading.Lock()
         self.status = []      # u16 words, in order
         self.data = []        # bytes objects from the data IN endpoint / channel 1
         self.events = []      # (code, bytes)
@@ -34,6 +35,7 @@ class Sim:
         self.bridge_frames = []     # (channel, payload) parsed from them
         self.serial = serial
         self.on_radio = None   # callable(bytes): datagrams the peer engine sends
+        self.on_bridge = None  # callable(bytes): raw bridge UART bytes, as they come
         self.t = threading.Thread(target=self._reader, daemon=True)
         self.t.start()
         self.wait_event(EV_READY)
@@ -57,6 +59,8 @@ class Sim:
                     self.cdc += body
                     self._parse_cdc()
                 elif kind == ord('B'):
+                    if self.on_bridge:
+                        self.on_bridge(body)
                     self.bridge += body
                     self._parse_bridge()
                 elif kind == ord('P'):
@@ -98,9 +102,15 @@ class Sim:
         payload = bytes(payload)
         self._send('B', 0, b'GB' + bytes([channel]) + struct.pack('<H', len(payload)) + payload)
 
+    def bridge_raw(self, data):
+        """Bytes onto the bridge UART as they are, framed or not."""
+        self._send('B', 0, bytes(data))
+
     def _send(self, kind, ep, body=b''):
-        self.p.stdin.write(struct.pack('<BBH', ord(kind), ep, len(body)) + bytes(body))
-        self.p.stdin.flush()
+        # one record at a time: a relay or a bridge pump writes from its own thread
+        with self._wlock:
+            self.p.stdin.write(struct.pack('<BBH', ord(kind), ep, len(body)) + bytes(body))
+            self.p.stdin.flush()
 
     def close(self):
         try:

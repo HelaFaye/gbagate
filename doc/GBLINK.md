@@ -213,6 +213,16 @@ Wire it like the RP2040's GP8/GP9, crossed: our TX to the companion's RX. A
 GB-Link-Switch-LDN board on these pins drives mode 0x07 exactly as it drives
 an RP2040 GB-Link. The Supermini has no free pins for it.
 
+`make compat` checks that with LDN's own code. It builds LDN's link task
+(`firmware/common/pico_link.c`, unmodified) on the host, wires its UART to the
+simulator's bridge UART (`ldn_link_host.c`, `test_ldn.py`), and makes the
+checks LDN's own `pico_link_test.c` makes of its scripted adapter:
+
+- one SetMode puts the adapter in mode 0x07;
+- LDN sees a GBA clocking it (the 0x0E telemetry);
+- it leaves a working link alone;
+- it takes the adapter back after a USB host spoke to it.
+
 ---
 
 ## Using it with GB-Link's software
@@ -225,7 +235,7 @@ an RP2040 GB-Link. The Supermini has no free pins for it.
 | gb-pokemon-web | GB link mode | `test_webapps.mjs` |
 | gblink-distributor | GB link entry, byte exchange | `test_webapps.mjs` |
 | gblink-launcher | identifies it, LED/landing/cable settings work; **do not use its firmware updater** (below) | `test_launcher.mjs` (in Chromium) |
-| GB-Link-Switch-LDN | bridge UART, `BOARD_HAS_BRIDGE=1` | `test_gblink.py` bridge_uart_companion |
+| GB-Link-Switch-LDN | bridge UART, `BOARD_HAS_BRIDGE=1` | `test_ldn.py` (LDN's `pico_link.c`), `test_gblink.py` bridge_uart_companion |
 | megaman.gblink.io | mode 0x06 as upstream | `test_gblink.py` chip_gate_upstream_mode (the page itself could not be fetched to test) |
 
 Run all of it with `make compat`. It needs node and npm, and network access the
@@ -276,7 +286,8 @@ built from it is too. The hardware images that include it are therefore
 GPL-3.0 as a whole.
 
 GB-Link-Switch-LDN is AGPL-3.0. gbagate does not include any of it; the bridge
-UART only talks to a board running it.
+UART only talks to a board running it. `make compat` clones it and builds its
+link task into a test binary that stays in build/.
 
 pret's librfu is neither part of gbagate nor redistributed with it. The tests
 fetch it.
