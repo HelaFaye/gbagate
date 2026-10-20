@@ -46,6 +46,27 @@
 #define GBX_CMD_GET_EXTENDED_INFO 0x4Fu
 #define GBX_INFO_LEN 16u
 
+/* ---- 0x4E GET_PHY_STATS -----------------------------------------------------
+ *
+ * The link drivers' own counters, for bring-up: whether words are getting
+ * through and how often an answer was late. Like 0x4F, answered in any mode.
+ * Reply, 2 + 4 * GBX_PHY_STATS words:
+ *   [0]  0x4E
+ *   [1]  layout version 1
+ *   then u32 LE each:
+ *   0 mp_words      Multi-Play words the PHY completed
+ *   1 mp_dropped    words lost because the PHY's queue was full
+ *   2 mp_late       words answered before the next answer was staged
+ *   3 rfu_words     Wireless Adapter words the GBA clocked and we took
+ *   4 rfu_aborted   words abandoned because SC stalled mid-word
+ *   5 link_words    words since the link was last configured (watchdog's view)
+ *   6 uptime_ms
+ * Upstream's 0x4C (GetRfuIsrStats) has the Wireless Adapter's timing.
+ */
+#define GBX_CMD_GET_PHY_STATS 0x4Eu
+#define GBX_PHY_STATS 7u
+#define GBX_PHY_STATS_LEN (2u + 4u * GBX_PHY_STATS)
+
 #define GBX_CAP_CHIPGATE    (1u << 0)  /* mode 0x80                          */
 #define GBX_CAP_SD_ALT      (1u << 1)  /* second SD path fitted (GBC cable)  */
 #define GBX_CAP_RGB_LED     (1u << 2)

@@ -29,6 +29,7 @@ void sim_storage_init(const char *path);
 /* sim_gba.c */
 void sim_gba_init(void);
 void sim_gba_control(const uint8_t *data, size_t len);
+uint32_t sim_gba_words(void);   /* Multi-Play words the bus model completed */
 #ifdef __cplusplus
 }
 #endif

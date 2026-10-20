@@ -12,7 +12,8 @@ below). They use command and mode numbers GB-Link does not use and its hosts
 never send. Its fixes for upstream defects are offered back as patches in
 `backport/`.
 
-**Nothing in this document has run on hardware yet.** Everything above the
+**Nothing in this document has run on hardware yet.** `doc/BRINGUP-GBLINK.md`
+is the bench procedure, step by step. Everything above the
 bit level is tested in the host simulator, against GB-Link's own host code and
 pret's decompiled librfu. Where the bit level matters, the code says how it
 was derived and what has not been measured.
@@ -139,6 +140,19 @@ Capability bits:
 | 8 | bridge UART wired |
 
 The layout is in `src/gbx_proto.h`.
+
+### 0x4E GET_PHY_STATS
+
+The link drivers' own counters, for bring-up, answered in any mode. The reply
+is `[0x4E, 1]` followed by u32 counters:
+
+- Multi-Play words completed, dropped and answered late;
+- Wireless Adapter words, and words abandoned mid-way;
+- words since the link was configured;
+- uptime.
+
+`tools/gblink_bench.py` reads them. `doc/BRINGUP-GBLINK.md` says what they
+should do.
 
 ### Mode 0x80: gbagate's Battle Chip Gate
 

@@ -24,6 +24,7 @@
 
 #include "gblink_port.h"
 #include "sim.h"
+#include "sim_rfu.h"
 #include "zshim.h"
 #include <zephyr/storage/flash_map.h>
 
@@ -137,3 +138,11 @@ int zshim_storage_erase(size_t off, size_t len) {
 uint32_t gbagate_ext_caps(void)  { return GBX_CAP_SD_ALT | GBX_CAP_RGB_LED; }
 uint8_t  gbagate_ext_board(void) { return GBX_BOARD_HOST; }
 uint8_t  gbagate_ext_image(void) { return 1; /* gate */ }
+
+void gbagate_ext_phy_stats(uint32_t out[5]) {
+    out[0] = sim_gba_words();
+    out[1] = 0;                     /* the model's queue never fills */
+    out[2] = 0;
+    out[3] = sim_rfu_counter(SIM_RFU_GBA_WORDS);
+    out[4] = 0;
+}

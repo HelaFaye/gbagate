@@ -25,3 +25,6 @@ namespace gbagate
 extern "C" uint32_t gbagate_ext_caps(void);
 extern "C" uint8_t  gbagate_ext_board(void);
 extern "C" uint8_t  gbagate_ext_image(void);
+// The link drivers' counters for 0x4E: mp_words, mp_dropped, mp_late,
+// rfu_words, rfu_aborted (src/gbx_proto.h).
+extern "C" void     gbagate_ext_phy_stats(uint32_t out[5]);

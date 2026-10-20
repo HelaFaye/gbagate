@@ -199,7 +199,11 @@ static const gbl_phy_driver_t s_drv = {
     .has_sd_alt   = true,
 };
 
+static atomic_uint s_words_done;
+uint32_t sim_gba_words(void) { return atomic_load(&s_words_done); }
+
 static void report_word(uint16_t tx, uint16_t rx) {
+    atomic_fetch_add(&s_words_done, 1);
     uint8_t ev[4] = { (uint8_t)tx, (uint8_t)(tx >> 8), (uint8_t)rx, (uint8_t)(rx >> 8) };
     sim_event(SIM_EV_WORD, ev, 4);
 }

@@ -203,6 +203,7 @@ idf_component_register(
     INCLUDE_DIRS ${INCS}
     EMBED_FILES ${EMBEDS}
     REQUIRES ${REQS}
+    LDFRAGMENTS linker.lf
     WHOLE_ARCHIVE
 )
 

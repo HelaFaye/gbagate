@@ -68,6 +68,7 @@ gblink:
 	@python3 -I test/gblink_sim/test_gblink.py | tail -1
 	@python3 -I test/gblink_sim/test_peer.py | tail -1
 	@python3 -I test/gblink_sim/test_rfu.py | tail -1
+	@python3 -I test/gblink_sim/test_bench.py | tail -1
 
 # GB-Link's own host software -- the netplay bridge engine, Celio-Server and
 # Celio-Client, the e-Reader, Pokemon and distributor web apps -- unmodified,

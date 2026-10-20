@@ -161,3 +161,11 @@ uint8_t gbagate_ext_board(void) {
 }
 
 uint8_t gbagate_ext_image(void) { return (uint8_t)VARIANT; }
+
+extern void gba_link_counters(uint32_t *words, uint32_t *dropped, uint32_t *late);
+extern void rfu_link_counters(uint32_t *words, uint32_t *aborted);
+
+void gbagate_ext_phy_stats(uint32_t out[5]) {
+    gba_link_counters(&out[0], &out[1], &out[2]);
+    rfu_link_counters(&out[3], &out[4]);
+}

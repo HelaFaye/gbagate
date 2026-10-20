@@ -44,6 +44,23 @@ namespace
         Transport::sendData(std::span<const uint8_t>(r, sizeof r));
     }
 
+    // ---- 0x4E ---------------------------------------------------------------
+
+    void sendPhyStats()
+    {
+        uint32_t v[GBX_PHY_STATS] = {};
+        gbagate_ext_phy_stats(v);
+        v[5] = link_getReceivedWordCount();
+        v[6] = k_uptime_get_32();
+        uint8_t r[GBX_PHY_STATS_LEN] = {};
+        r[0] = GBX_CMD_GET_PHY_STATS;
+        r[1] = 1;
+        for (unsigned i = 0; i < GBX_PHY_STATS; i++)
+            for (unsigned b = 0; b < 4; b++)
+                r[2 + 4 * i + b] = static_cast<uint8_t>(v[i] >> (8 * b));
+        Transport::sendData(std::span<const uint8_t>(r, sizeof r));
+    }
+
     // ---- mode 0x80: Battle Chip Gate ----------------------------------------------
 
     // Static, like upstream's protocol sections, so a late PHY callback after
@@ -244,5 +261,6 @@ namespace gbagate
     {
         if (data.empty()) return;
         if (data[0] == GBX_CMD_GET_EXTENDED_INFO) sendExtendedInfo();
+        else if (data[0] == GBX_CMD_GET_PHY_STATS) sendPhyStats();
     }
 }

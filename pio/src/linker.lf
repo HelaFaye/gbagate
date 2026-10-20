@@ -1,0 +1,11 @@
+# The Wireless Adapter's transfer path in IRAM: the GBA clocks the next word
+# of its ID exchange ~40 us after the last, and a pass through the protocol
+# core that misses the flash cache can cost more than that. Upstream does the
+# same on the RP2040 (zephyr_code_relocate of linkLayer_rfu.c and
+# rfuProtocolSection.cpp, which holds RfuCore's inline code).
+[mapping:gbagate_rfu]
+archive: libsrc.a
+entries:
+    rfuProtocolSection (noflash)
+    rfu_link_core (noflash)
+    rfu_link_esp32s3 (noflash)
