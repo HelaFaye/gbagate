@@ -15,6 +15,7 @@
 
 #include "gblink_port.h"
 #include "sim.h"
+#include "sim_rfu.h"
 #include "zshim.h"
 
 static bool read_full(uint8_t *buf, size_t n) {
@@ -51,6 +52,8 @@ int main(int argc, char **argv) {
     }
     sim_storage_init(argi < argc ? argv[argi] : NULL);
     sim_gba_init();
+    sim_rfu_init();
+    sim_rfu_game_init();
     gblink_start();
 
     /* The board enumerates once the stack is up; a host test can tell it to

@@ -60,10 +60,14 @@ all: $(addprefix run-,$(SUITES)) gblink
 
 # The GB-Link personality: GB-Link's own firmware (third_party/) on the
 # gbagate shim, driven end to end the way the GB-Link host apps drive it.
+# The Wireless Adapter tests run pret's decompiled librfu as the game; it is
+# fetched into build/ref the first time (and those tests skip without it).
 gblink:
+	@test/gblink_sim/fetch_librfu.sh 2>/dev/null || echo "librfu: not fetched (offline?); Wireless Adapter tests will skip"
 	@$(MAKE) -s -C test/gblink_sim
 	@python3 -I test/gblink_sim/test_gblink.py | tail -1
 	@python3 -I test/gblink_sim/test_peer.py | tail -1
+	@python3 -I test/gblink_sim/test_rfu.py | tail -1
 
 # GB-Link's own host software -- the netplay bridge engine, Celio-Server and
 # Celio-Client, the e-Reader, Pokemon and distributor web apps -- unmodified,
@@ -76,6 +80,7 @@ gblink-asan:
 	@$(MAKE) -s -C test/gblink_sim clean
 	@$(MAKE) -s -C test/gblink_sim SAN="-fsanitize=address,undefined -fno-omit-frame-pointer"
 	@ASAN_OPTIONS=detect_leaks=0 python3 -I test/gblink_sim/test_gblink.py | tail -1
+	@ASAN_OPTIONS=detect_leaks=0 python3 -I test/gblink_sim/test_rfu.py | tail -1
 	@$(MAKE) -s -C test/gblink_sim clean
 
 $(BUILD):

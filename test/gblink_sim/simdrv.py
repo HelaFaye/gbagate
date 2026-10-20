@@ -11,7 +11,7 @@ import threading
 import time
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-SIM = os.path.join(ROOT, 'build', 'gblink_sim', 'gblink_sim')
+SIM = os.environ.get('GBLINK_SIM') or os.path.join(ROOT, 'build', 'gblink_sim', 'gblink_sim')
 
 EV_VCC, EV_LED, EV_REBOOT, EV_BOOTLOADER, EV_FLASH, EV_PHY, EV_WORD, EV_GB, EV_READY = range(1, 10)
 

@@ -94,16 +94,21 @@ else()
         ${GBL}/sections/usbSection.cpp
         ${GBL}/sections/awProtocolSection.cpp
         ${GBL}/sections/eReaderProtocolSection.cpp
+        ${GBL}/sections/battleChipGateSection.cpp
+        ${GBL}/sections/rfuProtocolSection.cpp
         ${GBL}/module/link.cpp
         ${GBL}/module/emu.cpp
         ${GBL}/module/gb.cpp
         ${GBL}/module/advanceWars.cpp
         ${GBL}/module/eReader.cpp
+        ${GBL}/module/battleChipGate.cpp
+        ${GBL}/module/rfuWireless.cpp
         ${GBL}/persist.cpp
         ${GBL}/linkWrongPinWatchdog.c
         ../../port/gblink/zshim_common.c
         ../../port/gblink/zshim_freertos.c
         ../../port/gblink/link_layer_core.c
+        ../../port/gblink/rfu_link_core.c
         ../../port/gblink/serial_layer.cpp
         ../../port/gblink/hardware_port.cpp
         ../../port/gblink/gblink_glue.cpp
@@ -112,7 +117,8 @@ else()
         ../../port/esp32s3/peer_espnow_esp32s3.c
         ../../port/esp32s3/usb_gblink_esp32s3.c
         ../../port/esp32s3/gblink_hw_esp32s3.c
-        ../../port/esp32s3/gblink_gbspi_esp32s3.c)
+        ../../port/esp32s3/gblink_gbspi_esp32s3.c
+        ../../port/esp32s3/rfu_link_esp32s3.c)
     if(VARIANT STREQUAL "gate" OR VARIANT STREQUAL "full")
         list(APPEND SRCS ../../port/esp32s3/usb_msc_esp32s3.c)
     endif()
@@ -206,4 +212,10 @@ if(NOT GBAGATE_QEMU)
         $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++20>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-missing-field-initializers>)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_SECTIONS_USE_MASTER_MODE=1)
+    # GCC 14 reads RfuCore's RECV_DATA path (rfuProtocol.hpp) as using a
+    # pointer the packet queue's read() leaves unset; it is unset only when
+    # read() returns length 0, and then the loop over it does not run.
+    # Upstream's file, so the warning goes rather than the code changing.
+    set_source_files_properties(../../third_party/gblink-firmware/src/sections/rfuProtocolSection.cpp
+        PROPERTIES COMPILE_OPTIONS "-Wno-maybe-uninitialized")
 endif()

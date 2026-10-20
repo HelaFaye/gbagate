@@ -19,6 +19,7 @@
 #include "hardware.hpp"
 #include "persist.hpp"
 #include "firmware_version.hpp"
+#include "gbagate_ext.hpp" // gbagate (PATCHES.md P7)
 
 class Control
 {
@@ -202,6 +203,13 @@ public:
                 sendLinkStatus(LinkStatus::LinkClosed);
                 break;
             }
+
+            // gbagate (PATCHES.md P7): modes upstream does not define (the
+            // gbagate range, 0x80 and up) go to the extension; anything it
+            // does not know either is ignored, as upstream ignored it.
+            default:
+                gbagate::executeMode(static_cast<uint8_t>(mode), modeVariant, &m_currentModule);
+                break;
         }
 
         m_currentModule = nullptr;
@@ -352,7 +360,10 @@ private:
                     bcgProto_requestRearm();
                 }
                 break;
-            default: break;
+            // gbagate (PATCHES.md P7): 0x4x commands upstream does not define.
+            default:
+                gbagate::hardwareCommand(data);
+                break;
         }
     }
 

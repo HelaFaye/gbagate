@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "esp_attr.h"
+#include "esp_cpu.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
@@ -56,6 +57,7 @@ void zshim_unlock(void) {
 }
 
 int64_t zshim_now_us(void) { return esp_timer_get_time(); }
+uint32_t k_cycle_get_32(void) { return esp_cpu_get_cycle_count(); }
 
 /* ---- events ---------------------------------------------------------------- */
 

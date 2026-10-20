@@ -8,7 +8,7 @@
  *
  *   VID 0x2FE3 PID 0x000A          netplay-bridge usb/device.ts; webusb filters
  *   bcdUSB 0x0210                  Chrome reads the WebUSB capability only >= 2.10
- *   bcdDevice = BCD of 2.2.3       launcher.js reads the version from it
+ *   bcdDevice = BCD of 2.2.7       launcher.js reads the version from it
  *   interface 0: vendor, 4 bulk    EP1 OUT cmd, EP1 IN status, EP2 OUT/IN data
  *   interfaces 1-2: CDC-ACM + IAD  WebSerial
  *   BOS: WebUSB (vendor code 1, landing page launcher.gblink.io)
@@ -38,7 +38,7 @@ extern "C" {
  * GetFirmwareInfo and folded into bcdDevice. */
 #define GBLINK_PROTO_MAJOR     2u
 #define GBLINK_PROTO_MINOR     2u
-#define GBLINK_PROTO_PATCH     3u
+#define GBLINK_PROTO_PATCH     7u
 #define GBLINK_USB_BCD_DEVICE  ((GBLINK_PROTO_MAJOR << 8) | (GBLINK_PROTO_MINOR << 4) | GBLINK_PROTO_PATCH)
 
 #define GBLINK_VENDOR_CODE_WEBUSB 0x01u

@@ -22,6 +22,9 @@ P3 also holds a connect that arrives early until the adapter has sent eight
 `0xB9A0` rounds, the margin the netplay bridge measured a child GBA needs. A
 host that already waits is unaffected.
 
+P1-P6 apply unchanged to 2.2.7: upstream has not touched those files since
+2.2.3.
+
 ## Replaced files
 
 `layers/usbLayer.hpp` and `layers/serialLayer.hpp` keep their public surface
@@ -29,6 +32,18 @@ and behaviour but are reimplemented over `port/gblink/gblink_port.h` instead
 of Zephyr's USB stack; see the comment at the top of each. `UsbLayer` gains
 `setConfigured()`, `receive()` and `hasCommandHandler()` for the port glue, and
 `SerialLayer` gains a channel-3 extension hook for gbagate's own protocol.
+Since 2.2.7 `SerialLayer` has upstream's second instance, the bridge UART to a
+companion MCU (`getBridgeInstance()`), here over `gblink_bridge_write()` /
+`gblink_bridge_on_receive()`; a board without one drops its frames, as an
+RP2040 with nothing on GP8/GP9 would. `s_rxOverflows` exists for upstream's
+telemetry and stays 0: bytes are handed over synchronously, with no ring to
+overflow.
+
+## Not gbagate's to fix
+
+- **Celio-Client and Celio-Server do not interoperate at their current heads**
+  (the client acks and retries since b057315; the server does not answer
+  acks). Nothing in the firmware is involved; see doc/GBLINK.md.
 
 ## Known and left alone
 

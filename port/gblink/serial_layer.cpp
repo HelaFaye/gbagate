@@ -12,13 +12,22 @@ extern "C" {
 #include "gblink_port.h"
 }
 
+volatile uint32_t SerialLayer::s_rxOverflows = 0;
+
 SerialLayer& SerialLayer::getInstance()
 {
-    static SerialLayer instance;
+    static SerialLayer instance(Transport::Id::Serial, gblink_cdc_write);
     return instance;
 }
 
-SerialLayer::SerialLayer()
+SerialLayer& SerialLayer::getBridgeInstance()
+{
+    static SerialLayer instance(Transport::Id::BridgeUart, gblink_bridge_write);
+    return instance;
+}
+
+SerialLayer::SerialLayer(Transport::Id id, Writer writer)
+    : m_id(id), m_writer(writer)
 {
     gblink_rx_init(&m_rx);
     k_mutex_init(&m_txMutex);
@@ -38,10 +47,10 @@ void SerialLayer::dispatchFrame(const gblink_frame_t& frame)
     auto payload = std::span<const uint8_t>(frame.payload, frame.len);
 
     if (frame.channel == channelCommand && m_commandHandler.handler != nullptr) {
-        Transport::setActive(Transport::Id::Serial);
+        Transport::setActive(m_id);
         m_commandHandler.handler(payload, m_commandHandler.userData);
     } else if (frame.channel == channelData && m_dataHandler.handler != nullptr) {
-        Transport::setActive(Transport::Id::Serial);
+        Transport::setActive(m_id);
         m_dataHandler.handler(payload, m_dataHandler.userData);
     } else if (frame.channel >= GBLINK_CH_GBAGATE && m_extHandler != nullptr) {
         // Deliberately does not claim the transport: gbagate traffic sharing
@@ -60,7 +69,7 @@ bool SerialLayer::sendFrame(uint8_t channel, std::span<const uint8_t> payload)
     // One frame per write call, under a lock, so frames from the module
     // thread and the PHY's status path never interleave mid-frame.
     k_mutex_lock(&m_txMutex, K_FOREVER);
-    const bool ok = gblink_cdc_write(frame, n);
+    const bool ok = m_writer(frame, n);
     k_mutex_unlock(&m_txMutex);
     return ok;
 }

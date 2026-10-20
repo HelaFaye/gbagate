@@ -354,9 +354,19 @@ static void set_mode(owner_t owner, gbl_phy_mode_t mode, bool sd_alt) {
     if (s_task) xTaskNotifyGive(s_task);
 }
 
+/* GB-Link's Wireless Adapter mode drives these pins in 32-bit Normal mode
+ * through its own driver (rfu_link_esp32s3.c); while it does, neither client
+ * here may take them. */
+static volatile bool s_yielded;
+
+void gba_link_yield(bool yield) {
+    if (yield) set_mode(OWNER_NONE, GBL_PHY_OFF, false);
+    s_yielded = yield;
+}
+
 /* Wait for the parent's next word. The gate answers it through stage(). */
 bool gba_link_poll(uint16_t *from_game, uint32_t timeout_ms) {
-    if (s_owner == OWNER_GBLINK) {     /* a GB-Link host has the port */
+    if (s_owner == OWNER_GBLINK || s_yielded) {  /* a GB-Link host has the port */
         vTaskDelay(pdMS_TO_TICKS(timeout_ms));
         return false;
     }

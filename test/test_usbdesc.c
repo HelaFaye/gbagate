@@ -32,7 +32,7 @@ static void test_device(void) {
     check("composite with IAD", d[4] == 0xEF && d[5] == 0x02 && d[6] == 0x01, 1);
     check("idVendor (netplay-bridge GBLINK_VID)", u16(d + 8), 0x2FE3);
     check("idProduct (netplay-bridge GBLINK_PID)", u16(d + 10), 0x000A);
-    check("bcdDevice = BCD 2.2.3 (launcher reads it)", u16(d + 12), 0x0223);
+    check("bcdDevice = BCD 2.2.7 (launcher reads it)", u16(d + 12), 0x0227);
     check("one configuration", d[17], 1);
 }
 

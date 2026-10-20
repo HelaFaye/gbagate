@@ -43,8 +43,15 @@ void LinkModule::receiveCommand(std::span<const uint8_t> command)
             m_packetLayerMode = PacketLayer::Mode::slave;
             k_sem_give(&m_waitForLinkModeCommand);            
             break;
-        case LinkModeCommand::StartHandshake: return m_currentSection->startHandshake();
-        case LinkModeCommand::ConnectLink: return m_currentSection->connectLink();
+        // gbagate (PATCHES.md P2): before 0x10/0x11 there is no section, and
+        // between sections (the 400 ms reconnect pause) there is none either;
+        // upstream dereferenced null in both windows.
+        case LinkModeCommand::StartHandshake:
+            if (UsbSection* s = m_currentSection) s->startHandshake();
+            return;
+        case LinkModeCommand::ConnectLink:
+            if (UsbSection* s = m_currentSection) s->connectLink();
+            return;
         default: break;
     }
 }

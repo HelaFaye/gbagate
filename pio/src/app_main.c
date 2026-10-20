@@ -96,6 +96,11 @@ void app_main(void) {
     if ((v.resolved & (FEAT_LINK_MASTER | FEAT_LINK_SLAVE)) && BOARD_HAS_LINK) {
         extern void gba_link_start(void);
         gba_link_start();
+        /* GB-Link's Wireless Adapter mode (0x07) drives the same pins in
+         * 32-bit Normal mode; it borrows them from the engine above while it
+         * runs, and its SD interrupt uses the ISR service that one installed. */
+        extern void rfu_link_start(void);
+        rfu_link_start();
     }
 
     /*

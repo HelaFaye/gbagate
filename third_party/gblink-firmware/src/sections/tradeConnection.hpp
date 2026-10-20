@@ -36,6 +36,12 @@ public:
     ~TradeConnection()
     {
         while(!m_packetLayer.idle()) {};
+        // gbagate (PATCHES.md P6): the 2 s request timer can still be armed
+        // when the section ends (a cancel, or a partner who left mid-block).
+        // Left running, it fires into this destroyed object -- and on Zephyr
+        // the k_timer itself is a node in the kernel's timeout list, so the
+        // stack frame reused after return corrupts that list.
+        k_timer_stop(&m_commandRequestTimer);
     }
 
     NextSection process() override;

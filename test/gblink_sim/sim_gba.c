@@ -25,6 +25,7 @@
  *   0x06 0|1          GBA cable (SI grounded) or GBC cable (SI floats high);
  *                     also puts the GBA's SD on the matching path
  *   0x07 0|1          SD on the alternate path (wrong-pin scenarios)
+ *   0x20-0x2F         the wireless adapter's game (rfu_game.c)
  */
 #include <pthread.h>
 #include <stdatomic.h>
@@ -36,6 +37,7 @@
 #include "layers/gbLinkLayer.h"
 #include "link_phy.h"
 #include "sim.h"
+#include "sim_rfu.h"
 #include "zshim.h"
 
 enum {
@@ -394,6 +396,10 @@ static void *printer_thread(void *arg) {
 
 void sim_gba_control(const uint8_t *d, size_t len) {
     if (len == 0) return;
+    if ((d[0] & 0xF0) == 0x20) {       /* the wireless adapter's game */
+        sim_rfu_game_control(d, len);
+        return;
+    }
     pthread_mutex_lock(&s_mx);
     switch (d[0]) {
     case 0x01:

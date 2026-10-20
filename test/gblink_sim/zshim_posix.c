@@ -41,6 +41,12 @@ void zshim_os_init(void) { pthread_once(&s_once, os_init_once); }
 void zshim_lock(void)    { zshim_os_init(); pthread_mutex_lock(&s_lock); }
 void zshim_unlock(void)  { pthread_mutex_unlock(&s_lock); }
 
+uint32_t k_cycle_get_32(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)ts.tv_nsec ^ (uint32_t)ts.tv_sec;
+}
+
 int64_t zshim_now_us(void) {
     zshim_os_init();
     struct timespec t;

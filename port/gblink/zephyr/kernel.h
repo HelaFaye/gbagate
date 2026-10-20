@@ -73,6 +73,8 @@ void     k_busy_wait(uint32_t usec);
 void     k_yield(void);
 int64_t  k_uptime_get(void);
 uint32_t k_uptime_get_32(void);
+/* A free-running counter; upstream only seeds its random ids from it. */
+uint32_t k_cycle_get_32(void);
 
 /* ---- locking ------------------------------------------------------------ */
 
@@ -104,6 +106,13 @@ int  k_sem_take(struct k_sem *sem, k_timeout_t timeout);
 void k_sem_give(struct k_sem *sem);
 void k_sem_reset(struct k_sem *sem);
 unsigned int k_sem_count_get(struct k_sem *sem);
+
+/* Zephyr initialises a K_SEM_DEFINE statically; the backends need a call, so
+ * it is made from a constructor, before any thread can take the semaphore. */
+#define K_SEM_DEFINE(name, initial, limit)                                     \
+    struct k_sem name;                                                         \
+    __attribute__((constructor)) static void zshim_sem_define_##name(void)    \
+    { k_sem_init(&name, (initial), (limit)); }
 
 struct k_mutex {
     struct k_sem sem;

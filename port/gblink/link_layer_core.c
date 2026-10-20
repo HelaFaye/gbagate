@@ -191,3 +191,14 @@ void link_configureEreaderSlave(void) {
     s_slave_kind = EREADER;
     irq_unlock(k);
 }
+
+/* Upstream: the e-Reader slave program (SO held low, the GBA's SD sampled),
+ * flagged BATTLE_CHIP_GATE; the chip gate section runs its own wrong-pin
+ * check. */
+void link_configureBattleChipGateSlave(void) {
+    unsigned k = irq_lock();
+    s_mode = SLAVE;
+    configure(GBL_PHY_SLAVE_EREADER);
+    s_slave_kind = BATTLE_CHIP_GATE;
+    irq_unlock(k);
+}

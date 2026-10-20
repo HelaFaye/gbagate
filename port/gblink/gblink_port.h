@@ -43,6 +43,9 @@ bool gblink_usb_write(uint8_t ep_in, const uint8_t *data, size_t len, uint32_t t
 /* Write bytes to the CDC-ACM stream. Returns false if the host has the port
  * closed or the buffer is full; the frame is then dropped whole. */
 bool gblink_cdc_write(const uint8_t *data, size_t len);
+/* The bridge UART to a companion MCU (upstream's gblink,bridge-uart: GP8/GP9
+ * at 921600 on the RP2040 board). Weak default: no bridge, frames dropped. */
+bool gblink_bridge_write(const uint8_t *data, size_t len);
 
 /* Board hardware for the 0x4x commands. A board without the part makes the
  * call a no-op; see gblink_hw_caps(). */
@@ -64,6 +67,9 @@ void gblink_usb_on_configured(bool configured);
 
 /* Bytes from the CDC-ACM stream, any fragmentation. */
 void gblink_cdc_on_receive(const uint8_t *data, size_t len);
+/* Bytes from the bridge UART, any fragmentation, from task context -- not from
+ * the UART interrupt: a command can enter a whole link mode. */
+void gblink_bridge_on_receive(const uint8_t *data, size_t len);
 
 /* ---- wireless link cable (port/gblink/peer_glue.cpp, src/gbl_peer.c) --------- */
 

@@ -4,6 +4,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 enum {
     SIM_EV_VCC         = 1,  /* [5v?]                                   */
     SIM_EV_LED         = 2,  /* [r g b on]                              */
@@ -14,7 +18,8 @@ enum {
     SIM_EV_WORD        = 7,  /* [tx lo hi, rx lo hi] one link word      */
     SIM_EV_GB_BYTE     = 8,  /* [tx, rx] one GB SPI byte                */
     SIM_EV_READY       = 9,  /* the firmware thread is running          */
-    SIM_EV_PEER_STATUS = 10  /* [lo hi] status seen by the wireless cable */
+    SIM_EV_PEER_STATUS = 10, /* [lo hi] status seen by the wireless cable */
+    SIM_EV_RFU         = 11  /* the librfu game: see rfu_game.c           */
 };
 
 void sim_emit(char kind, uint8_t ep, const uint8_t *data, size_t len);
@@ -24,4 +29,7 @@ void sim_storage_init(const char *path);
 /* sim_gba.c */
 void sim_gba_init(void);
 void sim_gba_control(const uint8_t *data, size_t len);
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -49,6 +49,17 @@ extern "C" void gblink_cdc_on_receive(const uint8_t* data, size_t len)
     SerialLayer::getInstance().receiveBytes(std::span<const uint8_t>(data, len));
 }
 
+extern "C" void gblink_bridge_on_receive(const uint8_t* data, size_t len)
+{
+    SerialLayer::getBridgeInstance().receiveBytes(std::span<const uint8_t>(data, len));
+}
+
+// No companion MCU unless the board wires one up.
+extern "C" __attribute__((weak)) bool gblink_bridge_write(const uint8_t*, size_t)
+{
+    return false;
+}
+
 static void control_thread(void*, void*, void*)
 {
     gblink_firmware_main();

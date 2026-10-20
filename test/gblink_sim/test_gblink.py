@@ -65,7 +65,7 @@ def firmware_info_layout():
         s.cmd(0x0F)
         d = s.wait_data(lambda d: d[0] == 0x0F)
         check(len(d) == 6, 'six bytes, got %d' % len(d))
-        check(tuple(d[1:4]) == (2, 2, 3), 'reports the vendored protocol level 2.2.3')
+        check(tuple(d[1:4]) == (2, 2, 7), 'reports the vendored protocol level 2.2.7')
         check(d[4] == 1, 'landing page defaults on')
         check(d[5] == 2, 'fresh-install cable selection is GBC (persist.cpp)')
         check(not s.status, 'no status word for a query')
@@ -93,7 +93,8 @@ def settings_persist_across_power_cycles():
         check(d[4] == 0 and d[5] == 1, 'persisted: %s' % d.hex())
         s.cmd(0x45)
         led = s.wait_data(lambda d: d[0] == 0x45)
-        check(len(led) == 20 and led[1] == 6, 'LED config is [45 06 rgb*6]')
+        check(len(led) == 23 and led[1] == 7, 'LED config is [45 07 rgb*7] (2.2.7 added the chip gate slot)')
+        check(tuple(led[2 + 18:2 + 21]) == (2, 4, 32), 'slot 6, Battle Chip Gate: deep blue: %s' % led.hex())
         check(tuple(led[2 + 9:2 + 12]) == (0x11, 0x22, 0x33), 'slot 3 kept: %s' % led.hex())
         s.cmd(0x47)
         s.cmd(0x45)
@@ -560,7 +561,7 @@ def gbagate_extended_info():
         # It must not disturb the upstream identity.
         s.cmd(0x0F)
         f = s.wait_data(lambda d: d[0] == 0x0F)
-        check(tuple(f[1:4]) == (2, 2, 3), 'GetFirmwareInfo unchanged')
+        check(tuple(f[1:4]) == (2, 2, 7), 'GetFirmwareInfo unchanged')
     finally:
         s.close()
 
@@ -610,6 +611,31 @@ def gbagate_chip_gate_busy_and_drop():
         check(answers[:2] == [1, 0], 'second chip refused while busy: %s' % answers)
         s.gba(0x01, 0)              # the game goes away
         s.wait_status(ST['LinkReconnecting'], 3)
+        s.cmd(0x01)
+        s.wait_status(ST['LinkClosed'], 3)
+    finally:
+        s.close()
+
+
+@test
+def chip_gate_upstream_mode():
+    """GB-Link 2.2.7's own Battle Chip Gate (mode 0x06), the protocol
+    megaman.gblink.io speaks: variant 3 is the international Beast Link Gate
+    (unit code 0xFF00); a chip arrives as a data packet [variant, id lo, hi]
+    and goes out in the rotation's id slot; status comes back as "BCGS"."""
+    s = Sim()
+    try:
+        s.gba(0x01, MMBN)
+        s.cmd(0x00, 0x06, 3)
+        s.wait_status(ST['LinkConnected'], 5)
+        bcgs = s.wait_data(lambda d: d[:4] == b'BCGS', timeout=3)
+        check(len(bcgs) == 64, 'status packets are 64 bytes')
+        time.sleep(0.3)
+        check(any(tx == 0xFF00 for tx, rx in s.words()), 'the gate answers with unit code 0xFF00')
+        mark = len(s.words())
+        s.write_data(bytes([3, 0x2A, 0x01]))
+        time.sleep(0.5)
+        check(any(tx == 0x012A for tx, rx in s.words()[mark:]), 'chip 0x012A goes out in the id slot')
         s.cmd(0x01)
         s.wait_status(ST['LinkClosed'], 3)
     finally:
