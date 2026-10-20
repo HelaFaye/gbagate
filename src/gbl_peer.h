@@ -90,6 +90,18 @@ typedef struct {
     uint8_t  payload[64];
 } gbl_peer_msg_t;
 
+/* What the local firmware's Wireless Adapter mode (0x07) says about its GBA,
+ * from the telemetry it sends every 500 ms (rfuProtocolSection.cpp: tag 0x0E
+ * detection, 0x1D events). For the link screen; all zero in other modes. */
+typedef struct {
+    bool     seen;          /* any telemetry yet                           */
+    bool     any_rx;        /* a non-zero word ever arrived from the GBA   */
+    bool     found;         /* the game ran the ID exchange (comstate >= 2) */
+    uint8_t  comstate;
+    uint8_t  resets;        /* soft resets the adapter counted (mod 256)   */
+    uint32_t transfers;     /* words the GBA clocked                       */
+} gbl_peer_rfu_t;
+
 typedef struct {
     gbl_peer_io_t io;
 
@@ -124,6 +136,7 @@ typedef struct {
     uint32_t tx_datagrams, rx_datagrams, retransmits, bad_datagrams;
     uint32_t data_out, data_in, queue_full;
     uint32_t mode_mismatch;        /* HELLOs from a board in another mode */
+    gbl_peer_rfu_t rfu;
 } gbl_peer_t;
 
 void gbl_peer_init(gbl_peer_t *p, const gbl_peer_io_t *io, uint32_t nonce,
@@ -138,7 +151,8 @@ void gbl_peer_stop(gbl_peer_t *p);
 /* A status word the local firmware sent. */
 void gbl_peer_on_status(gbl_peer_t *p, uint16_t status, uint32_t now_ms);
 
-/* A data packet the local firmware sent. */
+/* A data packet the local firmware sent. 64-byte packets cross the cable;
+ * the Wireless Adapter's telemetry is noted in p->rfu. */
 void gbl_peer_on_data(gbl_peer_t *p, const uint8_t *data, size_t len, uint32_t now_ms);
 
 /* A datagram from the radio. */

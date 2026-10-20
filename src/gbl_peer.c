@@ -244,7 +244,20 @@ void gbl_peer_on_status(gbl_peer_t *p, uint16_t s, uint32_t now) {
     pump(p, now);
 }
 
+static void note_rfu(gbl_peer_t *p, const uint8_t *d, size_t len) {
+    if (len == 16 && d[0] == 0x0E) {
+        p->rfu.seen = true;
+        p->rfu.any_rx = d[1] != 0;
+        p->rfu.comstate = d[3];
+        if (d[3] >= 2) p->rfu.found = true;
+        p->rfu.transfers = get32(d + 12);
+    } else if (len == 25 && d[0] == 0x1D) {
+        p->rfu.resets = d[14];
+    }
+}
+
 void gbl_peer_on_data(gbl_peer_t *p, const uint8_t *data, size_t len, uint32_t now) {
+    if (p->mode == 0x07 && len != 64) note_rfu(p, data, len);
     if (p->state < GBL_PEER_LINKING || len != 64) return;
     queue_msg(p, T_DATA, data, 64);
     p->data_out++;

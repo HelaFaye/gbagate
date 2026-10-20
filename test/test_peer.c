@@ -205,7 +205,30 @@ static void test_mode_mismatch(void) {
     s_mode[1] = 0x01;
 }
 
+static void test_rfu_telemetry(void) {
+    printf("Wireless Adapter telemetry\n");
+    s_mode[0] = s_mode[1] = 0x07;
+    setup(0, 0, 0);
+    gbl_peer_t *p = &s_b[0].peer;
+    check("nothing seen yet", p->rfu.seen, 0);
+    uint8_t det[16] = { 0x0E, 1, 1, 3 };          /* any rx, NINTENDO, comstate 3 */
+    det[12] = 0x34; det[13] = 0x12;
+    gbl_peer_on_data(p, det, sizeof det, s_now);
+    check("detection noted", p->rfu.seen && p->rfu.any_rx && p->rfu.found, 1);
+    check("transfers", (long)p->rfu.transfers, 0x1234);
+    uint8_t ev[25] = { 0x1D };
+    ev[14] = 7;
+    gbl_peer_on_data(p, ev, sizeof ev, s_now);
+    check("soft resets", p->rfu.resets, 7);
+    det[3] = 0;                                    /* back in the ID wait */
+    gbl_peer_on_data(p, det, sizeof det, s_now);
+    check("found stays found", p->rfu.found, 1);
+    check("telemetry never crosses the cable", (long)p->data_out, 0);
+    s_mode[0] = s_mode[1] = 0x01;
+}
+
 int main(void) {
+    test_rfu_telemetry();
     test_mode_mismatch();
     test_session("clean air", 0, 0, 0);
     test_session("lossy air (25% loss, 10% duplicates, reordering)", 25, 10, 30);

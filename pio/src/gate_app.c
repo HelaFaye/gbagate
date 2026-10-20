@@ -827,8 +827,21 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
         } else {
             snprintf(l1, sizeof l1, "%s: no peer", air_link_name((air_link_t)s_settings.air_link));
         }
-        snprintf(l2, sizeof l2, "out %lu in %lu", (unsigned long)p->data_out, (unsigned long)p->data_in);
-        snprintf(l3, sizeof l3, "resent %lu", (unsigned long)p->retransmits);
+        if (p->mode == 0x07) {
+            /* Wireless Adapter: whether the game has found the adapter is the
+             * first question; the firmware's own telemetry answers it. */
+            const char *gba = !p->rfu.seen          ? "GBA: --"
+                            : p->rfu.found          ? "GBA: found adapter"
+                            : !p->rfu.transfers     ? "GBA: no clock"
+                            : !p->rfu.any_rx        ? "GBA: use GBC cable"
+                                                    : "GBA: looking";
+            snprintf(l2, sizeof l2, "%s", gba);
+            snprintf(l3, sizeof l3, "rst %u out %lu in %lu", p->rfu.resets,
+                     (unsigned long)p->data_out, (unsigned long)p->data_in);
+        } else {
+            snprintf(l2, sizeof l2, "out %lu in %lu", (unsigned long)p->data_out, (unsigned long)p->data_in);
+            snprintf(l3, sizeof l3, "resent %lu", (unsigned long)p->retransmits);
+        }
         footer = screen_controls(CTRLS_PAGE);
         break;
     }
