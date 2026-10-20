@@ -1,5 +1,27 @@
 # Project State — Battle Chip Gate / GBA Link Adapter
 
+## GB-Link adapter (October 2026, gbagate 0.4.0)
+
+Every hardware image is now a GB-Link adapter as well. It runs GB-Link's
+firmware 2.2.7 on a Zephyr shim; `doc/GBLINK.md` has the whole picture. What
+is proven, and how:
+
+| | how far |
+|---|---|
+| Every GB-Link mode, 0x00-0x07, and gbagate's 0x80 | host simulator, GB-Link's own firmware logic: `make gblink` (30 + 8 + 5 checks, also under ASan/UBSan) |
+| Wireless Adapter (0x07) | against pret's librfu running on a model of the GBA's SIO, timers and interrupts: ID exchange, status REQs, soft reset, clock hand-over, two adapters hosting, joining and exchanging data |
+| GB-Link's host software | unmodified, against the simulator: netplay bridge (gen3, AW, rfu over RetroArch netplay), Celio-Server + Celio-Client, gblink-ereader, gb-pokemon-web, gblink-distributor, and the launcher page itself in Chromium: `make compat` |
+| Wireless cable (two boards, ESP-NOW) | simulator with lossy and duplicating air, Gen 3 and Wireless Adapter |
+| USB descriptors | byte-checked (`usbdesc`) and parsed by the compat suite's WebUSB |
+| Hardware images | all build (link, gate, full, mini; devkit and Supermini; with and without the bridge UART), QEMU image too |
+| On hardware | **nothing yet.** The Multi-Play bit level follows upstream's PIO timings, and the Wireless Adapter loop uses dedicated GPIO for the 2 MHz clock; neither has been on a scope. |
+
+Open, in order: bring-up on a devkit (Multi-Play first, then 0x07 at 2 MHz);
+confirm that the ESP32-S3's four IN endpoints take GB-Link's interface plus
+CDC on real silicon; then the patches in `backport/` go to GB-Link.
+
+---
+
 **Date:** 1 September 2026
 **Target:** ESP32-S3 (S3FH4R2, 4 MB flash / 2 MB quad PSRAM) · ST7735 128×128 ·
 rotary encoder with button · MCP23017 · chip detect switches · optional

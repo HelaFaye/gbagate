@@ -148,6 +148,7 @@ uint32_t gbagate_ext_caps(void) {
     if ((f & FEAT_SD_STORAGE && BOARD_HAS_SD) || (f & FEAT_USB_MSC)) c |= GBX_CAP_STORAGE;
     if (f & FEAT_ESPNOW)       c |= GBX_CAP_ESPNOW;
     if (f & FEAT_MULTIBOOT)    c |= GBX_CAP_MULTIBOOT;
+    if (BOARD_HAS_BRIDGE)      c |= GBX_CAP_BRIDGE;
     return c;
 }
 

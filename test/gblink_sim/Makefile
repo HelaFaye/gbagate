@@ -49,7 +49,7 @@ $(OUT)/librfu/%.cpp: $(LIBRFU)/src/%.c
 	@mkdir -p $(OUT)/librfu
 	@perl -0pe 's/asm\("bx r2"\);/callbackM(reqCommandId, error);/; s/asm\("bx r1"\);/callbackS(reqCommandId);/; s/asm\("bx r0"\);/callbackId();/; s/(callbackM\([^;]*?)gSTWIStatus->error/$$1(int)gSTWIStatus->error/g' $< > $@
 
-$(OUT)/gblink_sim: $(VSRC_CPP) $(VSRC_C) $(PSRC_CPP) $(PSRC_C) $(SSRC_C) $(SSRC_CPP) $(LIBRFU_SRC) $(wildcard *.h) $(wildcard gba_shim/*.h) $(wildcard $(P)/*.h)
+$(OUT)/gblink_sim: $(VSRC_CPP) $(VSRC_C) $(PSRC_CPP) $(PSRC_C) $(SSRC_C) $(SSRC_CPP) $(LIBRFU_SRC) $(wildcard *.h) $(wildcard gba_shim/*.h) $(wildcard $(P)/*.h) $(wildcard $(ROOT)/src/*.h) $(wildcard $(V)/*.hpp $(V)/*/*.hpp $(V)/*/*.h)
 	@mkdir -p $(OUT)/obj
 	@set -e; objs=""; \
 	for f in $(LIBRFU_SRC); do \

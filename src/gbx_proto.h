@@ -26,7 +26,7 @@
 #include <stdint.h>
 
 #define GBAGATE_VERSION_MAJOR 0
-#define GBAGATE_VERSION_MINOR 3
+#define GBAGATE_VERSION_MINOR 4
 #define GBAGATE_VERSION_PATCH 0
 
 #define GBX_EXT_VERSION 1
@@ -54,6 +54,7 @@
 #define GBX_CAP_STORAGE     (1u << 5)  /* programs on SD or USB drive        */
 #define GBX_CAP_ESPNOW      (1u << 6)  /* board-to-board radio               */
 #define GBX_CAP_MULTIBOOT   (1u << 7)  /* standalone Send Program            */
+#define GBX_CAP_BRIDGE      (1u << 8)  /* GB-Link's bridge UART is wired      */
 
 #define GBX_BOARD_HOST      0u         /* the host simulator                 */
 #define GBX_BOARD_DEVKIT    1u

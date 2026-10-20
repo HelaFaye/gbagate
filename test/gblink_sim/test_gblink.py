@@ -556,6 +556,7 @@ def gbagate_extended_info():
         d = s.wait_data(lambda d: d[0] == 0x4F)
         check(len(d) == 16 and d[1:4] == b'GBX', 'GBX block: %s' % d.hex())
         check(d[4] == 1, 'extension version 1')
+        check(tuple(d[5:8]) == (0, 4, 0), 'gbagate 0.4.0: %s' % list(d[5:8]))
         caps = struct.unpack('<I', d[8:12])[0]
         check(caps & 1, 'chip gate capability')
         # It must not disturb the upstream identity.

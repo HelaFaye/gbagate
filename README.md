@@ -5,9 +5,17 @@ layout, `PROJECT_STATUS.md` for what is proven and what is not, and `AUDIT.md`
 for where the risk sits.
 
 ```
-make            the fourteen host suites, no hardware
-make strict     every suite at -O0, -O2, -O3 -flto and under ASan/UBSan
+make            every host suite, no hardware
+make strict     every unit suite at -O0, -O2, -O3 -flto and under ASan/UBSan
+make compat     GB-Link's own host software against the firmware
 ```
+
+**It is also a GB-Link adapter.** Every hardware image runs GB-Link's adapter
+firmware (2.2.7, `third_party/gblink-firmware`), so the GB-Link web apps, the
+netplay bridge, Celio and the Switch bridge see a GB-Link: every mode, from the
+Gen 3 relay to the Wireless Adapter. Two boards can also play GB-Link's relay
+to each other over ESP-NOW with no PC at all. See `doc/GBLINK.md`; fixes found
+upstream along the way are in `backport/`.
 
 Firmware building blocks for an ESP32-S3 that plugs into a GBA link port. Two
 related jobs share one PHY:
