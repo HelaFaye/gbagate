@@ -111,7 +111,7 @@ public:
             d = (endpoint == commandOutEndpoint) ? m_command : m_data;
             irq_unlock(key);
         }
-        Transport::setActive(Transport::Id::Usb);
+        if (!Transport::claim(Transport::Id::Usb)) return; // the wireless cable has it
         if (d.handler != nullptr) d.handler(data, d.userData);
     }
 

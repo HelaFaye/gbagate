@@ -21,6 +21,12 @@ namespace Transport
     void setActive(Id id);
     Id active();
 
+    // gbagate (PATCHES.md P8). A host frame arrived on id: make it active and
+    // say so -- unless the local host owns the adapter (a local sink is set),
+    // in which case the frame is refused, so a PC cannot take over or cancel
+    // the wireless link cable's session, nor draw its replies to USB.
+    bool claim(Id id);
+
     // Register the same handler on every transport so the device accepts host
     // commands/data regardless of which one is open.
     void registerCommandHandler(ReceiveHandler handler, void* userData);

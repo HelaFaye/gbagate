@@ -122,7 +122,12 @@ static void send_hello(gbl_peer_t *p, uint32_t now) {
 
 static void queue_msg(gbl_peer_t *p, uint8_t type, const uint8_t *pl, uint8_t len) {
     if (p->q_count >= GBL_PEER_QUEUE) {
+        /* The channel promises every message once, in order; dropping one
+         * here would be a silent gap the receiver cannot see (no seq is
+         * spent). Give the session up instead: the next tick restarts it,
+         * and the new epoch makes the peer start over too. */
         p->queue_full++;
+        p->overflow = true;
         return;
     }
     gbl_peer_msg_t *m = &p->q[(p->q_head + p->q_count) % GBL_PEER_QUEUE];
@@ -266,13 +271,13 @@ void gbl_peer_on_data(gbl_peer_t *p, const uint8_t *data, size_t len, uint32_t n
 
 /* ---- receiving ---------------------------------------------------------------- */
 
-void gbl_peer_on_radio(gbl_peer_t *p, const uint8_t *d, size_t len, uint32_t now) {
-    if (p->state == GBL_PEER_IDLE) return;
+bool gbl_peer_on_radio(gbl_peer_t *p, const uint8_t *d, size_t len, uint32_t now) {
+    if (p->state == GBL_PEER_IDLE) return false;
     if (len < HDR + 2u || d[0] != 'G' || d[1] != 'P' || d[2] != VERSION ||
         d[12] > 64 || len != HDR + d[12] + 2u ||
         get16(d + HDR + d[12]) != crc16(d, HDR + d[12])) {
         p->bad_datagrams++;
-        return;
+        return false;
     }
     p->rx_datagrams++;
     p->last_rx_ms = now;
@@ -285,22 +290,27 @@ void gbl_peer_on_radio(gbl_peer_t *p, const uint8_t *d, size_t len, uint32_t now
     if (type == T_HELLO) {
         if (d[12] < 10) {
             p->bad_datagrams++;
-            return;
+            return false;
         }
         if (pl[8] != p->mode || pl[9] != p->variant) {
             /* A board running another link (a Wireless Adapter against a
              * Gen 3 cable, AW1 against AW2): pairing would hand each game the
              * other's protocol. It is not a peer. */
             p->mode_mismatch++;
-            return;
+            return false;
         }
         uint32_t nonce = get32(pl);
         uint32_t heard = get32(pl + 4);
         if (p->peer_known && epoch != p->peer_epoch) {
             /* The peer restarted. Whatever was in flight belongs to a session
-             * it no longer has; start ours over too. */
+             * it no longer has; start ours over too -- from SEARCHING, so the
+             * roles are drawn again from its new nonce once it hears us. Kept
+             * from before, they can put both boards in the same role. */
             clear_channel(p);
-            if (p->state >= GBL_PEER_SETTLING) begin_session(p, now);
+            if (p->state >= GBL_PEER_SETTLING) cmd1(p, CMD_CANCEL);
+            clear_session(p);
+            p->state = GBL_PEER_SEARCHING;
+            p->state_ms = now;
         }
         p->peer_known = true;
         p->peer_nonce = nonce;
@@ -312,15 +322,15 @@ void gbl_peer_on_radio(gbl_peer_t *p, const uint8_t *d, size_t len, uint32_t now
         }
         /* Answer at once so both sides learn they are heard in one round. */
         if (!p->peer_hears_us || now - p->last_hello_ms >= GBL_PEER_HELLO_MS / 2) send_hello(p, now);
-        return;
+        return true;
     }
 
-    if (!p->peer_known || epoch != p->peer_epoch) return; /* stale or stranger */
+    if (!p->peer_known || epoch != p->peer_epoch) return false; /* stale or stranger */
     take_ack(p, get16(d + 10));
 
     if (type == T_STATUS || type == T_DATA) {
         p->ack_due = true;
-        if (seq != p->expect_seq) return;   /* duplicate, or after a gap */
+        if (seq != p->expect_seq) { pump(p, now); return true; }   /* duplicate, or after a gap: ack it */
         p->expect_seq++;
         if (type == T_STATUS && d[12] == 2) {
             peer_status(p, get16(pl), now);
@@ -330,6 +340,7 @@ void gbl_peer_on_radio(gbl_peer_t *p, const uint8_t *d, size_t len, uint32_t now
         }
     }
     pump(p, now);
+    return true;
 }
 
 /* ---- lifecycle ------------------------------------------------------------------ */
@@ -356,6 +367,7 @@ void gbl_peer_start(gbl_peer_t *p, uint32_t now) {
     p->epoch = mix(p->epoch + mix(now) + p->nonce) | 1u;
     p->peer_known = false;
     p->peer_hears_us = false;
+    p->overflow = false;
     clear_session(p);
     clear_channel(p);
     p->state = GBL_PEER_SEARCHING;
@@ -375,6 +387,13 @@ void gbl_peer_tick(gbl_peer_t *p, uint32_t now) {
     if (p->state == GBL_PEER_IDLE) return;
 
     if (now - p->last_hello_ms >= GBL_PEER_HELLO_MS) send_hello(p, now);
+
+    if (p->overflow) {
+        /* queue_msg could not keep its promise: start over (see there). */
+        if (p->state >= GBL_PEER_SETTLING) cmd1(p, CMD_CANCEL);
+        gbl_peer_start(p, now);
+        return;
+    }
 
     if (p->peer_known && now - p->last_rx_ms >= GBL_PEER_TIMEOUT_MS) {
         /* Peer gone. Stop the local session (a GBA left waiting on a link that

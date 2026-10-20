@@ -237,6 +237,35 @@ def wireless_adapter_game_api_over_the_cable():
         b.close()
 
 
+@test
+def wireless_cable_refuses_a_usb_host():
+    """While the cable runs, the firmware is its host's: a PC that speaks up
+    (the launcher polling GetFirmwareInfo, a stray SetMode) is refused rather
+    than taking the session's replies or cancelling it. Once the cable stops,
+    USB is answered again."""
+    a, b, air = pair()
+    try:
+        check(exchange(a, b), 'linked and passing frames')
+        mark = len(a.data)
+        a.cmd(0x0F)                  # GetFirmwareInfo
+        a.cmd(0x01)                  # and a Cancel that would end the session
+        time.sleep(0.5)
+        check(not any(d[:1] == b'\x0f' for d in a.data[mark:]), 'no reply on USB while the cable runs')
+        before = len(b.words())
+        for _ in range(4):
+            a.gba(0x02, *frame(0xC33C))
+        end = time.time() + 5
+        while time.time() < end and not any(tx == 0xC33C for tx, _ in b.words()[before:]):
+            time.sleep(0.05)
+        check(any(tx == 0xC33C for tx, _ in b.words()[before:]), 'the session survived the host')
+        a._send('S', 0)              # Link: Wireless left
+        a.cmd(0x0F)
+        d = a.wait_data(lambda d: d[0] == 0x0F, 3, start=mark)
+        check(tuple(d[1:4]) == (2, 2, 7), 'answered on USB once the cable stopped')
+    finally:
+        a.close(); b.close()
+
+
 def main(argv):
     pick = argv[argv.index('-k') + 1] if '-k' in argv else ''
     fails = ran = 0

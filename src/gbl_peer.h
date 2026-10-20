@@ -116,6 +116,7 @@ typedef struct {
     bool     peer_known;
     bool     peer_hears_us;
     bool     master;
+    bool     overflow;             /* the reliable queue filled: restart  */
     uint32_t last_rx_ms, last_hello_ms, state_ms;
 
     /* Celio's per-client state, for both ends. */
@@ -155,8 +156,11 @@ void gbl_peer_on_status(gbl_peer_t *p, uint16_t status, uint32_t now_ms);
  * the Wireless Adapter's telemetry is noted in p->rfu. */
 void gbl_peer_on_data(gbl_peer_t *p, const uint8_t *data, size_t len, uint32_t now_ms);
 
-/* A datagram from the radio. */
-void gbl_peer_on_radio(gbl_peer_t *p, const uint8_t *dgram, size_t len, uint32_t now_ms);
+/* A datagram from the radio. True when it came from a peer: a well-formed
+ * HELLO in our mode, or a datagram of the session with the peer we know. A
+ * radio that locks onto one sender locks on this, not on the first datagram
+ * that looks like ours (a board in another mode would win and never pair). */
+bool gbl_peer_on_radio(gbl_peer_t *p, const uint8_t *dgram, size_t len, uint32_t now_ms);
 
 /* Housekeeping: hellos, retransmission, timeouts, delayed steps. */
 void gbl_peer_tick(gbl_peer_t *p, uint32_t now_ms);

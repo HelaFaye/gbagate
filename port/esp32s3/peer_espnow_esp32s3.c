@@ -2,18 +2,22 @@
  * peer_espnow_esp32s3.c -- the wireless link cable's radio: ESP-NOW, board to
  * board, no access point.
  *
- *   Finding the peer   broadcast until a datagram that gbl_peer accepts
- *                      arrives, then lock to that sender's MAC and send to it
- *                      unicast, which gets ESP-NOW's link-layer ACK and
- *                      retries on top of gbl_peer's own.
+ *   Finding the peer   broadcast until gbl_peer accepts a datagram (a HELLO
+ *                      in our mode, or one of the session), then lock to that
+ *                      sender's MAC (gblink_peer_radio_accepted, on the
+ *                      cable's thread) and send to it unicast, which gets
+ *                      ESP-NOW's link-layer ACK and retries on top of
+ *                      gbl_peer's own. A board in another mode is never
+ *                      locked to, so it cannot keep the cable from pairing.
  *   Letting go         gblink_peer_start() or GBL_PEER_TIMEOUT_MS of silence
  *                      unlocks, so a board that is switched for another finds
  *                      the new one.
  *   Strangers          only 'G' 'P' datagrams of the right size are passed
- *                      on; gbl_peer checks the rest (version, CRC, epoch).
- *                      A third board on the channel cannot take a locked
- *                      cable, but can win the race to lock a fresh one -- the
- *                      link screen shows the peer's MAC so that is visible.
+ *                      on; gbl_peer checks the rest (version, CRC, mode,
+ *                      epoch). A third board in the same mode cannot take a
+ *                      locked cable, but can win the race to lock a fresh one
+ *                      -- the link screen shows the peer's MAC so that is
+ *                      visible.
  *
  * The previous ESP-NOW transport (transport_esp32s3.c) called esp_now_init()
  * without starting WiFi, which fails, and had no caller. This brings WiFi up
@@ -23,6 +27,7 @@
  */
 #include <string.h>
 
+#include "esp_check.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -42,7 +47,7 @@ static const char *TAG = "peer_now";
 
 static const uint8_t BCAST[ESP_NOW_ETH_ALEN] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 static uint8_t  s_peer[ESP_NOW_ETH_ALEN];
-static volatile bool s_locked;
+static volatile bool s_locked;   /* s_peer is written before this is set */
 static volatile int64_t s_last_rx_us;
 static bool     s_up;
 
@@ -63,14 +68,21 @@ static void rx_cb(const esp_now_recv_info_t *info, const uint8_t *d, int len) {
         s_locked = false;   /* the locked peer went quiet: open the cable again */
     }
     if (s_locked && memcmp(info->src_addr, s_peer, ESP_NOW_ETH_ALEN) != 0) return;
-    if (!s_locked) {
-        memcpy(s_peer, info->src_addr, ESP_NOW_ETH_ALEN);
-        add_peer(s_peer);
-        s_locked = true;
-        ESP_LOGI(TAG, "cable locked to " MACSTR, MAC2STR(s_peer));
+    if (s_locked) s_last_rx_us = now;
+    gblink_peer_radio_rx_from(d, (size_t)len, info->src_addr);
+}
+
+/* On the cable's thread: gbl_peer took a datagram from src. */
+void gblink_peer_radio_accepted(const uint8_t src[6]) {
+    if (s_locked) {
+        if (memcmp(src, s_peer, ESP_NOW_ETH_ALEN) == 0) s_last_rx_us = esp_timer_get_time();
+        return;
     }
-    s_last_rx_us = now;
-    gblink_peer_radio_rx(d, (size_t)len);
+    memcpy(s_peer, src, ESP_NOW_ETH_ALEN);
+    add_peer(s_peer);
+    s_last_rx_us = esp_timer_get_time();
+    __atomic_store_n(&s_locked, true, __ATOMIC_RELEASE);
+    ESP_LOGI(TAG, "cable locked to " MACSTR, MAC2STR(s_peer));
 }
 
 bool gblink_peer_radio_send(const uint8_t *d, size_t n) {
@@ -85,13 +97,13 @@ esp_err_t peer_espnow_start(void) {
         e = esp_event_loop_create_default();
         if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
         wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-        ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-        ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-        ESP_ERROR_CHECK(esp_wifi_start());
-        ESP_ERROR_CHECK(esp_wifi_set_channel(PEER_CHANNEL, WIFI_SECOND_CHAN_NONE));
-        ESP_ERROR_CHECK(esp_now_init());
-        ESP_ERROR_CHECK(esp_now_register_recv_cb(rx_cb));
+        ESP_RETURN_ON_ERROR(esp_wifi_init(&cfg), TAG, "esp_wifi_init");
+        ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "esp_wifi_set_storage");
+        ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "esp_wifi_set_mode");
+        ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "esp_wifi_start");
+        ESP_RETURN_ON_ERROR(esp_wifi_set_channel(PEER_CHANNEL, WIFI_SECOND_CHAN_NONE), TAG, "esp_wifi_set_channel");
+        ESP_RETURN_ON_ERROR(esp_now_init(), TAG, "esp_now_init");
+        ESP_RETURN_ON_ERROR(esp_now_register_recv_cb(rx_cb), TAG, "esp_now_register_recv_cb");
         add_peer(BCAST);
         s_up = true;
     }

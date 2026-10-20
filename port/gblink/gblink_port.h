@@ -73,12 +73,21 @@ void gblink_bridge_on_receive(const uint8_t *data, size_t len);
 
 /* ---- wireless link cable (port/gblink/peer_glue.cpp, src/gbl_peer.c) --------- */
 
-/* Run GB-Link mode `mode` (0x01 Gen 3 relay, 0x04 Advance Wars) against a peer
- * board instead of a host. nonce decides the roles: draw it at random. */
+/* Run GB-Link mode `mode` (0x01 Gen 3 relay, 0x04 Advance Wars, 0x07 Wireless
+ * Adapter) against a peer board instead of a host. nonce decides the roles:
+ * draw it at random. Both are carried out on the cable's own thread, so they
+ * never race it; they return once it has. While the cable runs, frames from a
+ * USB, serial or bridge host are refused (Transport::claim). */
 void gblink_peer_start(uint8_t mode, uint8_t variant, uint32_t nonce);
 void gblink_peer_stop(void);
-/* A datagram from the peer (radio callback context is fine). */
+/* A datagram from the peer (radio callback context is fine). src, if not
+ * NULL, is the sender's 6-byte address; gblink_peer_radio_accepted() hears it
+ * back once the cable has accepted a datagram from it. */
 void gblink_peer_radio_rx(const uint8_t *dgram, size_t len);
+void gblink_peer_radio_rx_from(const uint8_t *dgram, size_t len, const uint8_t src[6]);
+/* Optional, for a radio that locks onto its peer: called on the cable's thread
+ * with the sender of each datagram it accepted. Weak default does nothing. */
+void gblink_peer_radio_accepted(const uint8_t src[6]);
 /* Supplied by the port: one datagram to the peer. False if refused. */
 bool gblink_peer_radio_send(const uint8_t *dgram, size_t len);
 /* Optional: every status word the local firmware reports while the cable

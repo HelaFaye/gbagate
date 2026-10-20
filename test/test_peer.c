@@ -35,6 +35,7 @@ static flight_t s_air[AIR_SLOTS];
 static uint32_t s_rng = 12345, s_now;
 static int      s_loss_pct, s_dup_pct, s_jitter;
 static uint32_t s_dropped;
+static uint32_t s_accepted[2];   /* datagrams gbl_peer_on_radio took, per board */
 
 static uint32_t rnd(void) { s_rng = s_rng * 1103515245u + 12345u; return s_rng >> 8; }
 
@@ -104,6 +105,7 @@ static void setup(int loss, int dup, int jitter) {
     memset(s_b, 0, sizeof s_b);
     s_now = 1000;
     s_loss_pct = loss; s_dup_pct = dup; s_jitter = jitter; s_dropped = 0;
+    s_accepted[0] = s_accepted[1] = 0;
     for (int i = 0; i < 2; i++) {
         s_b[i].id = i;
         gbl_peer_io_t io = { inject_cmd, inject_data, radio_tx, &s_b[i] };
@@ -119,7 +121,7 @@ static void run(uint32_t ms) {
             if (s_air[i].n && s_air[i].at <= s_now) {
                 size_t n = s_air[i].n;
                 s_air[i].n = 0;
-                gbl_peer_on_radio(&s_b[s_air[i].to].peer, s_air[i].d, n, s_now);
+                if (gbl_peer_on_radio(&s_b[s_air[i].to].peer, s_air[i].d, n, s_now)) s_accepted[s_air[i].to]++;
             }
         }
         for (int i = 0; i < 2; i++) gbl_peer_tick(&s_b[i].peer, s_now);
@@ -169,12 +171,14 @@ static void test_garbage(void) {
     printf("garbage and strangers\n");
     setup(0, 0, 0);
     uint8_t junk[GBL_PEER_MAX_DATAGRAM];
+    int taken = 0;
     for (size_t n = 0; n <= sizeof junk; n++) {
         for (size_t i = 0; i < n; i++) junk[i] = (uint8_t)rnd();
         if (n > 2) { junk[0] = 'G'; junk[1] = 'P'; }
-        gbl_peer_on_radio(&s_b[0].peer, junk, n, s_now);
+        taken += gbl_peer_on_radio(&s_b[0].peer, junk, n, s_now);
     }
     check("every malformed datagram rejected", s_b[0].peer.bad_datagrams, (long)sizeof junk + 1);
+    check("and none reported accepted (no radio locks to it)", taken, 0);
     run(3000);
     check("and the real session still comes up", s_b[0].peer.state, GBL_PEER_LINKED);
 }
@@ -202,6 +206,8 @@ static void test_mode_mismatch(void) {
                                                 s_b[1].peer.state == GBL_PEER_SEARCHING, 1);
     check("and says why", s_b[0].peer.mode_mismatch > 0 && s_b[1].peer.mode_mismatch > 0, 1);
     check("no mode was set on either", find(&s_b[0], 0x00) < 0 && find(&s_b[1], 0x00) < 0, 1);
+    check("nothing accepted, so a radio does not lock to the other",
+          (long)(s_accepted[0] + s_accepted[1]), 0);
     s_mode[1] = 0x01;
 }
 
@@ -227,6 +233,54 @@ static void test_rfu_telemetry(void) {
     s_mode[0] = s_mode[1] = 0x01;
 }
 
+static int count(const board_t *b, uint8_t op) {
+    int n = 0;
+    for (int i = 0; i < b->nlog; i++) n += b->log[i] == op;
+    return n;
+}
+
+static void test_restart_redraws_roles(void) {
+    printf("a peer that restarts with a new nonce\n");
+    setup(0, 0, 0);
+    run(3000);
+    check("linked, board 0 master", s_b[0].peer.state == GBL_PEER_LINKED && s_b[0].peer.master, 1);
+    /* Board 1 leaves Link: Wireless and comes back within the timeout,
+     * drawing a nonce that now beats board 0's. */
+    gbl_peer_stop(&s_b[1].peer);
+    run(1000);
+    gbl_peer_io_t io = { inject_cmd, inject_data, radio_tx, &s_b[1] };
+    s_b[1].nlog = 0;
+    s_b[1].mode_set = s_b[1].is_master = s_b[1].hs = s_b[1].up = false;
+    gbl_peer_init(&s_b[1].peer, &io, 0xFFFFFFu, s_mode[1], 0);
+    gbl_peer_start(&s_b[1].peer, s_now);
+    s_b[0].hs = s_b[0].up = false;
+    run(4000);
+    check("board 1 is master now", s_b[1].peer.master, 1);
+    check("and board 0 drew again: slave", s_b[0].peer.master, 0);
+    check("both linked again", s_b[0].peer.state == GBL_PEER_LINKED &&
+                               s_b[1].peer.state == GBL_PEER_LINKED, 1);
+}
+
+static void test_queue_overflow_restarts(void) {
+    printf("the reliable queue fills\n");
+    setup(0, 0, 0);
+    run(3000);
+    const uint32_t epoch = s_b[0].peer.epoch;
+    const int cancels = count(&s_b[0], 0x01);
+    s_loss_pct = 100;                      /* nothing is acknowledged */
+    uint8_t pkt[64] = { 0 };
+    for (int k = 0; k < (int)GBL_PEER_QUEUE + 4; k++) gbl_peer_on_data(&s_b[0].peer, pkt, 64, s_now);
+    check("the overflow is counted", s_b[0].peer.queue_full > 0, 1);
+    run(1);
+    check("and the session is given up, not left with a gap",
+          s_b[0].peer.epoch != epoch && count(&s_b[0], 0x01) == cancels + 1, 1);
+    s_loss_pct = 0;
+    s_b[0].hs = s_b[0].up = s_b[1].hs = s_b[1].up = false;
+    run(GBL_PEER_TIMEOUT_MS + 4000);
+    check("then both link again", s_b[0].peer.state == GBL_PEER_LINKED &&
+                                  s_b[1].peer.state == GBL_PEER_LINKED, 1);
+}
+
 int main(void) {
     test_rfu_telemetry();
     test_mode_mismatch();
@@ -234,6 +288,8 @@ int main(void) {
     test_session("lossy air (25% loss, 10% duplicates, reordering)", 25, 10, 30);
     test_garbage();
     test_timeout();
+    test_restart_redraws_roles();
+    test_queue_overflow_restarts();
     printf("\n%s\n", g_fail ? "FAILURES" : "all checks passed");
     return g_fail != 0;
 }

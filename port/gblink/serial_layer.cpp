@@ -46,12 +46,12 @@ void SerialLayer::dispatchFrame(const gblink_frame_t& frame)
 {
     auto payload = std::span<const uint8_t>(frame.payload, frame.len);
 
+    // A host's frame is refused while the wireless cable owns the adapter
+    // (Transport::claim).
     if (frame.channel == channelCommand && m_commandHandler.handler != nullptr) {
-        Transport::setActive(m_id);
-        m_commandHandler.handler(payload, m_commandHandler.userData);
+        if (Transport::claim(m_id)) m_commandHandler.handler(payload, m_commandHandler.userData);
     } else if (frame.channel == channelData && m_dataHandler.handler != nullptr) {
-        Transport::setActive(m_id);
-        m_dataHandler.handler(payload, m_dataHandler.userData);
+        if (Transport::claim(m_id)) m_dataHandler.handler(payload, m_dataHandler.userData);
     } else if (frame.channel >= GBLINK_CH_GBAGATE && m_extHandler != nullptr) {
         // Deliberately does not claim the transport: gbagate traffic sharing
         // the port must not move GB-Link replies off WebUSB.

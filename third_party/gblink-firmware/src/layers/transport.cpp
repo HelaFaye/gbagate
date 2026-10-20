@@ -21,6 +21,14 @@ namespace Transport
     void setActive(Id id) { g_active = id; }
     Id active() { return g_active; }
 
+    // gbagate (PATCHES.md P8)
+    bool claim(Id id)
+    {
+        if (g_localSink != nullptr && id != Id::Local) return false;
+        g_active = id;
+        return true;
+    }
+
     void registerCommandHandler(ReceiveHandler handler, void* userData)
     {
         g_cmdHandler = handler;
