@@ -91,6 +91,7 @@ static struct {
 
 static atomic_uint s_if;
 static atomic_int  s_irq_sent, s_in_irq;
+static atomic_bool s_serial_owed;    /* a transfer ended; its handler has not run */
 static pthread_t   s_cpu;
 static bool        s_cpu_set;
 static sim_gba_irq_t s_irq_serial, s_irq_timer[4];
@@ -317,7 +318,10 @@ static void *hw_thread(void *arg) {
         if (g_busy && now >= g_done_ns) {
             *IO32(R_SIODATA32) = g_rx;
             __atomic_fetch_and(IO16(R_SIOCNT), (uint16_t)~CNT_START, __ATOMIC_SEQ_CST);
-            if (*IO16(R_SIOCNT) & CNT_IRQ) atomic_fetch_or(&s_if, IRQ_SERIAL);
+            if (*IO16(R_SIOCNT) & CNT_IRQ) {
+                atomic_fetch_or(&s_if, IRQ_SERIAL);
+                atomic_store(&s_serial_owed, true);
+            }
             g_busy = false;
             if (g_word_for_adapter) {
                 deliver = true;
@@ -390,7 +394,7 @@ static void irq_handler(int sig) {
     irq_check();                                  /* one that may nest now */
     pthread_sigmask(SIG_SETMASK, &old, NULL);
 
-    if (bit == IRQ_SERIAL) { if (s_irq_serial) s_irq_serial(); }
+    if (bit == IRQ_SERIAL) { if (s_irq_serial) s_irq_serial(); atomic_store(&s_serial_owed, false); }
     else
         for (int n = 0; n < 4; n++)
             if (bit == (IRQ_TIMER0 << n) && s_irq_timer[n]) s_irq_timer[n]();
@@ -450,7 +454,21 @@ static void drv_disable(void) {
     pthread_mutex_unlock(&s_hw);
 }
 
+#define ARM_GRACE_US 20000   /* see drv_exchange */
+
 static void drv_set_role(enum RfuRole role) {
+    /* The takeover follows the WAIT-class ACK's last GBA-clocked word. On
+     * the GBA, that word's serial IRQ runs within microseconds and its
+     * handler finishes the master-side handshake (wait for SI high, SO high,
+     * wait for SI low, arm as slave) well inside the section's 150 us; the
+     * takeover then seeds SI low. Here the IRQ is a signal to a host thread
+     * that can arrive later than that, and a handler that has not yet seen
+     * SI high when it is forced low never arms. So give the handler the
+     * same grace the clock gives the arm. */
+    if (role == RFU_ROLE_ADAPTER_MASTER) {
+        const int64_t give_up = zshim_now_us() + ARM_GRACE_US;
+        while (atomic_load(&s_serial_owed) && zshim_now_us() < give_up) k_busy_wait(2);
+    }
     pthread_mutex_lock(&s_hw);
     a_role = role;
     a_staged_valid = false;
@@ -472,7 +490,6 @@ static void drv_stage(uint32_t word) {
  * clock waits, up to ARM_GRACE_US, for the GBA to arm, and counts the wait
  * (SIM_RFU_LATE_ARM) apart from a word lost to a GBA that never armed
  * (SIM_RFU_UNARMED). */
-#define ARM_GRACE_US 2000
 
 static bool drv_exchange(uint32_t word, uint32_t *rx, uint32_t timeout_us) {
     (void)timeout_us;
