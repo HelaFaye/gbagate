@@ -1,0 +1,105 @@
+From 1c547f95ce8b25d681e9186db052daefd8fd5766 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 19 Oct 2026 20:19:05 +0000
+Subject: [PATCH 3/6] Hold an early ConnectLink until the child GBA has seen
+ the handshake
+
+If 0x13 arrived before the transmit ISR had sent any 0xB9A0, the packet layer
+went straight from 0xD15E to 0x8FFF and UsbSection::establishConncection()
+waited for isHandshakeEnabled() -- 'last word sent was 0xB9A0' -- for ever.
+The netplay bridge avoids it only by sleeping 150 ms (CONNECT_GRACE_MS)
+between StartHandshake and ConnectLink; Celio relays them as fast as it can.
+
+ConnectLink is now held until eight 0xB9A0 rounds have gone out (the bridge's
+measured margin for a child GBA), and the wait also ends once 0x8FFF has
+gone out, so a 50 ms poll can no longer miss the window.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ src/layers/packetLayer.cpp  |  7 +++++++
+ src/layers/packetLayer.hpp  | 24 +++++++++++++++++++++++-
+ src/sections/usbSection.cpp |  4 +++-
+ 3 files changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/src/layers/packetLayer.cpp b/src/layers/packetLayer.cpp
+index b4d78b3..7214116 100644
+--- a/src/layers/packetLayer.cpp
++++ b/src/layers/packetLayer.cpp
+@@ -10,6 +10,13 @@ void PacketLayer::onTransiveDone(uint16_t rxBytes, uint16_t txBytes)
+         case TransiveState::handshake:
+             m_transmitedHandShake = txBytes;
+             m_receivedHandshake = rxBytes;
++            if (txBytes == LINK_SLAVE_HANDSHAKE && m_slaveHandshakesSent < 0xFFFF) m_slaveHandshakesSent++;
++            if (m_connectPending && m_handshakeState == HandShakeState::enabled
++                && m_slaveHandshakesSent >= minSlaveHandshakes)
++            {
++                m_connectPending = false;
++                m_handshakeState = HandShakeState::connect;
++            }
+             k_sem_give(&m_handshakeSemaphore);
+             m_timingUs = timingHandshake;
+ 
+diff --git a/src/layers/packetLayer.hpp b/src/layers/packetLayer.hpp
+index 7fba25d..bbbeef2 100644
+--- a/src/layers/packetLayer.hpp
++++ b/src/layers/packetLayer.hpp
+@@ -126,10 +126,30 @@ public:
+ 
+     void enableHandshake() { m_handshakeState = HandShakeState::enabled; }
+ 
+-    void connectHandshake() { m_handshakeState = HandShakeState::connect; }
++    // A child GBA needs some 0xB9A0 rounds before it takes the connect word
++    // (the netplay bridge measured ~150 ms and waits that long before sending
++    // ConnectLink). Hold a ConnectLink that arrives sooner until the adapter
++    // has sent minSlaveHandshakes of them.
++    static constexpr uint16_t minSlaveHandshakes = 8;
++
++    void connectHandshake()
++    {
++        if (m_handshakeState == HandShakeState::enabled && m_slaveHandshakesSent >= minSlaveHandshakes)
++            m_handshakeState = HandShakeState::connect;
++        else
++            m_connectPending = true;
++    }
+ 
+     bool isHandshakeEnabled() { return m_transmitedHandShake == LINK_SLAVE_HANDSHAKE; }
+ 
++    // The connect word has gone out, or the link is already past the handshake.
++    bool isConnectSent()
++    {
++        return m_transmitedHandShake == LINK_MASTER_HANDSHAKE
++            || m_receivedHandshake == LINK_MASTER_HANDSHAKE
++            || m_state != TransiveState::handshake;
++    }
++
+     void setMode(Mode mode) 
+     {   
+         switch (mode)
+@@ -263,6 +283,8 @@ private:
+     TransiveStruct m_handler = emptyCommand();
+     TransiveState m_state = TransiveState::handshake;
+     HandShakeState m_handshakeState = HandShakeState::disabled;
++    uint16_t m_slaveHandshakesSent = 0;
++    bool m_connectPending = false;
+ 
+     struct k_timer m_timeoutTimer;
+     #ifdef CONFIG_STM32F0
+diff --git a/src/sections/usbSection.cpp b/src/sections/usbSection.cpp
+index 4b34281..615a6aa 100644
+--- a/src/sections/usbSection.cpp
++++ b/src/sections/usbSection.cpp
+@@ -12,7 +12,9 @@ void UsbSection::establishConncection()
+ 
+     sendLinkStatus(LinkStatus::HandshakeReceived);
+ 
+-    while (!m_packetLayer.isHandshakeEnabled())
++    // isHandshakeEnabled() means "the last word sent was 0xB9A0", which is
++    // over once 0x8FFF goes out; a 50 ms poll can miss that window entirely.
++    while (!m_packetLayer.isHandshakeEnabled() && !m_packetLayer.isConnectSent())
+     { 
+         k_sleep(K_MSEC(50));
+         if (m_cancel) return; 
+-- 
+2.43.0
+

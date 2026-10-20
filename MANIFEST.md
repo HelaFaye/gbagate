@@ -7,29 +7,43 @@ gbagate/
   PROJECT_STATUS.md     what works, what does not, what is next
   AUDIT.md              current audit findings
   MANIFEST.md           this file
+  LICENSE               GPL-3.0 (gbagate is GPL-3.0-only; README.md, Licence)
 
-  src/        21 modules   portable, host-tested, no hardware dependencies
-  test/       15 suites    ~5200 lines against src/'s 2543 (all passing)
-  port/esp32s3/ 13 files   ESP-IDF glue. Lint-covered, no hardware run yet
-  pio/                     PlatformIO: three images, ESP-IDF framework
+  src/        30 modules   portable, host-tested, no hardware dependencies
+  test/       28 suites    unit suites, plus gblink_sim/ and gblink_compat/
+  port/esp32s3/ 22 files   ESP-IDF glue. Lint-covered, built by CI, no hardware run yet
+  port/gblink/             the Zephyr shim GB-Link's firmware runs on, its
+                           link layers (Multi-Play, Wireless Adapter) over
+                           board drivers, glue, gbagate's GB-Link extensions
+  third_party/gblink-firmware/
+                           GB-Link's adapter firmware 2.2.7, vendored (GPL-3.0);
+                           UPSTREAM.md, PATCHES.md say what and what changed
+  backport/                patch series offered to GB-Link (README.md)
+  pio/                     PlatformIO: four images, ESP-IDF framework
   qemu/       19 files     emulation lab: QEMU, mGBA, broker, tester ROM
   data/chipdb/ 6 blobs     packed chip databases, 72 KB
-  tools/       6 tools     database builder, header repair, font generator,
+  tools/       10 tools    database builder, header repair, font generator,
                            mGBA-on-Android build, RAM dump script,
-                           wire-ID checker
+                           wire-ID checker, multiboot checker, compile
+                           commands, build_hw.sh (ESP-IDF without
+                           PlatformIO), gblink_bench.py (bring-up)
   rom/                     tester ROM sources (built by make rom)
-  doc/                     rendered screens
+  doc/                     rendered screens; GBLINK.md, the GB-Link adapter
 ```
 
 ## Start here
 
 ```
-make            build and run all fifteen suites           (no hardware)
-make strict     every suite at -O0, -O2, -O3 -flto, ASan   (56 combinations)
+make            build and run every suite                  (no hardware)
+make strict     every unit suite at -O0, -O2, -O3 -flto, ASan
+make gblink     GB-Link's firmware in the host simulator: every mode,
+                the wireless cable, the Wireless Adapter against librfu
+make compat     GB-Link's own host software against it: netplay bridge,
+                Celio, the web apps, the launcher in Chromium (needs npm)
 ```
 
 Two more that need only `cc` and `python3` — no ESP-IDF, no emulator — and both
-cover ground the fourteen suites do not:
+cover ground the unit suites do not:
 
 ```
 python3 qemu/test_rom_selftest.py     the ROM handshake and chip injection

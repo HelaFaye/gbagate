@@ -1,0 +1,95 @@
+# The host suites, the GB-Link simulator, GB-Link's own software against it,
+# and every hardware image. Nothing here needs a board.
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays: GB-Link's upstream heads (compat-heads)
+
+permissions:
+  contents: read
+
+# A newer push to the same branch supersedes a run still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# A test that cannot run (no librfu, no browser) fails here instead of
+# passing as a skip.
+env:
+  GBLINK_NO_SKIP: '1'
+
+jobs:
+  host:
+    # make: the unit suites, the lint pass over pio/src and port/esp32s3, and
+    # the GB-Link simulator suites (librfu is fetched from pret); then the
+    # same at -O0, -O3 -flto and under ASan/UBSan.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      # mbe2e loads the real tester ROM, built from rom/ with a bare ARM toolchain
+      - run: sudo apt-get update -q && sudo apt-get install -y -q gcc-arm-none-eabi
+      - run: make rom
+      - run: make
+      - run: make strict
+      - run: make gblink-asan
+
+  compat:
+    # GB-Link's netplay bridge, Celio, the web apps, the launcher (in Chrome)
+    # and GB-Link-Switch-LDN's link task, at the commits run.sh pins.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 22
+      # Celio-Server listens on 443, fixed in its source; let it, unmodified.
+      - run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0
+      - run: make compat
+        env:
+          CHROMIUM: /usr/bin/google-chrome
+
+  compat-heads:
+    # The same against GB-Link's current heads, weekly: says when upstream
+    # moved in a way that matters, without blocking anyone's push.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 22
+      - run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0
+      - run: make compat
+        env:
+          CHROMIUM: /usr/bin/google-chrome
+          GBLINK_COMPAT_HEADS: '1'
+
+  hardware:
+    # Each image with ESP-IDF, as tools/build_hw.sh builds it.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.6
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { variant: link, board: devkit }
+          - { variant: gate, board: devkit }
+          - { variant: full, board: devkit }
+          - { variant: mini, board: devkit }
+          - { variant: mini, board: supermini }
+          - { variant: gate, board: devkit, bridge: 1 }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: build ${{ matrix.variant }} (${{ matrix.board }}${{ matrix.bridge && ', bridge' || '' }})
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh" >/dev/null
+          if [ -n "${{ matrix.bridge }}" ]; then export BOARD_HAS_BRIDGE=1; fi
+          BOARD=${{ matrix.board }} tools/build_hw.sh ${{ matrix.variant }}

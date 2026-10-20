@@ -1,0 +1,33 @@
+From fc9970cb1d56f8e608a8751567ff42dbba582892 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 20 Oct 2026 00:15:45 +0000
+Subject: [PATCH 6/6] Initialise the client RECV_DATA packet pointer
+
+PacketQueue::read() leaves its out-pointer unset when the queue is empty, and
+then returns 0, so the copy loop that follows never reads it. GCC 14 cannot
+see that and reports -Wmaybe-uninitialized at -Os, which stops a build that
+treats warnings as errors (ESP-IDF's default, where gbagate builds this
+file). No change in behaviour.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ src/sections/rfuProtocol.hpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/sections/rfuProtocol.hpp b/src/sections/rfuProtocol.hpp
+index c935711..712daee 100644
+--- a/src/sections/rfuProtocol.hpp
++++ b/src/sections/rfuProtocol.hpp
+@@ -1965,7 +1965,7 @@ private:
+                 else if (state == stClient)
+                 {
+                     uint32_t cnt = 0;
+-                    const uint8_t* p;
++                    const uint8_t* p = nullptr;  // set by read() whenever dlen > 0
+                     const uint32_t dlen = m_client.pkt.read(&p);
+                     m_buf[cnt++] = dlen;
+                     for (uint32_t j = 0; j < (dlen + 3) / 4; j++)
+-- 
+2.43.0
+

@@ -1,0 +1,64 @@
+From 28281d308892e64ec90b435a0253b044371b139e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 19 Oct 2026 20:19:05 +0000
+Subject: [PATCH 4/6] Bound the trade emulator's party uploads
+
+usbReceivePkmFile copied each chunk at g_receivedBytes with no bound, so any
+split of a 100-byte .pk3 other than 50 + 50 -- a 64-byte USB packet followed
+by the remaining 36, say -- wrote past the 100-byte static buffer. The data
+is now treated as a stream of 100-byte records.
+
+partnerPartyConstruct had the same shape for the partner's 600-byte party: a
+fourth 200-byte chunk wrote past it. It now stops at the end.
+
+Both found with AddressSanitizer (global-buffer-overflow).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ src/payloads/pokemon.cpp | 20 +++++++++++++++++---
+ 1 file changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/src/payloads/pokemon.cpp b/src/payloads/pokemon.cpp
+index 6d871be..819dffa 100644
+--- a/src/payloads/pokemon.cpp
++++ b/src/payloads/pokemon.cpp
+@@ -88,6 +88,13 @@ namespace party
+         {
+             data = data.first(nextThreshold - g_partnerReceivedBytes);
+         }
++        // A partner that keeps sending after the third chunk must not run
++        // past the 600-byte party.
++        if (g_partnerReceivedBytes >= g_partnerParty.size()) return;
++        if (data.size() > g_partnerParty.size() - g_partnerReceivedBytes)
++        {
++            data = data.first(g_partnerParty.size() - g_partnerReceivedBytes);
++        }
+         std::ranges::copy(data, std::span(g_partnerParty).subspan(g_partnerReceivedBytes).begin());
+         g_partnerReceivedBytes += data.size();
+     }
+@@ -103,11 +110,18 @@ namespace party
+ 
+     void usbReceivePkmFile(std::span<const uint8_t> data, void*)
+     {
++        // A stream of 100-byte records, whatever the chunking: two 50-byte
++        // writes, or a 64-byte USB packet followed by the rest.
+         static std::array<uint8_t, 0x64> encryptedPkm;
+-        std::ranges::copy(data, std::span(encryptedPkm).subspan(g_receivedBytes).begin());
+-        g_receivedBytes += data.size();
+-        if (g_receivedBytes >= 0x64)
++        while (!data.empty())
+         {
++            const size_t room = encryptedPkm.size() - g_receivedBytes;
++            const size_t n = data.size() < room ? data.size() : room;
++            std::ranges::copy(data.first(n), std::span(encryptedPkm).subspan(g_receivedBytes).begin());
++            g_receivedBytes += n;
++            data = data.subspan(n);
++            if (g_receivedBytes < encryptedPkm.size()) break;
++
+             for (size_t i = 0; i < numberOfSlots; i++)
+             {
+                 if (isPartySlotEmpty(i))
+-- 
+2.43.0
+

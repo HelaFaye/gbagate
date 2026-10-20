@@ -1,6 +1,7 @@
 # Host test suites. No hardware, no ESP-IDF, no PlatformIO.
 #
-#   make            build and run all fifteen suites
+#   make            build and run the unit suites, the lint pass and the
+#                   GB-Link simulator suites (make gblink)
 #   make strict     also at -O0, -O3 -flto and under ASan/UBSan
 #   make chipdb     regenerate the packed databases
 #   make clean
@@ -47,13 +48,56 @@ DEPS_mbe2e     = rom_catalog.c gba_multiboot.c
 ARG_mbe2e      = rom/tester.gba
 DEPS_menu      = ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c ui_shell.c hw_caps.c chipgate.c
 DEPS_modes     = app_modes.c ui_shell.c hw_caps.c chipgate.c
+DEPS_frame     = gblink_frame.c
+DEPS_usbdesc   = gblink_usbdesc.c
+DEPS_peer      = gbl_peer.c
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer
 
-.PHONY: all strict lint clean chipdb
-all: $(addprefix run-,$(SUITES))
+.PHONY: all strict lint clean chipdb gblink gblink-asan compat
+all: $(addprefix run-,$(SUITES)) gblink
 	@./qemu/lint.sh
+
+# The GB-Link personality: GB-Link's own firmware (third_party/) on the
+# gbagate shim, driven end to end the way the GB-Link host apps drive it.
+# The Wireless Adapter tests run pret's decompiled librfu as the game; it is
+# fetched into build/ref the first time, and without it those tests skip --
+# unless GBLINK_NO_SKIP is set (CI sets it), when a test that cannot run, or
+# a fetch that fails, is a failure.
+#
+# A test script's last line on success; all of it, and a failing make, if not.
+# (Not `| tail -1`, which would lose the exit status: see SUITE_rule below.)
+# A subshell, so a failure can be followed by more of the recipe line.
+RUNPY = (out=$$($(1) python3 -I test/gblink_sim/$(2) 2>&1); st=$$?; \
+	if [ $$st -eq 0 ]; then printf '%s\n' "$$out" | tail -1; else printf '%s\n' "$$out"; exit $$st; fi)
+GBLINK_SUITES := test_gblink.py test_peer.py test_rfu.py test_bench.py
+FETCH_LIBRFU = test/gblink_sim/fetch_librfu.sh 2>/dev/null || \
+	{ echo "librfu: not fetched (offline?); Wireless Adapter tests will skip"; [ -z "$$GBLINK_NO_SKIP" ]; }
+
+gblink:
+	@$(FETCH_LIBRFU)
+	@$(MAKE) -s -C test/gblink_sim
+	@$(foreach t,$(GBLINK_SUITES),$(call RUNPY,,$(t)) &&) true
+
+# GB-Link's own host software -- the netplay bridge engine, Celio-Server and
+# Celio-Client, the e-Reader, Pokemon and distributor web apps, the launcher,
+# GB-Link-Switch-LDN's link task -- unmodified, against the firmware. Needs
+# node and npm, and network access the first time (it clones the GB-Link
+# repos, at the commits run.sh pins, into build/; GBLINK_SRC uses checkouts).
+compat:
+	@test/gblink_compat/run.sh
+
+# The same suites against a simulator built with ASan and UBSan, in a build
+# directory of its own (so the plain one is never left sanitized). Every
+# report is fatal: UBSan's are not by default, and a recovered one would
+# print and pass. A simulator that aborts fails the test it was in.
+ASAN_SIM := $(BUILD)/gblink_sim_asan
+gblink-asan:
+	@$(FETCH_LIBRFU)
+	@$(MAKE) -s -C test/gblink_sim OUT=$(abspath $(ASAN_SIM)) \
+	    SAN="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+	@$(foreach t,$(GBLINK_SUITES),$(call RUNPY,GBLINK_SIM=$(abspath $(ASAN_SIM))/gblink_sim ASAN_OPTIONS=detect_leaks=0:abort_on_error=0,$(t)) &&) true
 
 $(BUILD):
 	@mkdir -p $(BUILD)
@@ -68,7 +112,10 @@ $(BUILD):
 # and make exited 0 without an Error line. Each suite's main() does
 # `return g_fail != 0`, so the status was always correct; only the pipe lost it.
 define SUITE_rule
-$(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) | $(BUILD)
+# Headers are dependencies too: without them a header-only change (a constant,
+# a struct layout) leaves every test binary stale, and a suite reports on code
+# that no longer exists. Found when a corrected descriptor length kept failing.
+$(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) $(wildcard src/*.h) | $(BUILD)
 	@$$(CC) $$(CFLAGS) $$(EXTRA_$(1)) -o $$@ $$< $$(addprefix src/,$$(DEPS_$(1)))
 run-$(1): $(BUILD)/test_$(1)
 	@printf '%-14s ' $(1); \
@@ -97,7 +144,7 @@ strict-$(1): | $(BUILD)
 	@printf '%-14s' $(1); : > $(BUILD)/s_$(1).log; \
 	for cfg in "-O0" "-O2" "-O3 -flto" "-g -fsanitize=address,undefined"; do \
 	  echo "=== $$$$cfg ===" >> $(BUILD)/s_$(1).log; \
-	  if ! $$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wshadow $$$$cfg -Isrc \
+	  if ! $$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wshadow $$$$cfg -Isrc $$(EXTRA_$(1)) \
 	       -o $(BUILD)/s_$(1) test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) \
 	       >> $(BUILD)/s_$(1).log 2>&1; \
 	  then printf ' BUILD  '; \

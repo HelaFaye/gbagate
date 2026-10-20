@@ -241,7 +241,69 @@ static void test_io_failure(void) {
     check("short buffer refused", (long)settings_pack(&s, tiny, sizeof tiny), 0);
 }
 
+/* The USB personality rides on the blob's tail: a blob packed before the field
+ * existed must still load (as GB-Link), and the field must survive a round
+ * trip and be clamped when out of range. */
+static void test_usb_mode_tail(void) {
+    printf("usb mode\n");
+    settings_t a, b;
+    settings_defaults(&a);
+    check("default is GB-Link", a.usb_mode, USB_MODE_GBLINK);
+    a.usb_mode = USB_MODE_DRIVE;
+    uint8_t buf[SETTINGS_BLOB_MAX + 16];
+    size_t n = settings_pack(&a, buf, sizeof buf);
+    check("round trip", settings_unpack(&b, buf, n) && b.usb_mode == USB_MODE_DRIVE, 1);
+
+    /* Rebuild the same blob two bytes shorter (usb_mode and air_link), as a
+     * pre-usb_mode build wrote it: payload length minus two, CRC recomputed. */
+    size_t plen = (size_t)(buf[6] | (buf[7] << 8)) - 2;
+    buf[6] = (uint8_t)plen; buf[7] = (uint8_t)(plen >> 8);
+    uint32_t crc = settings_crc32(buf, 8 + plen);
+    buf[8 + plen] = (uint8_t)crc; buf[9 + plen] = (uint8_t)(crc >> 8);
+    buf[10 + plen] = (uint8_t)(crc >> 16); buf[11 + plen] = (uint8_t)(crc >> 24);
+    check("old blob still loads", settings_unpack(&b, buf, 12 + plen), 1);
+    check("old blob reads as GB-Link", b.usb_mode, USB_MODE_GBLINK);
+
+    a.usb_mode = 9;
+    n = settings_pack(&a, buf, sizeof buf);
+    check("out of range clamps", settings_unpack(&b, buf, n) && b.usb_mode == USB_MODE_GBLINK, 1);
+}
+
+/* air_link follows usb_mode on the tail, with the same rules. */
+static void test_air_link_tail(void) {
+    printf("air link\n");
+    settings_t a, b;
+    settings_defaults(&a);
+    check("default is the Gen 3 cable", a.air_link, AIR_GEN3);
+    a.air_link = AIR_ADAPTER;
+    a.usb_mode = USB_MODE_DRIVE;   /* not the default: "kept" must mean kept */
+    uint8_t buf[SETTINGS_BLOB_MAX + 16];
+    size_t n = settings_pack(&a, buf, sizeof buf);
+    check("round trip", settings_unpack(&b, buf, n) && b.air_link == AIR_ADAPTER, 1);
+
+    size_t plen = (size_t)(buf[6] | (buf[7] << 8)) - 1;   /* a pre-air_link blob */
+    buf[6] = (uint8_t)plen; buf[7] = (uint8_t)(plen >> 8);
+    uint32_t crc = settings_crc32(buf, 8 + plen);
+    buf[8 + plen] = (uint8_t)crc; buf[9 + plen] = (uint8_t)(crc >> 8);
+    buf[10 + plen] = (uint8_t)(crc >> 16); buf[11 + plen] = (uint8_t)(crc >> 24);
+    check("old blob still loads", settings_unpack(&b, buf, 12 + plen), 1);
+    check("old blob reads as the cable", b.air_link, AIR_GEN3);
+    check("and keeps its usb mode", b.usb_mode, USB_MODE_DRIVE);
+
+    a.air_link = 7;
+    n = settings_pack(&a, buf, sizeof buf);
+    check("out of range clamps", settings_unpack(&b, buf, n) && b.air_link == AIR_GEN3, 1);
+
+    uint8_t mode, variant;
+    air_link_mode(AIR_ADAPTER, &mode, &variant);
+    check("adapter is mode 0x07", mode, 0x07);
+    air_link_mode(AIR_AW2, &mode, &variant);
+    check("AW2 is mode 0x04 variant 2", mode == 0x04 && variant == 2, 1);
+}
+
 int main(void) {
+    test_air_link_tail();
+    test_usb_mode_tail();
     test_round_trip();
     test_new_device();
     test_corruption();

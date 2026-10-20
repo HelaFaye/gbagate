@@ -1,0 +1,92 @@
+From 633eda3cc6861551ce6c3ae879ec7a9a11f66720 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 20 Oct 2026 00:19:11 +0000
+Subject: [PATCH 2/2] Recognise gbagate boards and do not offer them RP2040
+ firmware
+
+gbagate is an ESP32-S3 board that runs this firmware's application layer, so
+it enumerates as a GBLink adapter -- same VID/PID, bcdDevice and commands --
+and the launcher offered it the bundled .uf2 and a one-click update. That
+cannot work: 0x43 drops an ESP32-S3 into its ROM serial bootloader, not
+BOOTSEL, so the update waits for a PICOBOOT device that never appears and
+leaves the board in download mode until it is power-cycled.
+
+The board says what it is in its USB manufacturer string ("gbagate"), which
+WebUSB reads without sending the adapter anything, so a genuine GBLink is not
+probed with a command it does not know. Such a board is labelled as gbagate
+with the protocol version it speaks, keeps the LED, landing-page and cable
+settings (it implements them), and gets no firmware updater.
+
+Over WebSerial the manufacturer string is not available; there the updater
+was already download-only.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ assets/js/launcher.js | 24 +++++++++++++++++++++---
+ 1 file changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/assets/js/launcher.js b/assets/js/launcher.js
+index c39ce30..325b630 100644
+--- a/assets/js/launcher.js
++++ b/assets/js/launcher.js
+@@ -38,6 +38,13 @@ const GBLINK_REBOOT_BOOTSEL_MIN_VERSION = '2.1.2';
+ // "LAND" command. Older builds would misinterpret the query as link data.
+ const RECONFIGURABLE_LANDING_MIN_VERSION = '1.0.7';
+ 
++// gbagate (github.com/helafaye/gbagate) is an ESP32-S3 board that runs the GBLink
++// firmware's application layer and so presents itself as a GBLink adapter
++// (same VID/PID, version and commands), with "gbagate" as its USB manufacturer
++// string. Its firmware is not a .uf2 and is not updated here: 0x43 puts an
++// ESP32-S3 into its ROM serial bootloader, which PICOBOOT cannot talk to.
++const GBAGATE_MANUFACTURER = 'gbagate';
++
+ const GBL_CMD_GET_FIRMWARE_INFO = 0x0f;
+ const GBL_CMD_SET_LED_COLOR = 0x42;   // live preview (not persisted)
+ const GBL_CMD_SET_WEBUSB_LANDING = 0x44;
+@@ -515,12 +522,17 @@ async function detectGblinkFirmware(device, iface) {
+         }
+     } catch {}
+ 
++    const gbagate = device.manufacturerName === GBAGATE_MANUFACTURER;
+     return {
+         family: 'gblink',
+-        label: formatKnownGblinkVersionLabel(version),
++        label: gbagate
++            ? `gbagate (${formatKnownGblinkVersionLabel(version)} protocol)`
++            : formatKnownGblinkVersionLabel(version),
+         version,
+         landingEnabled,
+         cableSelection,
++        // Not a board the bundled firmware is built for (see GBAGATE_MANUFACTURER).
++        flashable: !gbagate,
+     };
+ }
+ 
+@@ -921,7 +933,10 @@ function createDeviceHealth({
+         setCable(firmwareInfo);
+ 
+         const [catalog, manifest] = await Promise.all([firmwareCatalog, firmwareManifest]);
+-        const target = resolveFirmwareTarget(catalog, manifest, firmwareInfo);
++        // A null target hides the updater: nothing here would run on the board.
++        const target = firmwareInfo.flashable === false
++            ? null
++            : resolveFirmwareTarget(catalog, manifest, firmwareInfo);
+         setConnected(true);
+ 
+         // Hand off firmware status display + flashing to the firmware updater.
+@@ -1201,7 +1216,10 @@ function createDeviceHealth({
+         setCable(firmwareInfo);
+ 
+         const [catalog, manifest] = await Promise.all([firmwareCatalog, firmwareManifest]);
+-        const target = resolveFirmwareTarget(catalog, manifest, firmwareInfo);
++        // A null target hides the updater: nothing here would run on the board.
++        const target = firmwareInfo.flashable === false
++            ? null
++            : resolveFirmwareTarget(catalog, manifest, firmwareInfo);
+         setConnected(true);
+ 
+         // Serial mode: flashing is manual. The updater reboots to BOOTSEL via the
+-- 
+2.43.0
+

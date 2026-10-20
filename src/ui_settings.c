@@ -30,6 +30,8 @@ static const char *field_name(setfield_t f) {
     case SETFIELD_ACCEL:    return "accel";
     case SETFIELD_WRAP:     return "wrap";
     case SETFIELD_INPUT:    return "input";
+    case SETFIELD_USB:      return "usb";
+    case SETFIELD_AIR:      return "air link";
     default:                return "?";
     }
 }
@@ -46,6 +48,12 @@ static void field_value(const settings_t *s, setfield_t f, char *out, size_t cap
     case SETFIELD_WRAP:     snprintf(out, cap, "%s", s->wrap ? "on" : "off"); break;
     case SETFIELD_INPUT:
         snprintf(out, cap, "%s", input_mode_name((input_mode_t)s->input_mode));
+        break;
+    case SETFIELD_USB:
+        snprintf(out, cap, "%s", usb_mode_name((usb_mode_t)s->usb_mode));
+        break;
+    case SETFIELD_AIR:
+        snprintf(out, cap, "%s", air_link_name((air_link_t)s->air_link));
         break;
     default:                snprintf(out, cap, "?"); break;
     }
@@ -115,6 +123,17 @@ static void adjust(settings_t *s, setfield_t f, int32_t d) {
             m += INPUT_MODE_COUNT;
         }
         s->input_mode = (uint8_t)m;
+        break;
+    }
+    case SETFIELD_USB:
+        /* A toggle; the boot path reads it, so the UI says "reboot". */
+        s->usb_mode = (uint8_t)((s->usb_mode + 1u) % USB_MODE_COUNT);
+        break;
+    case SETFIELD_AIR: {
+        /* Taken the next time Link: Wireless starts. */
+        int32_t m = ((int32_t)s->air_link + d) % AIR_LINK_COUNT;
+        if (m < 0) m += AIR_LINK_COUNT;
+        s->air_link = (uint8_t)m;
         break;
     }
     default:

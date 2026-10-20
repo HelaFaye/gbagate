@@ -78,3 +78,9 @@ void check_supermini(int *fail) {
         (*fail)++;
     }
 }
+
+/* The Supermini has no pin left for GB-Link's second SD path or an LED; the
+ * map must say so rather than reuse one. */
+#if BOARD_HAS_SD_ALT || BOARD_HAS_RGB_LED || PIN_LINK_SD_ALT >= 0 || PIN_RGB_LED >= 0
+#error "supermini claims a GB-Link part it has no pin for"
+#endif

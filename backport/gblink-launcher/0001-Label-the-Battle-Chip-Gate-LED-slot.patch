@@ -1,0 +1,32 @@
+From 58a279bb199ac470cd7ef54b383863fbd2bf7f0b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 20 Oct 2026 00:19:11 +0000
+Subject: [PATCH 1/2] Label the Battle Chip Gate LED slot
+
+Firmware 2.2.6 added a seventh per-mode colour (LED_SLOT_BATTLE_CHIP_GATE,
+deep blue by default), which GetLedConfig reports, but the label list still
+had six entries, so the row read "Mode 6".
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ assets/js/launcher.js | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/assets/js/launcher.js b/assets/js/launcher.js
+index 5f9095e..c39ce30 100644
+--- a/assets/js/launcher.js
++++ b/assets/js/launcher.js
+@@ -55,7 +55,8 @@ const GBLINK_CABLE_SELECTION_MIN_VERSION = '2.2.3';
+ 
+ // Per-mode LED slot labels, in the fixed order the firmware reports them.
+ const LED_SLOT_LABELS = {
+-    gblink: ['Idle / connected', 'Celio / GBA', 'GB / GBC', 'Printer', 'Advance Wars', 'e-Reader'],
++    // 2.2.6 added the Battle Chip Gate slot; older builds report six.
++    gblink: ['Idle / connected', 'Celio / GBA', 'GB / GBC', 'Printer', 'Advance Wars', 'e-Reader', 'Battle Chip Gate'],
+     'reconfigurable-starlarkus': ['Connected', 'Active / link', 'Printer'],
+ };
+ const WEBUSB_VENDOR_REQUEST = 0x01;
+-- 
+2.43.0
+

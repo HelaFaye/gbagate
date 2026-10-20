@@ -5,9 +5,17 @@ layout, `PROJECT_STATUS.md` for what is proven and what is not, and `AUDIT.md`
 for where the risk sits.
 
 ```
-make            the fourteen host suites, no hardware
-make strict     every suite at -O0, -O2, -O3 -flto and under ASan/UBSan
+make            every host suite, no hardware
+make strict     every unit suite at -O0, -O2, -O3 -flto and under ASan/UBSan
+make compat     GB-Link's own host software against the firmware
 ```
+
+**It is also a GB-Link adapter.** Every hardware image runs GB-Link's adapter
+firmware (2.2.7, `third_party/gblink-firmware`), so the GB-Link web apps, the
+netplay bridge, Celio and the Switch bridge see a GB-Link: every mode, from the
+Gen 3 relay to the Wireless Adapter. Two boards can also play GB-Link's relay
+to each other over ESP-NOW with no PC at all. See `doc/GBLINK.md`; fixes found
+upstream along the way are in `backport/`.
 
 Firmware building blocks for an ESP32-S3 that plugs into a GBA link port. Two
 related jobs share one PHY:
@@ -965,7 +973,7 @@ feature — it is an impossible one.
 pio run -e gate                build
 pio run -e gate -t upload      flash
 pio run -e full -t monitor
-pio test -e native             the fourteen host suites, no hardware
+make                           the host suites (from the repo root), no hardware
 ```
 
 `framework = espidf`, not Arduino. The Arduino core would fight us on exactly
@@ -1011,3 +1019,17 @@ USB MSC via `tusb_msc_storage` needs **ESP-IDF 5.x**. The official
 `espressif32` platform has historically pinned older IDF releases, so confirm
 what `pio run -e gate -v` reports. If it is 4.x, point `platform` at a fork
 shipping 5.x rather than trying to backport TinyUSB.
+
+## Licence
+
+gbagate is free software under the GNU General Public License, version 3
+only (`GPL-3.0-only`); the full text is in [LICENSE](LICENSE).
+
+- `third_party/gblink-firmware/` is GB-Link's adapter firmware, under its own
+  GPL-3.0 licence (the same text, in that directory). The shim files derived
+  from it (`port/gblink/link_layer_core.c`, `rfu_link_core.c`,
+  `serial_layer.cpp`) say so. The hardware images include it, and are
+  GPL-3.0 as a whole.
+- pret's decompiled librfu and GB-Link-Switch-LDN (AGPL-3.0) are not part of
+  gbagate: the tests fetch them into `build/` and nothing of them is
+  committed or shipped.

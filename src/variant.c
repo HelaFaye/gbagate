@@ -25,6 +25,7 @@ uint32_t feature_requires(feature_t f) {
     /* Exposing the drive needs a drive and a screen to say so on. */
     case FEAT_USB_EXPOSE: return FEAT_DISPLAY | FEAT_USB_MSC;
     case FEAT_SD_STORAGE: return 0;
+    case FEAT_GBLINK:     return FEAT_LINK_MASTER | FEAT_LINK_SLAVE;
 
     /*
      * Infrared uses the link connector in General Purpose mode rather than the
@@ -58,10 +59,10 @@ static const variant_t k_variant[VARIANT_COUNT] = {
     [VARIANT_LINK] = {
         .name = "link",
         .features = FEAT_DISPLAY | FEAT_ENCODER |
-                    FEAT_LINK_MASTER | FEAT_ESPNOW | FEAT_USB_CDC |
-                    FEAT_RFU_EMU | FEAT_SELFTEST,
+                    FEAT_LINK_MASTER | FEAT_LINK_SLAVE | FEAT_ESPNOW | FEAT_USB_CDC |
+                    FEAT_RFU_EMU | FEAT_SELFTEST | FEAT_GBLINK,
         .optional = 0,
-        .summary = "wireless link cable and Wireless Adapter emulation",
+        .summary = "wireless link cable, Wireless Adapter emulation, GB-Link adapter",
     },
     [VARIANT_GATE] = {
         .name = "gate",
@@ -69,7 +70,7 @@ static const variant_t k_variant[VARIANT_COUNT] = {
                     FEAT_CHIPDB_ALL | FEAT_LINK_MASTER | FEAT_LINK_SLAVE |
                     FEAT_ESPNOW | FEAT_USB_CDC | FEAT_USB_MSC |
                     FEAT_MULTIBOOT | FEAT_RFU_EMU | FEAT_SELFTEST |
-                    FEAT_USB_EXPOSE,
+                    FEAT_USB_EXPOSE | FEAT_GBLINK,
         .optional = 0,
         .summary = "everything except physical chips and IR",
     },
@@ -77,7 +78,8 @@ static const variant_t k_variant[VARIANT_COUNT] = {
         .name = "mini",
         .features = FEAT_DISPLAY | FEAT_ENCODER | FEAT_CHIPGATE |
                     FEAT_CHIPDB_ALL | FEAT_LINK_MASTER | FEAT_LINK_SLAVE |
-                    FEAT_MULTIBOOT | FEAT_SD_STORAGE | FEAT_SELFTEST,
+                    FEAT_MULTIBOOT | FEAT_SD_STORAGE | FEAT_SELFTEST |
+                    FEAT_GBLINK,
         .optional = 0,
         .summary = "gate, link and multiboot, from an SD card",
     },
@@ -88,7 +90,7 @@ static const variant_t k_variant[VARIANT_COUNT] = {
                     FEAT_LINK_MASTER | FEAT_LINK_SLAVE |
                     FEAT_ESPNOW | FEAT_USB_CDC | FEAT_USB_MSC |
                     FEAT_MULTIBOOT | FEAT_RFU_EMU | FEAT_IR | FEAT_NRF24 |
-                    FEAT_SELFTEST | FEAT_USB_EXPOSE,
+                    FEAT_SELFTEST | FEAT_USB_EXPOSE | FEAT_GBLINK,
         /* The nRF24 may or may not be populated; hw_caps decides at boot and
          * the menu entry appears or does not. Same image either way. */
         .optional = FEAT_NRF24,
@@ -162,6 +164,7 @@ const char *feature_name(feature_t f) {
     case FEAT_SELFTEST:    return "self test";
     case FEAT_USB_EXPOSE:  return "expose drive";
     case FEAT_SD_STORAGE:  return "SD card";
+    case FEAT_GBLINK:      return "GB-Link adapter";
     default:               return "?";
     }
 }

@@ -9,6 +9,7 @@
 
 #include "board.h"
 #include "hw_caps.h"
+#include "settings.h"
 #include "link_source.h"
 #include "variant.h"
 
@@ -18,7 +19,10 @@ extern void tasks_start(uint32_t features);
 extern uint16_t *st7735_framebuffer(void);
 extern esp_err_t st7735_init(int panel);
 #ifndef GBAGATE_QEMU
-extern esp_err_t msc_storage_init(void);
+/* Weak: the link and mini images have no USB drive (usb_msc_esp32s3.c is
+ * built for gate and full only), and the call below is a runtime check. */
+esp_err_t msc_storage_init(void);
+__attribute__((weak)) esp_err_t msc_storage_init(void) { return ESP_ERR_NOT_SUPPORTED; }
 #endif
 
 #ifndef VARIANT
@@ -83,9 +87,54 @@ void app_main(void) {
         }
     }
 #ifndef GBAGATE_QEMU
-    if (v.resolved & FEAT_USB_MSC) {
+    /*
+     * The link PHY. Nothing used to start it -- gba_link_start() had no
+     * caller, and the functions link_source binds the gate to did not exist,
+     * so no hardware image could have linked. One engine now serves the gate
+     * and the GB-Link personality; see gba_link_esp32s3.c.
+     */
+    if ((v.resolved & (FEAT_LINK_MASTER | FEAT_LINK_SLAVE)) && BOARD_HAS_LINK) {
+        extern void gba_link_start(void);
+        gba_link_start();
+        /* GB-Link's Wireless Adapter mode (0x07) drives the same pins in
+         * 32-bit Normal mode; it borrows them from the engine above while it
+         * runs, and its SD interrupt uses the ISR service that one installed. */
+        extern void rfu_link_start(void);
+        rfu_link_start();
+        /* The bridge UART to a companion such as GB-Link-Switch-LDN
+         * (BOARD_HAS_BRIDGE; a no-op without it). */
+        extern void bridge_uart_start(void);
+        bridge_uart_start();
+    }
+
+    /*
+     * One USB controller, so one personality, chosen by the "usb" setting:
+     * a GB-Link adapter (the default, for the GB-Link apps, the netplay bridge
+     * and Celio) or the drive the ROM catalogue reads. Read here rather than
+     * by gate_settings_start() because USB must be up before the host gives
+     * up on enumeration, and that is long before the UI.
+     */
+    settings_t boot;
+    extern const settings_io_t *nvs_settings_io(void);
+    settings_load(&boot, nvs_settings_io(), NULL);
+    bool as_gblink = (v.resolved & FEAT_GBLINK) && boot.usb_mode == USB_MODE_GBLINK;
+    /* GB-Link's firmware runs whatever USB is: the wireless link cable and
+     * the bridge UART drive it with no USB host at all. */
+    if (v.resolved & FEAT_GBLINK) {
+        extern void gblink_start(void);
+        gblink_start();            /* answer before the host can ask */
+    }
+    if (as_gblink) {
+        extern esp_err_t usb_gblink_start(void);
+        if (usb_gblink_start() == ESP_OK) {
+            ESP_LOGI(TAG, "USB: GB-Link adapter");
+        } else {
+            ESP_LOGE(TAG, "USB: GB-Link personality failed to start");
+        }
+    } else if (v.resolved & FEAT_USB_MSC) {
         if (msc_storage_init() == ESP_OK) {
             caps |= HW_CAP_USB;
+            ESP_LOGI(TAG, "USB: drive");
         }
     }
 #endif

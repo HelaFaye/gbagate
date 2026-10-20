@@ -1,5 +1,6 @@
 .reference/
 .*/
+!.github/
 *.obj
 *.a
 *.bin
@@ -13,3 +14,4 @@ rom/*.o
 rom/*.map
 rom/*.bak
 rom/tester.sav
+__pycache__/

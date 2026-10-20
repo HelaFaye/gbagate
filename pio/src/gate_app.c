@@ -42,7 +42,10 @@
 #if defined(GBAGATE_QEMU)
 static mb_xfer_fn mb_spi_transfer(void) { return NULL; }
 #else
-extern mb_xfer_fn mb_spi_transfer(void);
+/* Weak, because the link image has no multiboot and does not build
+ * mb_spi_esp32s3.c; NULL is Send Program's "unavailable" path. */
+mb_xfer_fn mb_spi_transfer(void);
+__attribute__((weak)) mb_xfer_fn mb_spi_transfer(void) { return NULL; }
 #endif
 #include "ui_shell.h"
 #include "app_modes.h"
@@ -66,6 +69,16 @@ __attribute__((weak)) uint16_t ir_last_command(void) { return 0; }
 __attribute__((weak)) bool     ir_send(uint16_t c)   { (void)c; return false; }
 extern link_bridge_t *tasks_bridge(void);
 
+#if !defined(GBAGATE_QEMU)
+#include "gbl_peer.h"
+/* The wireless link cable (port/esp32s3/peer_espnow_esp32s3.c,
+ * port/gblink/peer_glue.cpp). */
+esp_err_t        wireless_cable_start(uint8_t mode, uint8_t variant);
+void             wireless_cable_stop(void);
+bool             wireless_cable_peer_mac(uint8_t mac[6]);
+const gbl_peer_t *gblink_peer_state(void);
+#endif
+
 /*
  * The chip reader, when one is fitted. Weak defaults so the gate and link
  * images -- which have no reader connector -- still link and report honestly
@@ -77,6 +90,18 @@ __attribute__((weak)) bool chip_reader_detect(bool *a, bool *b) {
     if (b) *b = false;
     return false;
 }
+/*
+ * Same for the bus the reader sits on. gate_scan_chip() names both, and only
+ * the full image builds i2c_esp32s3.c, so without these the gate and link
+ * hardware images failed to link (found by the first idf.py hardware build).
+ * NULL is gate_scan_chip()'s "no reader" path.
+ */
+#if !defined(GBAGATE_QEMU)
+const chip_bus_io_t *chip_reader_bus(void);
+void                *chip_reader_ctx(void);
+__attribute__((weak)) const chip_bus_io_t *chip_reader_bus(void) { return NULL; }
+__attribute__((weak)) void                *chip_reader_ctx(void) { return NULL; }
+#endif
 static uint16_t gate_scan_chip(bool advance, bool beast);
 #include "variant.h"
 
@@ -784,8 +809,49 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
 
     switch (s_shell.chosen_mode) {
 
-    case APP_MODE_LINK_USB:
+#if !defined(GBAGATE_QEMU)
     case APP_MODE_LINK_WIRELESS: {
+        /* The wireless link cable: GB-Link's relay, run against another board
+         * over ESP-NOW (src/gbl_peer.c). Retransmits climbing while frames
+         * still flow is a noisy channel; frames stopping is the peer gone. */
+        const gbl_peer_t *p = gblink_peer_state();
+        uint8_t mac[6];
+        snprintf(l0, sizeof l0, "%s%s", gbl_peer_state_name(p->state),
+                 p->state >= GBL_PEER_SETTLING ? (p->master ? " (M)" : " (S)") : "");
+        if (wireless_cable_peer_mac(mac)) {
+            snprintf(l1, sizeof l1, "%02X%02X%02X%02X%02X%02X",
+                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        } else if (p->mode_mismatch && p->state == GBL_PEER_SEARCHING) {
+            /* A board is there but set to another air link. */
+            snprintf(l1, sizeof l1, "peer: other link");
+        } else {
+            snprintf(l1, sizeof l1, "%s: no peer", air_link_name((air_link_t)s_settings.air_link));
+        }
+        if (p->mode == 0x07) {
+            /* Wireless Adapter: whether the game has found the adapter is the
+             * first question; the firmware's own telemetry answers it. */
+            const char *gba = !p->rfu.seen          ? "GBA: --"
+                            : p->rfu.found          ? "GBA: found adapter"
+                            : !p->rfu.transfers     ? "GBA: no clock"
+                            : !p->rfu.any_rx        ? "GBA: use GBC cable"
+                                                    : "GBA: looking";
+            snprintf(l2, sizeof l2, "%s", gba);
+            snprintf(l3, sizeof l3, "rst %u out %lu in %lu", p->rfu.resets,
+                     (unsigned long)p->data_out, (unsigned long)p->data_in);
+        } else {
+            snprintf(l2, sizeof l2, "out %lu in %lu", (unsigned long)p->data_out, (unsigned long)p->data_in);
+            snprintf(l3, sizeof l3, "resent %lu", (unsigned long)p->retransmits);
+        }
+        footer = screen_controls(CTRLS_PAGE);
+        break;
+    }
+#endif
+
+    case APP_MODE_LINK_USB:
+#if defined(GBAGATE_QEMU)
+    case APP_MODE_LINK_WIRELESS:   /* QEMU has no radio: the UART bridge */
+#endif
+    {
         link_bridge_t *b = tasks_bridge();
         snprintf(l0, sizeof l0, "%s", b ? bridge_state_name(b->state) : "no bridge");
         snprintf(l1, sizeof l1, "sent   %lu", b ? (unsigned long)b->words_sent : 0ul);
@@ -1385,6 +1451,33 @@ static bool mode_enter_link(void *ctx, cg_game_t game, bool has_game) {
     return tasks_bridge() != NULL;
 }
 
+/*
+ * Link: Wireless is the GB-Link wireless cable on hardware. The word-level
+ * bridge it used to run cannot keep a Gen 3 link alive (a relayed word arrives
+ * after the slot it was for); GB-Link's packet relay can, and two boards play
+ * Celio for each other. What it carries is the "air link" setting: a Gen 3
+ * cable (mode 0x01), a Wireless Adapter (0x07: the Union Room, with the RFU
+ * stream as the payload) or an Advance Wars link (0x04). Both boards must
+ * agree; a board that hears a peer in another mode ignores it.
+ */
+static bool mode_enter_wireless(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+#if defined(GBAGATE_QEMU)
+    return tasks_bridge() != NULL;
+#else
+    uint8_t mode, variant;
+    air_link_mode((air_link_t)s_settings.air_link, &mode, &variant);
+    return wireless_cable_start(mode, variant) == ESP_OK;
+#endif
+}
+
+static void mode_exit_wireless(void *ctx) {
+    (void)ctx;
+#if !defined(GBAGATE_QEMU)
+    wireless_cable_stop();
+#endif
+}
+
 static void mode_tick_link(void *ctx) {
     (void)ctx;
     /*
@@ -1416,7 +1509,7 @@ static bool mode_enter_diagnostics(void *ctx, cg_game_t game, bool has_game) {
 static const app_mode_handler_t k_handlers[] = {
     { APP_MODE_CHIP_GATE,     mode_enter_chip_gate,   mode_exit_chip_gate,   NULL           },
     { APP_MODE_LINK_USB,      mode_enter_link,        NULL,                  mode_tick_link },
-    { APP_MODE_LINK_WIRELESS, mode_enter_link,        NULL,                  mode_tick_link },
+    { APP_MODE_LINK_WIRELESS, mode_enter_wireless,    mode_exit_wireless,    mode_tick_link },
     { APP_MODE_MULTIBOOT,     mode_enter_multiboot,   mode_exit_multiboot,   NULL           },
     { APP_MODE_CHIP_SCAN,     mode_enter_chip_scan,   NULL,                  NULL           },
     { APP_MODE_USB_STORAGE,   mode_enter_usb_storage, mode_exit_usb_storage, NULL           },
