@@ -56,6 +56,22 @@ def bench_info():
 
 
 @test
+def bench_led():
+    """Bring-up step 1's LED check: the colour must reach the LED."""
+    p = gb.SimPort()
+    try:
+        rc, out = run('led', p, ['0', '32', '0'])
+        check(rc == 0, out)
+        end = time.time() + 2
+        while time.time() < end and not any(c == 2 and b == bytes([0, 32, 0, 1]) for c, b in p.events):
+            time.sleep(0.02)
+        check(any(c == 2 and b == bytes([0, 32, 0, 1]) for c, b in p.events),
+              'the LED went green: %s' % [b.hex() for c, b in p.events if c == 2])
+    finally:
+        p.close()
+
+
+@test
 def bench_gen3_with_a_child_gba():
     p = gb.SimPort()
     try:

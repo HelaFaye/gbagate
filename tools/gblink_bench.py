@@ -302,7 +302,7 @@ def step_watch(b, args):
 
 def step_led(b, args):
     r, g, bl = (int(x) for x in (args + ['32', '0', '32'])[:3])
-    b.cmd(0x42, r, g, bl)
+    b.cmd(0x42, r, g, bl, 1)            # SetLEDColor: r, g, b, on
     say('ok    LED set to %d %d %d (live, not saved)' % (r, g, bl))
     return 0
 

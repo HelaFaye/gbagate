@@ -404,10 +404,16 @@ def game_api_session(a, b, frames=120):
     b.gba(0x31, *gname, *struct.pack('<H', frames))
     ha = game_api(a, None, 40)
     hb = game_api(b, None, 40)
-    for name, evs in (('host', ha), ('join', hb)):
+    def outcome(evs):
         failed = [e for e in evs if e[1] == 0xFF]
-        check(not failed, '%s failed at step %d (err %#x)' % (
-            name, failed[0][2], failed[0][3] | (failed[0][4] << 8)) if failed else '')
+        if failed:
+            return 'failed at step %d (err %#x)' % (failed[0][2], failed[0][3] | (failed[0][4] << 8))
+        return 'phases %s' % sorted({e[1] for e in evs})
+    for name, evs in (('host', ha), ('join', hb)):
+        # Both sides in the message: one side's failure is usually the other's
+        # doing (a host with no child is a join that never connected).
+        check(not any(e[1] == 0xFF for e in evs), '%s %s; host %s, join %s' % (
+            name, outcome(evs), outcome(ha), outcome(hb)))
     found = [e for e in hb if e[1] == 3][0]
     check(found[4:16] == gname[:12], 'the joining game found the host room by name: %r' % found[4:17])
     check(found[17:22] == b'BROCK', 'with the host user name: %r' % found[17:25])
