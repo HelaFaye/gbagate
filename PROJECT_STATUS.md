@@ -8,7 +8,7 @@ is proven, and how:
 
 | | how far |
 |---|---|
-| Every GB-Link mode, 0x00-0x07, and gbagate's 0x80 | host simulator, GB-Link's own firmware logic: `make gblink` (30 + 8 + 5 checks, also under ASan/UBSan) |
+| Every GB-Link mode, 0x00-0x07, and gbagate's 0x80 | host simulator, GB-Link's own firmware logic: `make gblink` (31 + 9 + 7 + 6 checks, all again under ASan/UBSan with every report fatal) |
 | Wireless Adapter (0x07) | against pret's librfu running on a model of the GBA's SIO, timers and interrupts: ID exchange, status REQs, soft reset, clock hand-over, two adapters hosting, joining and exchanging data |
 | GB-Link's host software | unmodified, against the simulator: netplay bridge (gen3, AW, rfu over RetroArch netplay), Celio-Server + Celio-Client, gblink-ereader, gb-pokemon-web, gblink-distributor, and the launcher page itself in Chromium: `make compat` |
 | Wireless cable (two boards, ESP-NOW) | simulator with lossy and duplicating air, Gen 3 and Wireless Adapter |

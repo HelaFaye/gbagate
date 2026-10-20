@@ -147,11 +147,19 @@ class SimPort(Framer):
         self._record('G', bytes(b))
 
     def close(self):
+        """The simulator's exit status: 0 unless it crashed (a sanitizer
+        report, under ASan) or would not quit."""
         try:
             self._record('Q', b'')
             self.p.wait(timeout=2)
         except Exception:
             self.p.kill()
+            self.p.wait()
+        try:
+            self.p.stdin.close()
+        except (BrokenPipeError, ValueError, OSError):
+            pass
+        return self.p.returncode
 
 
 def open_port(name):
@@ -246,7 +254,8 @@ class Board:
 
     def phy(self):
         d = self.ask(0x4E, timeout=0.5)
-        if not d or len(d) < 2 + 4 * len(PHY_FIELDS):
+        # [0x4E, layout 1, u32 * 7]; another layout is not this one's to read.
+        if not d or len(d) < 2 + 4 * len(PHY_FIELDS) or d[1] != 1:
             return None
         return dict(zip(PHY_FIELDS, struct.unpack('<%dI' % len(PHY_FIELDS), d[2:2 + 4 * len(PHY_FIELDS)])))
 
@@ -354,11 +363,13 @@ def step_rfu(b, args):
     say('....  mode 0x07 up; start the game\'s wireless menu (FRLG: Union Room / wireless club)')
     found = False
     last_comstate = None
-    resets0 = None
+    resets0 = resets = None
     end = time.time() + secs
     while time.time() < end and not found:
         time.sleep(0.5)
-        for d in b.data_since(dm):
+        new = b.data_since(dm)
+        dm += len(new)
+        for d in new:
             if len(d) == 16 and d[0] == 0x0E:
                 any_rx, comstate, xfers = d[1], d[3], struct.unpack('<I', d[12:16])[0]
                 if comstate != last_comstate:
@@ -372,8 +383,8 @@ def step_rfu(b, args):
                 if comstate >= 2:
                     found = True
             elif len(d) == 25 and d[0] == 0x1D:
-                resets0 = d[14] if resets0 is None else resets0
-        dm = len(b.port.data)
+                resets = d[14]
+                resets0 = resets if resets0 is None else resets0
     isr = b.rfu_isr()
     phy = b.phy()
     if isr:
@@ -381,6 +392,8 @@ def step_rfu(b, args):
             'tightest gap %(tightest_gap_us)d us, %(passes)d passes' % isr)
     if phy:
         say('      words %(rfu_words)d, aborted mid-word %(rfu_aborted)d' % phy)
+    if resets is not None:
+        say('      soft resets from the game: %d' % ((resets - resets0) & 0xFF))
     if found:
         say('ok    the game found the adapter (ID exchange done)')
     else:
@@ -401,16 +414,21 @@ def step_gate(b, args):
         say('FAIL  the game never opened a gate session')
         b.cancel()
         return 1
+    _, dm = b.mark()
     d = b.ask(0x50, chip & 0xFF, chip >> 8)
-    say('ok    session open; chip %#06x %s' % (chip, 'accepted' if d and d[1] else 'refused'))
+    if not (d and len(d) > 1 and d[1]):
+        say('FAIL  session open, but chip %#06x was refused' % chip)
+        b.cancel()
+        return 1
+    say('ok    session open; chip %#06x accepted' % chip)
     end = time.time() + 5
     sent = False
     while time.time() < end and not sent:
-        sent = any(x[:1] == b'\x54' for x in b.port.data)
+        sent = any(x[:1] == b'\x54' for x in b.data_since(dm))
         time.sleep(0.1)
-    say('ok    chip sent' if sent else 'note  no CHIP_SENT within 5 s')
+    say('ok    chip sent' if sent else 'FAIL  no CHIP_SENT within 5 s')
     b.cancel()
-    return 0
+    return 0 if sent else 1
 
 
 STEPS = {'info': step_info, 'watch': step_watch, 'led': step_led, 'gen3': step_gen3,

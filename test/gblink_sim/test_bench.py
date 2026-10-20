@@ -15,6 +15,21 @@ from contextlib import redirect_stdout
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', '..', 'tools'))
 import gblink_bench as gb  # noqa: E402
+sys.path.insert(0, HERE)
+from simdrv import BAD_EXITS, run_tests, skip  # noqa: E402
+
+# SimPort.close() returns the simulator's exit status; a crash fails the test.
+_close = gb.SimPort.close
+
+
+def _checked_close(self):
+    rc = _close(self)
+    if rc:
+        BAD_EXITS.append('gblink_sim (bench) exited %s' % rc)
+    return rc
+
+
+gb.SimPort.close = _checked_close
 
 TESTS = []
 
@@ -109,8 +124,7 @@ def bench_rfu_sees_the_game_find_the_adapter():
             p.gba(0x20, 8)           # librfu: AgbRFU_SoftReset + AgbRFU_checkID
         rc, out = run('rfu', p, ['8'], during=game)
         if any(c == 11 and b[:1] == b'\x00' for c, b in p.events):
-            print('  (librfu not built in: fetch_librfu.sh; rfu step not exercised)')
-            return
+            skip('librfu not built in (fetch_librfu.sh): the rfu step not exercised')
         check(rc == 0 and 'found the adapter' in out, out)
         check('transfer path: worst pass' in out, out)
     finally:
@@ -130,18 +144,7 @@ def bench_gate_with_a_battle_network_game():
 
 
 def main(argv):
-    fails = 0
-    for t in TESTS:
-        t0 = time.time()
-        try:
-            t()
-            print('  ok    %-40s %5.2fs' % (t.__name__, time.time() - t0))
-        except Exception:
-            fails += 1
-            print('  FAIL  %s' % t.__name__)
-            traceback.print_exc()
-    print('bench          %s' % ('all %d checks passed' % len(TESTS) if not fails else '%d of %d FAILED' % (fails, len(TESTS))))
-    return 1 if fails else 0
+    return run_tests('bench', TESTS, argv)
 
 
 if __name__ == '__main__':

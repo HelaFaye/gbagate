@@ -41,6 +41,14 @@ endif
 
 all: $(OUT)/gblink_sim $(OUT)/usbdesc_dump $(OUT)/party_check
 
+# The flags the simulator was built with: a change (SAN, CFLAGS) rebuilds it,
+# so a sanitized build is never reused as a plain one or the other way round.
+FLAGS_NOW := $(CC) $(CXX) $(CFLAGS) $(CXXFLAGS) $(SAN)
+$(OUT)/.flags: FORCE
+	@mkdir -p $(OUT)
+	@[ "$$(cat $@ 2>/dev/null)" = '$(FLAGS_NOW)' ] || printf '%s' '$(FLAGS_NOW)' > $@
+FORCE:
+
 # The trade emulator's party store alone, always sanitized (test_party.cpp).
 $(OUT)/party_check: test_party.cpp $(V)/payloads/pokemon.cpp $(V)/payloads/pokemon.hpp
 	@mkdir -p $(OUT)
@@ -53,7 +61,7 @@ $(OUT)/usbdesc_dump: usbdesc_dump.c $(ROOT)/src/gblink_usbdesc.c $(ROOT)/src/gbl
 $(LIBRFU_SRC) &: $(wildcard $(LIBRFU)/src/librfu_*.c) port_librfu.py
 	@python3 -I port_librfu.py $(LIBRFU)/src $(OUT)/librfu
 
-$(OUT)/gblink_sim: $(VSRC_CPP) $(VSRC_C) $(PSRC_CPP) $(PSRC_C) $(SSRC_C) $(SSRC_CPP) $(LIBRFU_SRC) $(wildcard *.h) $(wildcard gba_shim/*.h) $(wildcard $(P)/*.h) $(wildcard $(ROOT)/src/*.h) $(wildcard $(V)/*.hpp $(V)/*/*.hpp $(V)/*/*.h)
+$(OUT)/gblink_sim: $(OUT)/.flags $(VSRC_CPP) $(VSRC_C) $(PSRC_CPP) $(PSRC_C) $(SSRC_C) $(SSRC_CPP) $(LIBRFU_SRC) $(wildcard *.h) $(wildcard gba_shim/*.h) $(wildcard $(P)/*.h) $(wildcard $(ROOT)/src/*.h) $(wildcard $(V)/*.hpp $(V)/*/*.hpp $(V)/*/*.h)
 	@mkdir -p $(OUT)/obj
 	@set -e; objs=""; \
 	for f in $(LIBRFU_SRC); do \
@@ -76,4 +84,4 @@ $(OUT)/gblink_sim: $(VSRC_CPP) $(VSRC_C) $(PSRC_CPP) $(PSRC_C) $(SSRC_C) $(SSRC_
 
 clean:
 	rm -rf $(OUT)
-.PHONY: all clean
+.PHONY: all clean FORCE

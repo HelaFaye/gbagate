@@ -99,7 +99,7 @@ def check(cond, what):
 def main(argv):
     exe = argv[1]
     s = Sim()
-    ldn = Ldn(exe, s, 30000)
+    ldn = Ldn(exe, s, 60000)   # longer than every wait below added up
     ok = True
     t0 = time.time()
     try:

@@ -20,7 +20,7 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from simdrv import Sim, ST  # noqa: E402
+from simdrv import Sim, ST, Skip, skip, run_tests  # noqa: E402,F401
 
 EV_RFU = 11
 MODE_RFU = 0x07
@@ -46,10 +46,6 @@ def check(cond, what):
         raise AssertionError(what)
 
 
-class Skip(Exception):
-    pass
-
-
 class Game:
     """librfu on the GBA behind one simulated adapter."""
 
@@ -59,7 +55,7 @@ class Game:
     def _event(self, pred, timeout, start):
         ev = self.s.wait_event(EV_RFU, pred=lambda b: b[0] == 0 or pred(b), timeout=timeout, start=start)
         if ev[0] == 0:
-            raise Skip('librfu not built in (test/gblink_sim/fetch_librfu.sh)')
+            skip('librfu not built in (test/gblink_sim/fetch_librfu.sh)')
         return ev
 
     def check_id(self, tries=8):
@@ -385,7 +381,7 @@ def game_api(sim, phase_ok, timeout):
         with sim.cv:
             evs = [e for c, e in sim.events if c == EV_RFU and e[0] in (0, 8)]
         if any(e[0] == 0 for e in evs):
-            raise Skip('librfu not built in (test/gblink_sim/fetch_librfu.sh)')
+            skip('librfu not built in (test/gblink_sim/fetch_librfu.sh)')
         if any(e[1] in (5, 0xFF) for e in evs):
             return evs
         time.sleep(0.1)
@@ -447,31 +443,7 @@ def rfu_game_api_host_and_join():
 
 
 def main(argv):
-    pick = argv[argv.index('-k') + 1] if '-k' in argv else ''
-    fails = skips = ran = 0
-    for t in TESTS:
-        if pick and pick not in t.__name__:
-            continue
-        ran += 1
-        t0 = time.time()
-        try:
-            t()
-            print('  ok    %-40s %5.2fs' % (t.__name__, time.time() - t0))
-        except Skip as e:
-            skips += 1
-            print('  skip  %-40s %s' % (t.__name__, e))
-        except Exception:
-            fails += 1
-            print('  FAIL  %s' % t.__name__)
-            traceback.print_exc()
-    if fails:
-        verdict = '%d of %d FAILED' % (fails, ran)
-    elif skips:
-        verdict = '%d passed, %d skipped (no librfu)' % (ran - skips, skips)
-    else:
-        verdict = 'all %d checks passed' % ran
-    print('rfu            %s' % verdict)
-    return 1 if fails else 0
+    return run_tests('rfu', TESTS, argv)
 
 
 if __name__ == '__main__':

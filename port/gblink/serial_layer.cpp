@@ -6,6 +6,9 @@
 // registered. A host's modem prober (ModemManager on Linux opens every new
 // CDC-ACM port and types AT commands at it) can produce a parseable header by
 // accident, and must not be able to steer replies away from WebUSB.
+//
+// Derived from GB-Link's adapter firmware, which is GPL-3.0
+// (third_party/gblink-firmware/LICENSE); this file is under that licence.
 #include "layers/serialLayer.hpp"
 
 extern "C" {

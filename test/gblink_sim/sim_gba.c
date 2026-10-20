@@ -300,8 +300,10 @@ void gb_link_transfer(const uint8_t *tx, uint8_t *rx, uint32_t len, uint32_t us_
         }
         pthread_mutex_unlock(&s_mx);
         rx[i] = r;
-        uint8_t ev[2] = { tx[i], r };
-        sim_event(SIM_EV_GB_BYTE, ev, 2);
+        /* With when it went, so a test can measure the gaps. */
+        const uint32_t t = (uint32_t)zshim_now_us();
+        uint8_t ev[6] = { tx[i], r, (uint8_t)t, (uint8_t)(t >> 8), (uint8_t)(t >> 16), (uint8_t)(t >> 24) };
+        sim_event(SIM_EV_GB_BYTE, ev, sizeof ev);
         if (us_between) k_busy_wait(us_between);
     }
 }

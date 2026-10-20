@@ -973,7 +973,7 @@ feature — it is an impossible one.
 pio run -e gate                build
 pio run -e gate -t upload      flash
 pio run -e full -t monitor
-pio test -e native             the fourteen host suites, no hardware
+make                           the host suites (from the repo root), no hardware
 ```
 
 `framework = espidf`, not Arduino. The Arduino core would fight us on exactly

@@ -17,7 +17,7 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from simdrv import Sim, ST  # noqa: E402
+from simdrv import Sim, ST, eventually, run_tests  # noqa: E402
 
 TESTS = []
 
@@ -128,10 +128,12 @@ def wireless_cable_lossy_air():
     a, b, air = pair(loss=0.2, dup=0.1)
     try:
         check(exchange(a, b, timeout=40), 'frames crossed both ways on a lossy radio')
-        time.sleep(3)  # let the retransmissions finish
         check(air.dropped > 0, 'the air really did drop datagrams (%d of %d)' % (air.dropped, air.sent))
         # In-order, exactly-once: each tagged frame reached the other GBA's wire
-        # as many times as it was queued (4), not more.
+        # as many times as it was queued (4), not more. Wait for all four (the
+        # retransmissions), then a little longer for any duplicate.
+        eventually(lambda: [tx for tx, _ in b.words()].count(0xA11A) >= 4, 10, 'all four A->B frames arrived')
+        time.sleep(1)
         got_b = [tx for tx, _ in b.words()].count(0xA11A)
         check(got_b == 4, 'A->B frames delivered exactly once each: %d' % got_b)
     finally:
@@ -208,8 +210,6 @@ def wireless_adapter_over_the_cable():
             if n == len(up):
                 break
         check(n == len(up) and struct.pack('<%dI' % (len(rx) - 1), *rx[1:])[:n] == up, 'child to host payload')
-    except T.Skip as e:
-        print('  (skipped: %s)' % e)
     finally:
         a.close()
         b.close()
@@ -230,8 +230,6 @@ def wireless_adapter_game_api_over_the_cable():
         (n, hg, hbad), (_, jg, jbad) = T.game_api_session(a, b)
         check(hbad == 0 and jbad == 0, 'nothing out of order: %d %d' % (hbad, jbad))
         check(hg >= n * 9 // 10 and jg >= n * 9 // 10, 'delivered: host %d/%d, join %d/%d' % (hg, n, jg, n))
-    except T.Skip as e:
-        print('  (skipped: %s)' % e)
     finally:
         a.close()
         b.close()
@@ -267,22 +265,7 @@ def wireless_cable_refuses_a_usb_host():
 
 
 def main(argv):
-    pick = argv[argv.index('-k') + 1] if '-k' in argv else ''
-    fails = ran = 0
-    for t in TESTS:
-        if pick and pick not in t.__name__:
-            continue
-        ran += 1
-        t0 = time.time()
-        try:
-            t()
-            print('  ok    %-40s %5.2fs' % (t.__name__, time.time() - t0))
-        except Exception:
-            fails += 1
-            print('  FAIL  %s' % t.__name__)
-            traceback.print_exc()
-    print('peer           %s' % ('all %d checks passed' % ran if not fails else '%d of %d FAILED' % (fails, ran)))
-    return 1 if fails else 0
+    return run_tests('peer', TESTS, argv)
 
 
 if __name__ == '__main__':

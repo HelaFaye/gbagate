@@ -23,8 +23,8 @@ hardware.
 | Check | Result |
 |---|---|
 | 28 unit suites × `-O0`, `-O2`, `-O3 -flto`, ASan/UBSan | all pass |
-| `make gblink`: 30 GB-Link mode checks, 8 Wireless Adapter (librfu) checks, 5 wireless-cable checks | all pass, also under ASan/UBSan |
-| `make compat`: netplay bridge (adapter, gen3 netplay, rfu netplay), Celio relay, 4 web-app checks, 7 launcher checks in Chromium | all pass |
+| `make gblink`: 31 GB-Link mode checks, 9 Wireless Adapter (librfu) checks, 7 wireless-cable checks, 6 bench-script checks | all pass; `make gblink-asan` runs all four suites again under ASan and UBSan, every report fatal |
+| `make compat`: netplay bridge (adapter, gen3 netplay, rfu netplay), Celio relay, 4 web-app checks, 7 launcher checks in Chromium, GB-Link-Switch-LDN's link task (5 checks), at pinned upstream commits | all pass |
 | Hardware images: link, gate, full, mini; devkit and Supermini; gate with the bridge UART | all build (ESP-IDF 5.5) |
 | QEMU image | builds (ESP-IDF 6) |
 | Backport series built from upstream's tree, patched and unpatched | patched: only gbagate-only checks fail; unpatched: the fix tests fail too |
@@ -84,7 +84,7 @@ Each has a test that fails on upstream's file. Details are in
   game thread missed windows a real GBA meets in microseconds. They now sleep
   to their next deadline.
 - `make gblink-asan` deleted the simulator it had just tested, which broke
-  `make compat` after it. It now rebuilds the normal binary.
+  `make compat` after it. It now builds its own, in build/gblink_sim_asan.
 
 ### Not gbagate's to fix
 

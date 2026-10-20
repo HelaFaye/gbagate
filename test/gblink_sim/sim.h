@@ -16,7 +16,8 @@ enum {
     SIM_EV_FLASH_WRITE = 5,
     SIM_EV_PHY_MODE    = 6,  /* [gbl_phy_mode_t, sd_alt]                */
     SIM_EV_WORD        = 7,  /* [tx lo hi, rx lo hi] one link word      */
-    SIM_EV_GB_BYTE     = 8,  /* [tx, rx] one GB SPI byte                */
+    SIM_EV_GB_BYTE     = 8,  /* [tx, rx] one GB SPI byte (+ u32 us when the
+                                link mode clocks it; the printer's GB does) */
     SIM_EV_READY       = 9,  /* the firmware thread is running          */
     SIM_EV_PEER_STATUS = 10, /* [lo hi] status seen by the wireless cable */
     SIM_EV_RFU         = 11  /* the librfu game: see rfu_game.c           */

@@ -2,6 +2,9 @@
  * rfu_link_core.c -- the vendored layers/linkLayer_rfu.h over a board's
  * gbl_rfu_phy_t. See rfu_phy.h for the wire contract; this file is only
  * bookkeeping, so it is the same on the ESP32-S3 and in the host simulator.
+ *
+ * Derived from GB-Link's adapter firmware, which is GPL-3.0
+ * (third_party/gblink-firmware/LICENSE); this file is under that licence.
  */
 #include "rfu_phy.h"
 

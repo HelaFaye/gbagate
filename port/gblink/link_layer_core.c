@@ -11,6 +11,9 @@
  *     the session to auto gets a fresh answer.
  *   - The wrong-pin flip is granted once per SLAVE configure and only spent
  *     while no word at all has arrived.
+ *
+ * Derived from GB-Link's adapter firmware, which is GPL-3.0
+ * (third_party/gblink-firmware/LICENSE); this file is under that licence.
  */
 #include <stddef.h>
 

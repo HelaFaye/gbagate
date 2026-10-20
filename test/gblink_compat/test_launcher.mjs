@@ -27,24 +27,29 @@ const SRC = process.env.GBLINK_SRC || path.join(BUILD, 'src');
 const LAUNCHER = path.join(SRC, 'gblink-launcher');
 const CHROMIUM = process.env.CHROMIUM || '/opt/pw-browsers/chromium';
 
+// GBLINK_NO_SKIP (set in CI): a test that cannot run is a failure.
+const skip = (why) => {
+  const required = !!process.env.GBLINK_NO_SKIP;
+  console.log(`launcher            ${required ? 'FAILED: required, but' : 'skipped:'} ${why}`);
+  process.exit(required ? 1 : 0);
+};
 let chromium;
 try {
   ({ chromium } = await import(`${BUILD}/node_modules/playwright-core/index.mjs`));
 } catch {
-  console.log('launcher            skipped: playwright-core not installed');
-  process.exit(0);
+  skip('playwright-core not installed');
 }
-if (!fs.existsSync(CHROMIUM) || !fs.existsSync(path.join(LAUNCHER, 'index.html'))) {
-  console.log('launcher            skipped: no Chromium or no gblink-launcher checkout');
-  process.exit(0);
-}
+if (!fs.existsSync(CHROMIUM)) skip(`no Chromium at ${CHROMIUM} (set CHROMIUM)`);
+if (!fs.existsSync(path.join(LAUNCHER, 'index.html'))) skip('no gblink-launcher checkout');
 
 /** A worktree of the launcher at upstream's head, optionally with our patches. */
 function tree(name, patched) {
   const dir = path.join(BUILD, `launcher-${name}`);
   fs.rmSync(dir, { recursive: true, force: true });
   execFileSync('git', ['-C', LAUNCHER, 'worktree', 'prune']);
-  const head = execFileSync('git', ['-C', LAUNCHER, 'rev-parse', 'origin/HEAD']).toString().trim();
+  // run.sh's pin (backport/README.md's base), or upstream's head when it says.
+  const base = process.env.GBLINK_LAUNCHER_BASE || 'origin/HEAD';
+  const head = execFileSync('git', ['-C', LAUNCHER, 'rev-parse', base]).toString().trim();
   execFileSync('git', ['-C', LAUNCHER, 'worktree', 'add', '-q', '--detach', dir, head]);
   if (patched) {
     const pdir = path.join(ROOT, 'backport/gblink-launcher');

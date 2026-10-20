@@ -17,7 +17,7 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from simdrv import (Sim, SIM, ST, EV_VCC, EV_LED, EV_REBOOT, EV_BOOTLOADER,  # noqa: E402
+from simdrv import (eventually, run_tests, Sim, SIM, ST, EV_VCC, EV_LED, EV_REBOOT, EV_BOOTLOADER,  # noqa: E402
                     EV_FLASH, EV_PHY, EV_GB)
 
 CHILD, PARENT, ECHO = 1, 2, 3
@@ -97,9 +97,9 @@ def settings_persist_across_power_cycles():
         check(len(led) == 23 and led[1] == 7, 'LED config is [45 07 rgb*7] (2.2.7 added the chip gate slot)')
         check(tuple(led[2 + 18:2 + 21]) == (2, 4, 32), 'slot 6, Battle Chip Gate: deep blue: %s' % led.hex())
         check(tuple(led[2 + 9:2 + 12]) == (0x11, 0x22, 0x33), 'slot 3 kept: %s' % led.hex())
+        mark = len(s.data)
         s.cmd(0x47)
         s.cmd(0x45)
-        mark = len(s.data)
         led = s.wait_data(lambda d: d[0] == 0x45, start=mark)
         check(tuple(led[2 + 9:2 + 12]) == (32, 0, 32), 'reset to purple: %s' % led.hex())
         s.close()
@@ -203,10 +203,9 @@ def relay_master_full_session():
         d = s.wait_data(lambda d: len(d) == 64 and 0xBBBB in words16(d), 5)
         check(len(d) == 64, 'relay data is always 64 bytes')
 
-        time.sleep(0.4)
-        sent = [tx for tx, rx in s.words()]
-        for f in frames:
-            check(f[0] in sent, 'frame %04x reached the GBA' % f[0])
+        eventually(lambda: all(f[0] in [tx for tx, rx in s.words()] for f in frames), 5,
+                   lambda: 'every frame reached the GBA: %s' % [hex(f[0]) for f in frames
+                                                            if f[0] not in [tx for tx, rx in s.words()]])
     finally:
         s.close()
 
@@ -321,9 +320,10 @@ def relay_short_packet():
         s.gba(0x01, CHILD)
         link_up_master(s)
         s.write_data(struct.pack('<8H', 0x4444, 0x1234, 0, 0, 0, 0, 0, 0) * 4)
-        time.sleep(0.4)
+        eventually(lambda: [tx for tx, rx in s.words()].count(0x4444) >= 4, 5, 'the four frames went out')
         s.write_data(struct.pack('<8H', 0x7777, 0, 0, 0, 0, 0, 0, 0))
-        time.sleep(0.6)
+        eventually(lambda: 0x7777 in [tx for tx, rx in s.words()], 5, 'short packet delivered')
+        time.sleep(0.3)   # a replay of the old frames would ride with it
         sent = [tx for tx, rx in s.words()]
         check(sent.count(0x4444) == 4, 'old frames not replayed (%d)' % sent.count(0x4444))
         check(0x7777 in sent, 'short packet delivered')
@@ -437,11 +437,16 @@ def gb_spi_timing_and_chunks():
         s.wait_status(ST['GBModeActive'])
         s.cmd(0x30, 0x24, 0x00, 0x00, 0x04)
         payload = bytes(range(56))
-        t0 = time.time()
+        mark = len(s.events)
         s.write_data(payload)
         d = s.wait_data(lambda d: True)
         check(len(d) == 56, '56 back')
-        check(time.time() - t0 >= 14 * 36e-6, 'gaps honoured')
+        with s.cv:
+            sent = [b for c, b in s.events[mark:] if c == EV_GB and len(b) == 6]
+        check([b[0] for b in sent] == list(payload), 'all 56 bytes clocked, in order')
+        t = [struct.unpack('<I', b[2:6])[0] for b in sent]
+        gaps = [(t[i + 1] - t[i]) & 0xFFFFFFFF for i in range(3, 55, 4)]
+        check(len(gaps) == 13 and min(gaps) >= 36, '36 us after every 4-byte chunk: %s' % gaps)
     finally:
         s.close()
 
@@ -515,8 +520,8 @@ def ereader_errors():
         s.write_data(b'ERDR\x02' + bytes(59))
         d = s.wait_data(lambda d: d[:5] == b'ERDR\x12', 3)
         check(d[5] == 2, 'not loaded: %s' % d[:9].hex())
-        s.write_data(b'ERDR\x01' + struct.pack('<IH', 8190, 16) + bytes(16) + bytes(37))
         mark = len(s.data)
+        s.write_data(b'ERDR\x01' + struct.pack('<IH', 8190, 16) + bytes(16) + bytes(37))
         d = s.wait_data(lambda d: d[:5] == b'ERDR\x12', 3, start=mark)
         check(d[5] == 1, 'too large: %s' % d[:9].hex())
     finally:
@@ -591,9 +596,9 @@ def gbagate_chip_gate_session():
         check(gate and gate[0] == 0xFF00, 'announced as the US Beast Link Gate: %s' % gate[:1])
         s.cmd(0x50, 0x2A, 0x01)
         check(s.wait_data(lambda d: d[0] == 0x50)[1] == 1, 'chip accepted')
-        s.cmd(0x50, 0x2B, 0x01)
         mark = len(s.data)
-        check(s.wait_data(lambda d: d[0] == 0x50, start=mark - 1)[1] in (0, 1), 'second insert answered')
+        s.cmd(0x50, 0x2B, 0x01)
+        check(s.wait_data(lambda d: d[0] == 0x50, start=mark)[1] == 0, 'second insert refused while the first goes out')
         e = s.wait_data(lambda d: d[0] == 0x54, 5)
         check(e[1:3] == b'\x2a\x01', 'CHIP_SENT 0x012A')
         # The words are events of their own, so the last may land just after
@@ -623,8 +628,8 @@ def gbagate_chip_gate_busy_and_drop():
         s.wait_status(ST['LinkConnected'], 5)
         s.cmd(0x50, 0x01, 0x00)
         s.cmd(0x50, 0x02, 0x00)
-        time.sleep(0.2)
-        answers = [d[1] for d in s.data if d[0] == 0x50]
+        answers = eventually(lambda: (lambda a: a if len(a) >= 2 else None)([d[1] for d in s.data if d[0] == 0x50]),
+                             3, 'both inserts answered')
         check(answers[:2] == [1, 0], 'second chip refused while busy: %s' % answers)
         s.gba(0x01, 0)              # the game goes away
         s.wait_status(ST['LinkReconnecting'], 3)
@@ -647,12 +652,10 @@ def chip_gate_upstream_mode():
         s.wait_status(ST['LinkConnected'], 5)
         bcgs = s.wait_data(lambda d: d[:4] == b'BCGS', timeout=3)
         check(len(bcgs) == 64, 'status packets are 64 bytes')
-        time.sleep(0.3)
-        check(any(tx == 0xFF00 for tx, rx in s.words()), 'the gate answers with unit code 0xFF00')
+        eventually(lambda: any(tx == 0xFF00 for tx, rx in s.words()), 3, 'the gate answers with unit code 0xFF00')
         mark = len(s.words())
         s.write_data(bytes([3, 0x2A, 0x01]))
-        time.sleep(0.5)
-        check(any(tx == 0x012A for tx, rx in s.words()[mark:]), 'chip 0x012A goes out in the id slot')
+        eventually(lambda: any(tx == 0x012A for tx, rx in s.words()[mark:]), 3, 'chip 0x012A goes out in the id slot')
         s.cmd(0x01)
         s.wait_status(ST['LinkClosed'], 3)
     finally:
@@ -692,23 +695,7 @@ def bridge_uart_companion():
 
 
 def main(argv):
-    pick = argv[argv.index('-k') + 1] if '-k' in argv else ''
-    fails = 0
-    ran = 0
-    for t in TESTS:
-        if pick and pick not in t.__name__:
-            continue
-        ran += 1
-        t0 = time.time()
-        try:
-            t()
-            print('  ok    %-40s %5.2fs' % (t.__name__, time.time() - t0))
-        except Exception:
-            fails += 1
-            print('  FAIL  %s' % t.__name__)
-            traceback.print_exc()
-    print('gblink         %s' % ('all %d checks passed' % ran if not fails else '%d of %d FAILED' % (fails, ran)))
-    return 1 if fails else 0
+    return run_tests('gblink', TESTS, argv)
 
 
 if __name__ == '__main__':

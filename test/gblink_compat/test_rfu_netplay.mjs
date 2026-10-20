@@ -7,7 +7,8 @@
 //       GBLinkEngine join <-> gbagate sim <-> librfu
 //
 // Pass: the joining GBA finds the host's room, connects, and a payload
-// crosses each way. Skips (exit 0) when librfu was not fetched.
+// crosses each way. Skips (exit 0) when librfu was not fetched, unless
+// GBLINK_NO_SKIP is set.
 import { SimDevice, SimTransport } from './sim_transport.mjs';
 
 const engine = await import(`${process.argv[2]}/engine.mjs`);
@@ -142,7 +143,9 @@ try {
   verdict = 'room found, joined, payloads both ways over RetroArch netplay';
   code = 0;
 } catch (e) {
-  if (e instanceof Skip) { verdict = `skipped: ${e.message}`; code = 0; }
+  // GBLINK_NO_SKIP (set in CI): a test that cannot run is a failure.
+  if (e instanceof Skip && !process.env.GBLINK_NO_SKIP) { verdict = `skipped: ${e.message}`; code = 0; }
+  else if (e instanceof Skip) { verdict = `FAILED: required, but ${e.message}`; }
   else log.push(`exception ${e.stack || e}`);
 } finally {
   await join.stop().catch(() => {});

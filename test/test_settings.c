@@ -276,6 +276,7 @@ static void test_air_link_tail(void) {
     settings_defaults(&a);
     check("default is the Gen 3 cable", a.air_link, AIR_GEN3);
     a.air_link = AIR_ADAPTER;
+    a.usb_mode = USB_MODE_DRIVE;   /* not the default: "kept" must mean kept */
     uint8_t buf[SETTINGS_BLOB_MAX + 16];
     size_t n = settings_pack(&a, buf, sizeof buf);
     check("round trip", settings_unpack(&b, buf, n) && b.air_link == AIR_ADAPTER, 1);
@@ -287,7 +288,7 @@ static void test_air_link_tail(void) {
     buf[10 + plen] = (uint8_t)(crc >> 16); buf[11 + plen] = (uint8_t)(crc >> 24);
     check("old blob still loads", settings_unpack(&b, buf, 12 + plen), 1);
     check("old blob reads as the cable", b.air_link, AIR_GEN3);
-    check("and keeps its usb mode", b.usb_mode, USB_MODE_GBLINK);
+    check("and keeps its usb mode", b.usb_mode, USB_MODE_DRIVE);
 
     a.air_link = 7;
     n = settings_pack(&a, buf, sizeof buf);

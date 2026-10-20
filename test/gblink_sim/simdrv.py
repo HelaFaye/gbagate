@@ -7,8 +7,10 @@ the way a host would.
 import os
 import struct
 import subprocess
+import sys
 import threading
 import time
+import traceback
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 SIM = os.environ.get('GBLINK_SIM') or os.path.join(ROOT, 'build', 'gblink_sim', 'gblink_sim')
@@ -19,6 +21,79 @@ ST = dict(AwaitMode=0xFF02, HandshakeReceived=0xFF03, LinkConnected=0xFF05,
           LinkReconnecting=0xFF06, LinkClosed=0xFF07, DeviceReady=0xFF08,
           EmuTradeSessionFinished=0xFF09, GBModeActive=0xFF0A,
           GBPrinterModeActive=0xFF0B, GBSessionFinished=0xFF0C)
+
+
+# A simulator that ended badly: a sanitizer report aborts it (the ASan build
+# has -fno-sanitize-recover=all), and one that does not leave on 'Q' is stuck.
+# run_tests() fails the test during which one was seen.
+BAD_EXITS = []
+
+
+def note_exit(p, what):
+    if p.returncode not in (0,):
+        BAD_EXITS.append('%s exited %s' % (what, p.returncode))
+
+
+def eventually(cond, timeout, what):
+    """Poll cond() until it holds; AssertionError(what) if it never does.
+    In place of a fixed sleep, which is too short on a slow machine and
+    wasted on a fast one."""
+    end = time.time() + timeout
+    while True:
+        v = cond()
+        if v:
+            return v
+        if time.time() >= end:
+            raise AssertionError(what() if callable(what) else what)
+        time.sleep(0.02)
+
+
+class Skip(Exception):
+    """A test that cannot run here (no librfu, no browser)."""
+
+
+def skip(why):
+    """Skip -- unless GBLINK_NO_SKIP is set, as CI sets it: there a test that
+    cannot run is a failure, not a pass."""
+    if os.environ.get('GBLINK_NO_SKIP'):
+        raise AssertionError('required, but cannot run: %s' % why)
+    raise Skip(why)
+
+
+def run_tests(name, tests, argv):
+    """The suites' shared main: -k NAME runs the tests whose name has NAME
+    (none matching is an error); the last line is the verdict."""
+    pick = argv[argv.index('-k') + 1] if '-k' in argv else ''
+    fails = skips = ran = 0
+    for t in tests:
+        if pick and pick not in t.__name__:
+            continue
+        ran += 1
+        t0 = time.time()
+        bad = len(BAD_EXITS)
+        try:
+            t()
+            if len(BAD_EXITS) > bad:
+                raise AssertionError('; '.join(BAD_EXITS[bad:]))
+            print('  ok    %-40s %5.2fs' % (t.__name__, time.time() - t0))
+        except Skip as e:
+            skips += 1
+            print('  skip  %-40s %s' % (t.__name__, e))
+        except Exception:
+            fails += 1
+            print('  FAIL  %s' % t.__name__)
+            traceback.print_exc(file=sys.stdout)
+    if not ran:
+        verdict = 'no test matches %r' % pick
+        fails = 1
+    elif fails:
+        verdict = '%d of %d FAILED' % (fails, ran)
+    elif skips:
+        verdict = '%d passed, %d skipped' % (ran - skips, skips)
+    else:
+        verdict = 'all %d checks passed' % ran
+    print('%-14s %s' % (name, verdict))
+    return 1 if fails else 0
 
 
 class Sim:
@@ -38,7 +113,12 @@ class Sim:
         self.on_bridge = None  # callable(bytes): raw bridge UART bytes, as they come
         self.t = threading.Thread(target=self._reader, daemon=True)
         self.t.start()
-        self.wait_event(EV_READY)
+        try:
+            self.wait_event(EV_READY)
+        except BaseException:
+            self.p.kill()
+            self.p.wait()
+            raise
 
     # -- plumbing --------------------------------------------------------
     def _reader(self):
@@ -118,6 +198,12 @@ class Sim:
             self.p.wait(timeout=2)
         except Exception:
             self.p.kill()
+            self.p.wait()
+        note_exit(self.p, 'gblink_sim')
+        try:
+            self.p.stdin.close()
+        except (BrokenPipeError, ValueError, OSError):
+            pass
 
     # -- host side -------------------------------------------------------
     def cmd(self, *b):
