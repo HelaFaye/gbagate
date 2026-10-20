@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "driver/rmt_tx.h"
+#include "esp_rom_sys.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "nvs.h"
@@ -60,7 +61,13 @@ void gblink_hw_set_led(uint8_t r, uint8_t g, uint8_t b, bool on) {
 #if BOARD_HAS_RGB_LED
     led_init();
     if (!s_rmt) return;
-    uint8_t grb[3] = { on ? g : 0, on ? r : 0, on ? b : 0 };
+    /* The encoder reads the bytes while the frame goes out, so they live
+     * past this call; and the WS2812 latches a colour only after 50 us low,
+     * so frames are spaced by a finished frame plus that. */
+    static uint8_t grb[3];
+    rmt_tx_wait_all_done(s_rmt, 10);
+    esp_rom_delay_us(60);
+    grb[0] = on ? g : 0; grb[1] = on ? r : 0; grb[2] = on ? b : 0;
     rmt_transmit_config_t tc = { .loop_count = 0 };
     rmt_transmit(s_rmt, s_enc, grb, sizeof grb, &tc);
 #else

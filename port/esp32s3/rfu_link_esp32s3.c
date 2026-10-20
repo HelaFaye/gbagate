@@ -46,13 +46,26 @@
  *
  * The ID exchange (Sio32ID) has no handshake: the GBA clocks ~40 us after the
  * previous word whatever SI says, so a word that lands in a let-go moment is
- * lost; checkID retries, and the slices are short.
+ * lost; checkID retries, and the slices are short. A watch that begins in the
+ * middle of such a word must not deliver it: the GBA's shifter never pauses
+ * inside a word (a few us a bit at the slowest clock), so SC staying put for
+ * BIT_TIMEOUT_US means the capture ran into the gap after the word, and it is
+ * dropped. The next watch then starts in that gap, aligned again.
  *
  * ADAPTER_MASTER
  * --------------
  * exchange() clocks 32 bits at upstream's ~154 kHz with interrupts off
  * (~210 us); drive_si() sets SI between words. librfu's slave handshake is the
  * section's business, above.
+ *
+ * Role changes
+ * ------------
+ * The section changes role holding irq_lock (upstream masks the PIO interrupt
+ * with it), and this task takes the same lock for every word it delivers, so a
+ * role change must not wait for the task. It is done by the caller: SC's latch
+ * and output enable are ordinary GPIO registers. Only our transmit pin belongs
+ * to core 1's dedicated GPIO; it is flagged low and the task applies that
+ * before it serves anything else.
  *
  * SD
  * --
@@ -93,7 +106,7 @@ static const char *TAG = "rfu_phy";
 
 #define WATCH_SLICE_US  500u   /* longest stretch with core 1's interrupts off */
 #define IDLE_SLEEP_US   2000u  /* staged, GBA quiet this long: sleep a tick    */
-#define BIT_TIMEOUT_US  1000u  /* SC stalled mid-word: abandon it              */
+#define BIT_TIMEOUT_US  20u    /* SC still mid-word: the word was not ours     */
 #define MASTER_HALF_NS  3250u  /* ~154 kHz, upstream's reverse clock           */
 
 /* ---- dedicated GPIO -------------------------------------------------------- */
@@ -126,9 +139,10 @@ static volatile bool      s_enabled;
 static volatile int       s_role = RFU_ROLE_GBA_MASTER;
 static volatile bool      s_staged_valid;
 static volatile uint32_t  s_staged;
+static volatile bool      s_tx_low_pending;   /* set_role from another task */
 
 /* The mailbox: one request at a time, from whichever core. */
-typedef enum { OP_NONE = 0, OP_ENABLE, OP_DISABLE, OP_ROLE, OP_EXCHANGE, OP_SI } op_t;
+typedef enum { OP_NONE = 0, OP_ENABLE, OP_DISABLE, OP_EXCHANGE, OP_SI } op_t;
 static portMUX_TYPE       s_box_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile op_t      s_op;
 static volatile uint32_t  s_op_arg, s_op_result;
@@ -283,20 +297,16 @@ static void pins_give(void) {
     gba_link_yield(false);
 }
 
-static void role_change(enum RfuRole role) {
-    if (role == RFU_ROLE_ADAPTER_MASTER) {
-        /* Latch high before the driver comes on: no falling edge for the
-         * armed GBA to count. SI low, the inverted-ACK lead-in. */
-        sc_set(true);
-        sc_drive(true);
-        tx_set(false);
-    } else {
-        /* Released at the same level: the latch is high from the last bit. */
-        sc_set(true);
-        sc_drive(false);
-        tx_set(false);
-    }
+/* SC to the new role. Latch high before the driver comes on, so there is no
+ * falling edge for the armed GBA to count; released at the same level, the
+ * latch being high from the last bit. SI goes low (the inverted-ACK lead-in)
+ * separately: see "Role changes". Any core, any task. */
+static void role_change_sc(enum RfuRole role) {
+    portENTER_CRITICAL(&s_mux);        /* not inside a watch on core 1 */
+    sc_set(true);
+    sc_drive(role == RFU_ROLE_ADAPTER_MASTER);
     s_role = role;
+    portEXIT_CRITICAL(&s_mux);
 }
 
 /* ---- the task ---------------------------------------------------------------------- */
@@ -307,7 +317,6 @@ static void serve_mailbox(void) {
     switch (op) {
     case OP_ENABLE:   pins_take(); s_role = RFU_ROLE_GBA_MASTER; s_enabled = true; break;
     case OP_DISABLE:  s_enabled = false; pins_give(); break;
-    case OP_ROLE:     role_change((enum RfuRole)s_op_arg); break;
     case OP_EXCHANGE: s_op_result = master_exchange(s_op_arg); break;
     case OP_SI:       tx_set(s_op_arg != 0); break;
     default: break;
@@ -320,16 +329,20 @@ static void rfu_task(void *arg) {
     (void)arg;
     uint32_t quiet_since = cyc();
     for (;;) {
+        if (s_tx_low_pending) {        /* a role change: SI low first */
+            s_tx_low_pending = false;
+            if (s_enabled) tx_set(false);
+        }
         serve_mailbox();
         if (!s_enabled || s_role != RFU_ROLE_GBA_MASTER || !s_staged_valid) {
             if (s_enabled && s_role == RFU_ROLE_GBA_MASTER) tx_set(false);
-            if (s_role == RFU_ROLE_ADAPTER_MASTER && s_enabled) {
-                /* A delivery is under way: the section posts words and SI
-                 * levels back to back, so keep answering at once. */
-                taskYIELD();
-            } else {
-                ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
-            }
+            /* Sleep until notified. A delivery (ADAPTER_MASTER) posts words and
+             * SI levels back to back, and each post notifies, so it is answered
+             * at once all the same; the tick bound only covers a missed
+             * notification. Never spin here: everything that posts runs below
+             * this task's priority on this core. */
+            ulTaskNotifyTake(pdTRUE, s_role == RFU_ROLE_ADAPTER_MASTER && s_enabled
+                                         ? 1 : pdMS_TO_TICKS(10));
             quiet_since = cyc();
             continue;
         }
@@ -362,7 +375,7 @@ static uint32_t post(op_t op, uint32_t arg) {
     portENTER_CRITICAL(&s_box_mux);
     while (s_op != OP_NONE) {          /* one at a time */
         portEXIT_CRITICAL(&s_box_mux);
-        taskYIELD();
+        vTaskDelay(1);                 /* the other poster may be below us */
         portENTER_CRITICAL(&s_box_mux);
     }
     s_op_done = false;
@@ -404,7 +417,13 @@ static void drv_disable(void) { post(OP_DISABLE, 0); }
 
 static void drv_set_role(enum RfuRole role) {
     s_staged_valid = false;
-    post(OP_ROLE, (uint32_t)role);
+    role_change_sc(role);
+    if (xTaskGetCurrentTaskHandle() == s_task) {
+        tx_set(false);
+    } else {
+        s_tx_low_pending = true;
+        xTaskNotifyGive(s_task);
+    }
 }
 
 static void drv_stage(uint32_t word) {

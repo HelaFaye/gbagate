@@ -118,10 +118,14 @@ void app_main(void) {
     extern const settings_io_t *nvs_settings_io(void);
     settings_load(&boot, nvs_settings_io(), NULL);
     bool as_gblink = (v.resolved & FEAT_GBLINK) && boot.usb_mode == USB_MODE_GBLINK;
-    if (as_gblink) {
-        extern esp_err_t usb_gblink_start(void);
+    /* GB-Link's firmware runs whatever USB is: the wireless link cable and
+     * the bridge UART drive it with no USB host at all. */
+    if (v.resolved & FEAT_GBLINK) {
         extern void gblink_start(void);
         gblink_start();            /* answer before the host can ask */
+    }
+    if (as_gblink) {
+        extern esp_err_t usb_gblink_start(void);
         if (usb_gblink_start() == ESP_OK) {
             ESP_LOGI(TAG, "USB: GB-Link adapter");
         } else {

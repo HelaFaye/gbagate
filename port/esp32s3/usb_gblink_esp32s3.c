@@ -138,8 +138,11 @@ static bool gbl_control(uint8_t rhport, uint8_t stage, tusb_control_request_t co
     return tud_vendor_control_xfer_cb(rhport, stage, req);
 }
 
+static TaskHandle_t s_usb_task;   /* TinyUSB's task, which completes the INs */
+
 static bool gbl_xfer(uint8_t rhport, uint8_t ep_addr, xfer_result_t result, uint32_t n) {
     (void)rhport;
+    s_usb_task = xTaskGetCurrentTaskHandle();
     if (ep_addr == GBLINK_EP_CMD_OUT || ep_addr == GBLINK_EP_DATA_OUT) {
         ep_t *ep = ep_addr == GBLINK_EP_CMD_OUT ? &s_cmd_out : &s_data_out;
         if (result == XFER_RESULT_SUCCESS && n > 0) {
@@ -176,9 +179,13 @@ bool gblink_usb_write(uint8_t ep_in, const uint8_t *data, size_t len, uint32_t t
     ep_t *ep = ep_in == GBLINK_EP_STATUS_IN ? &s_status_in
              : ep_in == GBLINK_EP_DATA_IN   ? &s_data_in : NULL;
     if (!ep) return false;
-    /* As upstream: wait for the previous transfer, but not forever. */
-    xSemaphoreTake(ep->done, pdMS_TO_TICKS(timeout_ms));
-    if (!s_configured) return false;
+    /* As upstream: wait for the previous transfer, but not forever. Not at
+     * all from TinyUSB's own task (a reply sent from the receive callback):
+     * that task is the one that would complete it. Still in flight: the
+     * buffer is the controller's, so this packet is dropped, not copied. */
+    const TickType_t wait = xTaskGetCurrentTaskHandle() == s_usb_task ? 0 : pdMS_TO_TICKS(timeout_ms);
+    if (xSemaphoreTake(ep->done, wait) != pdTRUE) return false;
+    if (!s_configured) { xSemaphoreGive(ep->done); return false; }
     memcpy(ep->buf, data, len);
     if (!usbd_edpt_claim(s_rhport, ep->addr)) {
         xSemaphoreGive(ep->done);
@@ -205,6 +212,9 @@ static void cdc_rx(int itf, cdcacm_event_t *event) {
 
 bool gblink_cdc_write(const uint8_t *data, size_t len) {
     if (!tud_cdc_n_connected(0)) return false;   /* port closed: drop the frame */
+    /* Whole frames or none: a partly queued one would desync the host's
+     * 'GB' framing until it resyncs. */
+    if (tud_cdc_n_write_available(0) < len) return false;
     if (tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0, data, len) != len) return false;
     tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0, 0);
     return true;
