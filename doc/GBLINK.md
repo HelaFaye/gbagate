@@ -239,7 +239,9 @@ checks LDN's own `pico_link_test.c` makes of its scripted adapter:
 | megaman.gblink.io | mode 0x06 as upstream | `test_gblink.py` chip_gate_upstream_mode (the page itself could not be fetched to test) |
 
 Run all of it with `make compat`. It needs node and npm, and network access the
-first time.
+first time. Celio-Server listens on port 443 (fixed in its source), so run it
+as root or after `sysctl -w net.ipv4.ip_unprivileged_port_start=0`, as CI does
+(`.github/workflows/ci.yml`).
 
 ### Things to know
 

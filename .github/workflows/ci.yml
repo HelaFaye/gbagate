@@ -29,6 +29,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # Celio-Server listens on 443, fixed in its source; let it, unmodified.
+      - run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0
       - run: make compat
         env:
           CHROMIUM: /usr/bin/google-chrome

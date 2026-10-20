@@ -586,6 +586,12 @@ def gbagate_chip_gate_session():
         check(s.wait_data(lambda d: d[0] == 0x50, start=mark - 1)[1] in (0, 1), 'second insert answered')
         e = s.wait_data(lambda d: d[0] == 0x54, 5)
         check(e[1:3] == b'\x2a\x01', 'CHIP_SENT 0x012A')
+        # The words are events of their own, so the last may land just after
+        # CHIP_SENT; give them a moment, then it must be exactly nine.
+        end = time.time() + 1
+        while sum(1 for tx, rx in s.words() if tx == 0x012A) < 9 and time.time() < end:
+            time.sleep(0.02)
+        time.sleep(0.1)
         n = sum(1 for tx, rx in s.words() if tx == 0x012A)
         check(n == 9, 'nine rotations, got %d' % n)
         s.cmd(0x52)
