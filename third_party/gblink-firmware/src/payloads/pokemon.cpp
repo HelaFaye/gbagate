@@ -104,6 +104,8 @@ namespace party
 
     void tradePkmnAtIndex(uint8_t index)
     {
+        // gbagate (PATCHES.md P9): the index comes from the GBA's link word.
+        if (index >= numberOfSlots) return;
         std::ranges::copy(std::span(g_partnerParty).subspan(index * 100, 100), slot(index).begin());
     }
 

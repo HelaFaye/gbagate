@@ -10,13 +10,14 @@ means a real GB-Link host would fail the same way.
 """
 import os
 import struct
+import subprocess
 import sys
 import tempfile
 import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from simdrv import (Sim, ST, EV_VCC, EV_LED, EV_REBOOT, EV_BOOTLOADER,  # noqa: E402
+from simdrv import (Sim, SIM, ST, EV_VCC, EV_LED, EV_REBOOT, EV_BOOTLOADER,  # noqa: E402
                     EV_FLASH, EV_PHY, EV_GB)
 
 CHILD, PARENT, ECHO = 1, 2, 3
@@ -539,6 +540,15 @@ def trade_emu_pk3_upload_any_split():
         check(s.p.poll() is None, 'survived')
     finally:
         s.close()
+
+
+@test
+def trade_emu_party_index_bounded():
+    """PATCHES.md P9: the slot a GBA asks to trade is a link word; one past
+    the six slots used to read and write past the parties (ASan, alone)."""
+    exe = os.path.join(os.path.dirname(SIM), 'party_check')
+    r = subprocess.run([exe], capture_output=True, text=True, timeout=30)
+    check(r.returncode == 0, 'party_check: %s%s' % (r.stdout, r.stderr[-800:]))
 
 
 # ---- gbagate extensions (src/gbx_proto.h) ------------------------------------------

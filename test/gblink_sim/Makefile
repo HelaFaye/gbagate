@@ -39,7 +39,12 @@ LIBRFU_SRC := $(OUT)/librfu/librfu_stwi.cpp $(OUT)/librfu/librfu_intr.cpp $(OUT)
 GAME_FLAGS += -DSIM_LIBRFU -I$(LIBRFU)/include -D__STDC_VERSION__=202311L
 endif
 
-all: $(OUT)/gblink_sim $(OUT)/usbdesc_dump
+all: $(OUT)/gblink_sim $(OUT)/usbdesc_dump $(OUT)/party_check
+
+# The trade emulator's party store alone, always sanitized (test_party.cpp).
+$(OUT)/party_check: test_party.cpp $(V)/payloads/pokemon.cpp $(V)/payloads/pokemon.hpp
+	@mkdir -p $(OUT)
+	@$(CXX) -std=gnu++20 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all $(INC) $(DEFS) -o $@ test_party.cpp $(V)/payloads/pokemon.cpp
 
 $(OUT)/usbdesc_dump: usbdesc_dump.c $(ROOT)/src/gblink_usbdesc.c $(ROOT)/src/gblink_usbdesc.h
 	@mkdir -p $(OUT)

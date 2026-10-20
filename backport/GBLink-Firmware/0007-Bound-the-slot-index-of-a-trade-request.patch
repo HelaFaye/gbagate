@@ -1,0 +1,34 @@
+From 1ec6ede6270eee226816dde4d7f4b56eaa2c12e0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 20 Oct 2026 15:25:30 +0000
+Subject: [PATCH] Bound the slot index of a trade request
+
+LINKCMD_READY_TO_TRADE carries the slot to trade in a word from the GBA,
+and tradePkmnAtIndex() used it unchecked: subspan(index * 100, 100) on
+the 600-byte parties, so an index of 6 or more read past the partner's
+party and wrote past ours. Games only send 0-5; a corrupted link word or
+a homebrew ROM does not have to. Ignore an index outside the party.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ src/payloads/pokemon.cpp | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/payloads/pokemon.cpp b/src/payloads/pokemon.cpp
+index 819dffa..91d2028 100644
+--- a/src/payloads/pokemon.cpp
++++ b/src/payloads/pokemon.cpp
+@@ -103,6 +103,9 @@ namespace party
+ 
+     void tradePkmnAtIndex(uint8_t index)
+     {
++        // The index comes from the GBA's link word: anything past the party
++        // would read past the partner's and write past ours.
++        if (index >= numberOfSlots) return;
+         std::ranges::copy(std::span(g_partnerParty).subspan(index * 100, 100), slot(index).begin());
+     }
+ 
+-- 
+2.43.0
+

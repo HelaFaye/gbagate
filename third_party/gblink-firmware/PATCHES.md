@@ -16,13 +16,17 @@ upstream file. The fixes are offered back upstream as patches in
 
 | P7 | `control.hpp` | (extension, not a defect) two hooks: unknown modes go to `gbagate::executeMode()`, unknown `0x4x` commands to `gbagate::hardwareCommand()` | none upstream; this is how gbagate's own features (the Battle Chip Gate mode, `0x4F` device info) reach GB-Link hosts without touching any upstream mode | `test_gblink.py` gbagate_* tests |
 
-| P8 | `layers/transport.{hpp,cpp}` | (extension) a third route, `Local`, for a host that lives in the firmware: `injectCommand`/`injectData` reach the registered handlers as USB would, and replies go to a sink | none upstream; it is how the wireless link cable (`src/gbl_peer.c`) drives the relay with no PC | `test_peer.py` |
+| P8 | `layers/transport.{hpp,cpp}` | (extension) a third route, `Local`, for a host that lives in the firmware: `injectCommand`/`injectData` reach the registered handlers as USB would, and replies go to a sink | none upstream; it is how the wireless link cable (`src/gbl_peer.c`) drives the relay with no PC. While a local sink is set, `claim()` refuses a USB/serial/bridge host's frames, so a PC cannot cancel the cable's session or draw its replies | `test_peer.py` (`wireless_cable_refuses_a_usb_host`) |
+
+| # | file | defect | effect on hardware | test |
+|---|---|---|---|---|
+| P9 | `payloads/pokemon.cpp` `tradePkmnAtIndex` | the slot to trade comes from the GBA's `LINKCMD_READY_TO_TRADE` word, unchecked | an index past 5 (a corrupted link word, a homebrew ROM) reads past the partner's party and writes past ours | `trade_emu_party_index_bounded` (`test_party.cpp`, ASan: global-buffer-overflow upstream) |
 
 P3 also holds a connect that arrives early until the adapter has sent eight
 `0xB9A0` rounds, the margin the netplay bridge measured a child GBA needs. A
 host that already waits is unaffected.
 
-P1-P6 apply unchanged to 2.2.7: upstream has not touched those files since
+P1-P6 and P9 apply unchanged to 2.2.7: upstream has not touched those files since
 2.2.3.
 
 ## Replaced files

@@ -23,6 +23,7 @@ Patches 1-5 also apply unchanged to `master` (4aef46a, 2.2.3).
 | 4 | Bound the trade emulator's party uploads | ASan, `trade_emu_pk3_upload_any_split` |
 | 5 | Stop the trade block-request timer when the section ends | inspection |
 | 6 | Initialise the client RECV_DATA packet pointer | GCC 14 `-Werror` (false positive) |
+| 7 | Bound the slot index of a trade request | ASan, `trade_emu_party_index_bounded` (code review) |
 
 The tests are in `test/gblink_sim/test_gblink.py`. To check the series, the
 simulator was built from upstream's tree with the series applied, and from the
@@ -32,8 +33,13 @@ reimplemented transport headers came from gbagate. Under ASan and UBSan:
 - **patched 2.2.7**: every test passes except the three that exercise
   gbagate-only commands (0x4F, mode 0x80);
 - **unpatched 2.2.7**: the four tests named above fail as well;
-- **the Wireless Adapter mode**: all eight librfu checks in `test_rfu.py` pass
-  on unpatched upstream code.
+- **the Wireless Adapter mode**: all of `test_rfu.py`'s librfu checks pass on
+  unpatched upstream code.
+
+Patch 7 came later, from a code review. Its test runs upstream's
+`payloads/pokemon.cpp` on its own under ASan: unpatched it reports a
+global-buffer-overflow on the first index past the party, and patched it
+passes.
 
 gbagate's own Battle Chip Gate (mode 0x80) is not offered here. Upstream
 shipped its own gate in 2.2.6 (mode 0x06), and gbagate implements that mode
