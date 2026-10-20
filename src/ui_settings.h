@@ -33,6 +33,7 @@ typedef enum {
     SETFIELD_WRAP,
     SETFIELD_INPUT,
     SETFIELD_USB,      /* GB-Link adapter or USB drive; applies at reboot */
+    SETFIELD_AIR,      /* what Link: Wireless carries                      */
     SETFIELD_COUNT
 } setfield_t;
 

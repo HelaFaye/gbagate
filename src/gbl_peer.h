@@ -31,6 +31,11 @@
  * on a reliable, ordered channel (sequence numbers, cumulative acks,
  * go-back-N retransmission), and only HELLO is fire-and-forget.
  *
+ * Modes
+ * -----
+ * Both boards must run the same GB-Link mode and variant: HELLO carries them,
+ * and a board in another one is not taken for a peer.
+ *
  * Roles
  * -----
  * Celio makes the first adapter to report AwaitMode the master. Two boards
@@ -118,6 +123,7 @@ typedef struct {
     /* Counters for the link screen. */
     uint32_t tx_datagrams, rx_datagrams, retransmits, bad_datagrams;
     uint32_t data_out, data_in, queue_full;
+    uint32_t mode_mismatch;        /* HELLOs from a board in another mode */
 } gbl_peer_t;
 
 void gbl_peer_init(gbl_peer_t *p, const gbl_peer_io_t *io, uint32_t nonce,

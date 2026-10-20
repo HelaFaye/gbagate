@@ -15,11 +15,11 @@
 
 #include <string.h>
 
-#define VERSION 1u
+#define VERSION 2u          /* 2: HELLO carries the mode */
 #define HDR     13u
 
 enum {
-    T_HELLO  = 1,  /* nonce u32, epoch of yours I last heard u32            */
+    T_HELLO  = 1,  /* nonce u32, epoch of yours I last heard u32, mode, variant */
     T_STATUS = 2,  /* reliable: a GB-Link status word                      */
     T_DATA   = 3,  /* reliable: a 64-byte GB-Link data packet              */
     T_ACK    = 4   /* nothing but the ack field                            */
@@ -111,9 +111,11 @@ static bool send_raw(gbl_peer_t *p, uint8_t type, uint16_t seq, const uint8_t *p
 }
 
 static void send_hello(gbl_peer_t *p, uint32_t now) {
-    uint8_t pl[8];
+    uint8_t pl[10];
     put32(pl, p->nonce);
     put32(pl + 4, p->peer_known ? p->peer_epoch : 0);
+    pl[8] = p->mode;
+    pl[9] = p->variant;
     send_raw(p, T_HELLO, 0, pl, sizeof pl);
     p->last_hello_ms = now;
 }
@@ -268,6 +270,17 @@ void gbl_peer_on_radio(gbl_peer_t *p, const uint8_t *d, size_t len, uint32_t now
     const uint8_t *pl = d + HDR;
 
     if (type == T_HELLO) {
+        if (d[12] < 10) {
+            p->bad_datagrams++;
+            return;
+        }
+        if (pl[8] != p->mode || pl[9] != p->variant) {
+            /* A board running another link (a Wireless Adapter against a
+             * Gen 3 cable, AW1 against AW2): pairing would hand each game the
+             * other's protocol. It is not a peer. */
+            p->mode_mismatch++;
+            return;
+        }
         uint32_t nonce = get32(pl);
         uint32_t heard = get32(pl + 4);
         if (p->peer_known && epoch != p->peer_epoch) {

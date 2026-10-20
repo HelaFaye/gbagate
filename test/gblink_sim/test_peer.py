@@ -171,6 +171,50 @@ def wireless_cable_peer_gone():
         a.close(); b.close()
 
 
+@test
+def wireless_adapter_over_the_cable():
+    """Mode 0x07 between two boards: each runs GB-Link's Wireless Adapter
+    mode, and the cable carries its RFU1 stream instead of Celio or the
+    netplay bridge -- the Union Room with no PC and no Switch. The games are
+    pret's librfu (see test_rfu.py)."""
+    import test_rfu as T
+    a, b = Sim(), Sim()
+    Air(a, b)
+    try:
+        a.start_peer(0x90000000, 0x07, 0)
+        b.start_peer(0x10000000, 0x07, 0)
+        wait_peer_status(a, ST['LinkConnected'], 10)
+        wait_peer_status(b, ST['LinkConnected'], 10)
+        ga, gb = T.Game(a), T.Game(b)
+        check(ga.check_id() == 0x8001 and gb.check_id() == 0x8001, 'both games find their adapter')
+        slot = T.join(ga, gb)
+        down = b'OVER THE AIR 07!'
+        ga.ok(T.DATA_TX, struct.pack('<I', len(down)) + down)
+        rx = [0]
+        for _ in range(12):
+            T.wait_data_event(gb)
+            rx = gb.ok(T.DATA_RX)
+            if rx[0] == len(down):
+                break
+        check(rx[0] == len(down) and struct.pack('<%dI' % (len(rx) - 1), *rx[1:])[:len(down)] == down,
+              'host to child payload')
+        up = b'AND BACK AGAIN'
+        gb.ok(T.DATA_TX, struct.pack('<I', len(up) << (8 + slot * 5)) + up)
+        n = 0
+        for _ in range(12):
+            T.wait_data_event(ga)
+            rx = ga.ok(T.DATA_RX)
+            n = (rx[0] >> (8 + slot * 5)) & 0x1F
+            if n == len(up):
+                break
+        check(n == len(up) and struct.pack('<%dI' % (len(rx) - 1), *rx[1:])[:n] == up, 'child to host payload')
+    except T.Skip as e:
+        print('  (skipped: %s)' % e)
+    finally:
+        a.close()
+        b.close()
+
+
 def main(argv):
     pick = argv[argv.index('-k') + 1] if '-k' in argv else ''
     fails = ran = 0

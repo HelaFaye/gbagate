@@ -32,11 +32,13 @@ await test('getFirmwareInfo / gen3 minimum', async (dev) => {
   const a = new GBLinkAdapter(new SimTransport(dev));
   await a.start();
   const fw = await a.getFirmwareInfo();
-  assert(fw.major === 2 && fw.minor === 2 && fw.patch === 3, `version ${JSON.stringify(fw)}`);
+  assert(fw.major === 2 && fw.minor === 2 && fw.patch === 7, `version ${JSON.stringify(fw)}`);
   assert(fw.landingPage === true, 'landing page');
   assert(fw.cableSelection === 'gbc', `cable selection ${fw.cableSelection}`);
   // linkBridge.ts GEN3_MIN_FW: the bridge refuses older firmware for gen3.
   assert(fwAtLeast(fw, 2, 2, 3), 'meets the bridge gen3 minimum');
+  // gblinkRfuDevice.ts RFU_MIN_FW: the first release with mode 0x07.
+  assert(fwAtLeast(fw, 2, 2, 7), 'meets the bridge wireless adapter minimum');
   await a.stop();
 });
 
@@ -105,11 +107,11 @@ await test('Advance Wars mode entry (aw2, timing override)', async (dev) => {
   await a.stop();
 });
 
-await test('probeWireless reports no RFU (2.2.3 has none)', async (dev) => {
+await test('probeWireless finds the wireless adapter mode (2.2.7)', async (dev) => {
   const a = new GBLinkAdapter(new SimTransport(dev));
   await a.start();
   const rfu = await a.probeWireless();
-  assert(rfu === false, 'no wireless mode claimed');
+  assert(rfu === true, 'GetRfuIsrStats answered with [0x4C, 5 x u32]');
   await a.stop();
 });
 

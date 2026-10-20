@@ -71,7 +71,25 @@ typedef struct {
      * the default.
      */
     uint8_t  usb_mode;
+    /*
+     * What Link: Wireless carries between two boards (GB-Link's relay over
+     * ESP-NOW, src/gbl_peer.c): a Gen 3 link cable, a Wireless Adapter (the
+     * Union Room), or an Advance Wars link. Tail extension like usb_mode.
+     */
+    uint8_t  air_link;
 } settings_t;
+
+typedef enum {
+    AIR_GEN3 = 0,          /* default: GB-Link mode 0x01                   */
+    AIR_ADAPTER,           /* mode 0x07, the Wireless Adapter              */
+    AIR_AW1,               /* mode 0x04 variant 1                          */
+    AIR_AW2,               /* mode 0x04 variant 2                          */
+    AIR_LINK_COUNT
+} air_link_t;
+
+const char *air_link_name(air_link_t a);
+/* The GB-Link mode and variant the wireless link runs for a. */
+void air_link_mode(air_link_t a, uint8_t *mode, uint8_t *variant);
 
 typedef enum {
     USB_MODE_GBLINK = 0,   /* default: be a GB-Link adapter */

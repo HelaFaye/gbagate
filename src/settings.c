@@ -43,6 +43,27 @@ void settings_defaults(settings_t *s) {
 
     s->logo_crc = 0;   /* no donor supplied: the logo check stays off */
     s->usb_mode = (uint8_t)USB_MODE_GBLINK;
+    s->air_link = (uint8_t)AIR_GEN3;
+}
+
+const char *air_link_name(air_link_t a) {
+    switch (a) {
+    case AIR_GEN3:    return "cable";
+    case AIR_ADAPTER: return "adapter";
+    case AIR_AW1:     return "AW1";
+    case AIR_AW2:     return "AW2";
+    default:          return "?";
+    }
+}
+
+void air_link_mode(air_link_t a, uint8_t *mode, uint8_t *variant) {
+    switch (a) {
+    case AIR_ADAPTER: *mode = 0x07; *variant = 0; break;
+    case AIR_AW1:     *mode = 0x04; *variant = 1; break;
+    case AIR_AW2:     *mode = 0x04; *variant = 2; break;
+    case AIR_GEN3:
+    default:          *mode = 0x01; *variant = 0; break;
+    }
 }
 
 const char *usb_mode_name(usb_mode_t m) {
@@ -94,6 +115,7 @@ static size_t pack_payload(const settings_t *s, uint8_t *p) {
     memcpy(p + n, s->favorites, SETTINGS_FAV_BYTES);
     n += SETTINGS_FAV_BYTES;
     p[n++] = s->usb_mode;      /* tail extension, see settings_t */
+    p[n++] = s->air_link;      /* likewise */
     return n;
 }
 
@@ -161,7 +183,12 @@ bool settings_unpack(settings_t *s, const uint8_t *buf, size_t len) {
     if (plen >= n + 1) {
         s->usb_mode = p[n];
     }
+    n += 1;
+    if (plen >= n + 1) {
+        s->air_link = p[n];
+    }
     if (s->usb_mode >= USB_MODE_COUNT) s->usb_mode = (uint8_t)USB_MODE_GBLINK;
+    if (s->air_link >= AIR_LINK_COUNT) s->air_link = (uint8_t)AIR_GEN3;
 
     /*
      * Clamp rather than trust. A blob can be intact and still hold a value this

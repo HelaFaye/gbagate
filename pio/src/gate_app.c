@@ -821,8 +821,11 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
         if (wireless_cable_peer_mac(mac)) {
             snprintf(l1, sizeof l1, "%02X%02X%02X%02X%02X%02X",
                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        } else if (p->mode_mismatch && p->state == GBL_PEER_SEARCHING) {
+            /* A board is there but set to another air link. */
+            snprintf(l1, sizeof l1, "peer: other link");
         } else {
-            snprintf(l1, sizeof l1, "no peer yet");
+            snprintf(l1, sizeof l1, "%s: no peer", air_link_name((air_link_t)s_settings.air_link));
         }
         snprintf(l2, sizeof l2, "out %lu in %lu", (unsigned long)p->data_out, (unsigned long)p->data_in);
         snprintf(l3, sizeof l3, "resent %lu", (unsigned long)p->retransmits);
@@ -1439,14 +1442,19 @@ static bool mode_enter_link(void *ctx, cg_game_t game, bool has_game) {
  * Link: Wireless is the GB-Link wireless cable on hardware. The word-level
  * bridge it used to run cannot keep a Gen 3 link alive (a relayed word arrives
  * after the slot it was for); GB-Link's packet relay can, and two boards play
- * Celio for each other. Pokemon Gen 3 by cable (GB-Link mode 0x01).
+ * Celio for each other. What it carries is the "air link" setting: a Gen 3
+ * cable (mode 0x01), a Wireless Adapter (0x07: the Union Room, with the RFU
+ * stream as the payload) or an Advance Wars link (0x04). Both boards must
+ * agree; a board that hears a peer in another mode ignores it.
  */
 static bool mode_enter_wireless(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
 #if defined(GBAGATE_QEMU)
     return tasks_bridge() != NULL;
 #else
-    return wireless_cable_start(0x01, 0) == ESP_OK;
+    uint8_t mode, variant;
+    air_link_mode((air_link_t)s_settings.air_link, &mode, &variant);
+    return wireless_cable_start(mode, variant) == ESP_OK;
 #endif
 }
 

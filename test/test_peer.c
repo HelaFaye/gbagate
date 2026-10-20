@@ -97,6 +97,8 @@ static bool radio_tx(void *ctx, const uint8_t *d, size_t n) {
     return true;
 }
 
+static uint8_t s_mode[2] = { 0x01, 0x01 };
+
 static void setup(int loss, int dup, int jitter) {
     memset(s_air, 0, sizeof s_air);
     memset(s_b, 0, sizeof s_b);
@@ -105,7 +107,7 @@ static void setup(int loss, int dup, int jitter) {
     for (int i = 0; i < 2; i++) {
         s_b[i].id = i;
         gbl_peer_io_t io = { inject_cmd, inject_data, radio_tx, &s_b[i] };
-        gbl_peer_init(&s_b[i].peer, &io, i == 0 ? 0xC0FFEEu : 0x0BEEFu, 0x01, 0);
+        gbl_peer_init(&s_b[i].peer, &io, i == 0 ? 0xC0FFEEu : 0x0BEEFu, s_mode[i], 0);
         gbl_peer_start(&s_b[i].peer, s_now);
     }
 }
@@ -191,7 +193,20 @@ static void test_timeout(void) {
     check("searching again", s_b[0].peer.state, GBL_PEER_SEARCHING);
 }
 
+static void test_mode_mismatch(void) {
+    printf("boards in different modes\n");
+    s_mode[0] = 0x01; s_mode[1] = 0x07;   /* a Gen 3 cable and a Wireless Adapter */
+    setup(0, 0, 0);
+    run(3000);
+    check("neither takes the other for a peer", s_b[0].peer.state == GBL_PEER_SEARCHING &&
+                                                s_b[1].peer.state == GBL_PEER_SEARCHING, 1);
+    check("and says why", s_b[0].peer.mode_mismatch > 0 && s_b[1].peer.mode_mismatch > 0, 1);
+    check("no mode was set on either", find(&s_b[0], 0x00) < 0 && find(&s_b[1], 0x00) < 0, 1);
+    s_mode[1] = 0x01;
+}
+
 int main(void) {
+    test_mode_mismatch();
     test_session("clean air", 0, 0, 0);
     test_session("lossy air (25% loss, 10% duplicates, reordering)", 25, 10, 30);
     test_garbage();

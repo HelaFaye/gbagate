@@ -82,6 +82,7 @@ gblink-asan:
 	@ASAN_OPTIONS=detect_leaks=0 python3 -I test/gblink_sim/test_gblink.py | tail -1
 	@ASAN_OPTIONS=detect_leaks=0 python3 -I test/gblink_sim/test_rfu.py | tail -1
 	@$(MAKE) -s -C test/gblink_sim clean
+	@$(MAKE) -s -C test/gblink_sim
 
 $(BUILD):
 	@mkdir -p $(BUILD)
