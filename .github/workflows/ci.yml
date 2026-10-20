@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # mbe2e loads the real tester ROM, built from rom/ with a bare ARM toolchain
+      - run: sudo apt-get update -q && sudo apt-get install -y -q gcc-arm-none-eabi
+      - run: make rom
       - run: make
       - run: make gblink-asan
 

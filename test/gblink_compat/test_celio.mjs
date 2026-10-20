@@ -51,7 +51,9 @@ const serverLog = [];
 server.stdout.on('data', (d) => serverLog.push(d.toString()));
 server.stderr.on('data', (d) => serverLog.push(d.toString()));
 await new Promise((resolve, reject) => {
-  const t = setTimeout(() => reject(new Error('Celio-Server did not start')), 8000);
+  const fail = (why) => reject(new Error(`Celio-Server did not start (${why}):\n${serverLog.join('')}`));
+  const t = setTimeout(() => fail('no "listening" in 15 s'), 15000);
+  server.on('exit', (code) => { clearTimeout(t); fail(`exited with ${code}`); });
   server.stdout.on('data', (d) => { if (d.toString().includes('listening')) { clearTimeout(t); resolve(); } });
 });
 

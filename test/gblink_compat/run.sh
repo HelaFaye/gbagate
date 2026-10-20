@@ -50,6 +50,7 @@ fi
 
 echo "Celio-Client used for the relay test: $(git -C "$LEGACY" log -1 --format='%h %cd' --date=short) (pre-ack, matches the public server)"
 
+"$ROOT/test/gblink_sim/fetch_librfu.sh" || echo "librfu: not fetched; the Wireless Adapter parts will skip"
 make -s -C "$ROOT/test/gblink_sim"
 node "$HERE/build.mjs" "$BUILD" "$SRC/gblink-netplay-bridge" "$LEGACY" "$SRC/Celio-Server"
 
