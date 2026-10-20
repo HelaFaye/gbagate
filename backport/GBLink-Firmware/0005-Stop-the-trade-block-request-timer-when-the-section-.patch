@@ -1,0 +1,35 @@
+From 11cdc8a454a4245c12b533a3d4dbb254f0c76700 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 19 Oct 2026 20:19:05 +0000
+Subject: [PATCH 5/6] Stop the trade block-request timer when the section ends
+
+TradeConnection arms m_commandRequestTimer for 2 s at several points and never
+stops it. When the section is destroyed with the timer still armed (a cancel,
+or a partner who left mid-block), the k_timer -- which Zephyr keeps linked in
+its timeout list -- is freed stack memory: the expiry runs on a dead object,
+and the frame's reuse corrupts the list.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ src/sections/tradeConnection.hpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/sections/tradeConnection.hpp b/src/sections/tradeConnection.hpp
+index 7759d68..268c1bf 100644
+--- a/src/sections/tradeConnection.hpp
++++ b/src/sections/tradeConnection.hpp
+@@ -36,6 +36,10 @@ public:
+     ~TradeConnection()
+     {
+         while(!m_packetLayer.idle()) {};
++        // The 2 s request timer can still be armed when the section ends; the
++        // k_timer is a node in the kernel's timeout list and lives in this
++        // object, so it must be stopped before the object goes away.
++        k_timer_stop(&m_commandRequestTimer);
+     }
+ 
+     NextSection process() override;
+-- 
+2.43.0
+

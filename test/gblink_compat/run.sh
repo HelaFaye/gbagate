@@ -18,8 +18,8 @@ mkdir -p "$BUILD"
 # GB-Link checkouts: from $GBLINK_SRC (a directory holding them), else cloned.
 SRC="${GBLINK_SRC:-$BUILD/src}"
 mkdir -p "$SRC"
-for repo in gblink-netplay-bridge Celio-Client Celio-Server gblink-ereader gb-pokemon-web gblink-distributor; do
-    if [ ! -d "$SRC/$repo/src" ]; then
+for repo in gblink-netplay-bridge Celio-Client Celio-Server gblink-ereader gb-pokemon-web gblink-distributor gblink-launcher; do
+    if [ ! -d "$SRC/$repo/.git" ] && [ ! -d "$SRC/$repo/src" ]; then
         git clone -q "https://github.com/GB-Link/$repo" "$SRC/$repo"
     fi
     echo "$repo: $(git -C "$SRC/$repo" log -1 --format='%h %cd' --date=short 2>/dev/null || echo 'not a git checkout')"
@@ -37,12 +37,15 @@ if [ ! -d "$LEGACY/src" ]; then
         || git clone -q "$SRC/Celio-Client" "$LEGACY" && git -C "$LEGACY" checkout -q b057315^
 fi
 
-# esbuild pinned to the bridge's version; the rest are Celio's runtime deps,
-# at the ranges its package.json files ask for.
-if [ ! -d "$BUILD/node_modules/socket.io-client" ]; then
-    (cd "$BUILD" && npm install --silent --no-save --no-package-lock \
+# esbuild pinned to the bridge's version; Celio's runtime deps at the ranges
+# its package.json files ask for; playwright-core for the launcher test, which
+# drives the preinstalled Chromium (it downloads no browser). One install for
+# all of them: with no package.json, npm prunes whatever a later install does
+# not name.
+if [ ! -d "$BUILD/node_modules/socket.io-client" ] || [ ! -d "$BUILD/node_modules/playwright-core" ]; then
+    (cd "$BUILD" && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --silent --no-save --no-package-lock \
         esbuild@0.24.2 socket.io@^4.8.1 socket.io-client@^4.8.1 rxjs@^7.8.2 \
-        uuid@^11.1.0 nanoid@^5.1.5 true-myth@^9.1.0 ws@^8.18.3 >/dev/null)
+        uuid@^11.1.0 nanoid@^5.1.5 true-myth@^9.1.0 ws@^8.18.3 playwright-core@1.56.1 >/dev/null)
 fi
 
 echo "Celio-Client used for the relay test: $(git -C "$LEGACY" log -1 --format='%h %cd' --date=short) (pre-ack, matches the public server)"

@@ -1,0 +1,46 @@
+From 46e617fb7fcf5046b449576f2d20eba8dad7abfa Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 19 Oct 2026 20:19:05 +0000
+Subject: [PATCH 2/6] Ignore StartHandshake/ConnectLink while the link mode has
+ no section
+
+LinkModule::receiveCommand dereferenced m_currentSection for 0x12 and 0x13.
+It is null until the host sends SetModeMaster/SetModeSlave, and again for the
+400 ms between a closed section and the next, so a host that sends a
+handshake command early or retries one at the wrong moment hard-faults the
+adapter. The commands are now ignored when there is no section to take them.
+
+Found running this firmware on a host under UBSan: member call on null
+pointer of type 'struct UsbSection'.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ src/module/link.cpp | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/src/module/link.cpp b/src/module/link.cpp
+index 79fc5a6..34eaa6d 100644
+--- a/src/module/link.cpp
++++ b/src/module/link.cpp
+@@ -43,8 +43,15 @@ void LinkModule::receiveCommand(std::span<const uint8_t> command)
+             m_packetLayerMode = PacketLayer::Mode::slave;
+             k_sem_give(&m_waitForLinkModeCommand);            
+             break;
+-        case LinkModeCommand::StartHandshake: return m_currentSection->startHandshake();
+-        case LinkModeCommand::ConnectLink: return m_currentSection->connectLink();
++        // There is no section before SetModeMaster/SetModeSlave, nor during the
++        // 400 ms pause between sections; a host retrying at either moment
++        // must not fault the adapter.
++        case LinkModeCommand::StartHandshake:
++            if (UsbSection* s = m_currentSection) s->startHandshake();
++            return;
++        case LinkModeCommand::ConnectLink:
++            if (UsbSection* s = m_currentSection) s->connectLink();
++            return;
+         default: break;
+     }
+ }
+-- 
+2.43.0
+
