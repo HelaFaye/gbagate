@@ -25,6 +25,7 @@ Patches 1-5 also apply unchanged to `master` (4aef46a, 2.2.3).
 | 6 | Initialise the client RECV_DATA packet pointer | GCC 14 `-Werror` (false positive) |
 | 7 | Bound the slot index of a trade request | ASan, `trade_emu_party_index_bounded` (code review) |
 | 8 | Shift printer replies out MSB first | `backport/verify-printer.sh` (code review) |
+| 9 | Keep a mode's traffic with the host that started it | `bridge_companion_keeps_its_mode_while_usb_queries`; `test_ldn.py` with LDN's own link code |
 
 The tests are in `test/gblink_sim/test_gblink.py`. To check the series, the
 simulator was built from upstream's tree with the series applied, and from the
@@ -38,7 +39,17 @@ reimplemented transport headers came from gbagate. Under ASan and UBSan:
   unpatched upstream code.
 
 `backport/verify.sh` repeats that check: it builds the simulator from
-upstream's tree at the base, with the series or `--unpatched`.
+upstream's tree at the base, with the series or `--unpatched`. Patch 9
+changes `layers/transport.*`, which the wireless-cable tests extend with a
+local route (PATCHES.md P8); `backport/harness/` adds exactly that route to
+whichever tree is built, so the cable tests run against upstream's own
+transport code too.
+
+Patch 9 also shows end to end: `test/gblink_compat/test_ldn.py` runs
+GB-Link-Switch-LDN's own `pico_link.c` on the bridge UART while a USB host
+polls GetFirmwareInfo for 4 s. Before the patch LDN loses the telemetry,
+times out and sends SetMode again (resetting the adapter under the game);
+after it, LDN's one SetMode stands and every query is answered on USB.
 
 Patch 8 changes nothing a test of the shipped firmware can see: the only
 replies sent, 0x81 and 0x00, read the same in either bit order.

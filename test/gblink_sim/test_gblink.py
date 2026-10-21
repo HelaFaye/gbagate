@@ -703,6 +703,39 @@ def bridge_uart_companion():
         s.close()
 
 
+@test
+def bridge_companion_keeps_its_mode_while_usb_queries():
+    """PATCHES.md P11. A companion on the bridge UART (GB-Link-Switch-LDN)
+    runs the Wireless Adapter mode while a USB host -- the launcher -- polls
+    GetFirmwareInfo. Each query is answered on USB, and the mode's telemetry
+    and status keep going to the companion. Upstream sent everything to the
+    host that spoke last, so the companion lost the adapter's telemetry,
+    took it for gone after 3 s, and re-entered the mode under the game."""
+    s = Sim()
+    try:
+        s.bridge_send(0, [0x00, 0x07, 0x00])
+        eventually(lambda: any(ch == 2 and p == bytes([0x02, 0xFF]) for ch, p in s.bridge_frames), 3,
+                   'AwaitMode on the bridge')
+        usb_status, usb_data = len(s.status), len(s.data)
+        mark = len(s.bridge_frames)
+        for _ in range(6):
+            s.cmd(0x0F)
+            time.sleep(0.25)
+        replies = [d for d in s.data[usb_data:] if d[:1] == b'\x0f']
+        check(len(replies) == 6 and all(tuple(d[1:4]) == (2, 2, 7) for d in replies),
+              'every query answered on USB: %d' % len(replies))
+        tele = [p for ch, p in s.bridge_frames[mark:] if ch == 1 and p[:1] == b'\x0e']
+        check(len(tele) >= 2, 'the companion kept the telemetry: %d frames' % len(tele))
+        check(not any(d[:1] == b'\x0e' for d in s.data[usb_data:]), 'none of it went to USB')
+        check(len(s.status) == usb_status, 'nor any status word')
+        # A USB host that starts a mode does take the adapter over.
+        mark = len(s.status)
+        s.cmd(0x00, 0x07, 0x00)
+        s.wait_status(ST['AwaitMode'], start=mark)
+    finally:
+        s.close()
+
+
 def main(argv):
     return run_tests('gblink', TESTS, argv)
 

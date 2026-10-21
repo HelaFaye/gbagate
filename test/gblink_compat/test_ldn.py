@@ -13,8 +13,9 @@ LDN's own pico_link_test.c makes of its scripted adapter:
   - a working link is left alone, with a GBA clocking it too: LDN must not
     send SetMode again, since re-entering the mode resets the adapter under
     the game;
-  - when a USB host speaks to the adapter, its replies and telemetry go to
-    USB; LDN notices the silence and takes it back.
+  - a USB host that only queries the adapter is answered on USB while the
+    mode's telemetry stays with LDN; one that starts a mode takes the
+    adapter over, and LDN notices the silence and takes it back.
 """
 import os
 import subprocess
@@ -99,7 +100,7 @@ def check(cond, what):
 def main(argv):
     exe = argv[1]
     s = Sim()
-    ldn = Ldn(exe, s, 60000)   # longer than every wait below added up
+    ldn = Ldn(exe, s, 70000)   # longer than every wait below added up
     ok = True
     t0 = time.time()
     try:
@@ -128,12 +129,24 @@ def main(argv):
         check(st['mode_sent'] == 1 and st['await'], 'a working link is left alone: %s' % st)
         print('  ok    a working link is left alone (one SetMode in %.0f s)' % (time.time() - t0))
 
-        # A USB host takes the adapter over: replies go to the side that spoke last.
-        s.cmd(0x0F)
-        s.wait_data(lambda d: d[0] == 0x0F)
+        # A USB host that only asks (the launcher polling GetFirmwareInfo) is
+        # answered on USB; the mode's telemetry stays with LDN (PATCHES.md
+        # P11), so LDN never sees silence and never re-enters the mode.
+        for _ in range(16):
+            mark = len(s.data)
+            s.cmd(0x0F)
+            s.wait_data(lambda d: d[0] == 0x0F, start=mark)
+            time.sleep(0.25)
+        st = ldn.wait(lambda st: True, 1, '')
+        check(st['mode_sent'] == 1 and st['await'], 'a USB host querying for 4 s left the link alone: %s' % st)
+        print('  ok    a USB host only querying leaves the link alone (still one SetMode)')
+
+        # A USB host that starts a mode does take the adapter over; LDN, hearing
+        # nothing, takes it back.
+        s.cmd(0x00, 0x07, 0x00)
         st = ldn.wait(lambda st: st.get('mode_sent', 0) >= 2 and st.get('await'), 9,
-                      'LDN takes the adapter back after a USB host spoke')
-        print('  ok    an adapter a USB host spoke to is taken back (%d SetModes)' % st['mode_sent'])
+                      'LDN takes the adapter back after a USB host set a mode')
+        print('  ok    an adapter a USB host took over is taken back (%d SetModes)' % st['mode_sent'])
         time.sleep(3)
         st = ldn.wait(lambda st: True, 1, '')
         check(st['mode_sent'] == 2, 'and then left alone again: %s' % st)

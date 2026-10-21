@@ -21,6 +21,14 @@ namespace Transport
     void setActive(Id id);
     Id active();
 
+    // gbagate (PATCHES.md P11). The host whose frame is being handled
+    // (setActive) starts a mode: the mode's status and data now go to it,
+    // until another host starts one. So a second host only querying the
+    // adapter -- a launcher polling GetFirmwareInfo while a companion MCU runs
+    // it over the bridge UART -- neither takes the mode's traffic nor gets it.
+    void claimForMode();
+    Id owner();
+
     // gbagate (PATCHES.md P8). A host frame arrived on id: make it active and
     // say so -- unless the local host owns the adapter (a local sink is set),
     // in which case the frame is refused, so a PC cannot take over or cancel
@@ -32,9 +40,12 @@ namespace Transport
     void registerCommandHandler(ReceiveHandler handler, void* userData);
     void registerDataHandler(ReceiveHandler handler, void* userData);
 
-    // Route a send to whichever transport the host last spoke on.
+    // A running mode's status and data: to the host that started it (P11).
     bool sendStatus(std::span<const uint8_t, 2> data);
     bool sendData(std::span<const uint8_t> data);
+
+    // The answer to the command being handled: to the host that sent it (P11).
+    bool sendReply(std::span<const uint8_t> data);
 
     // gbagate (PATCHES.md P8). The local host's receive side, and its way in:
     // inject* hand a command or data packet to the same handlers USB reaches,

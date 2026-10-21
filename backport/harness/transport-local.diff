@@ -1,0 +1,153 @@
+--- a/src/layers/transport.hpp
++++ b/src/layers/transport.hpp
+@@ -9,7 +9,10 @@
+ // is active.
+ namespace Transport
+ {
+-    enum class Id : uint8_t { Usb, Serial, BridgeUart };
++    // gbagate (PATCHES.md P8): Local is an in-firmware host -- the wireless
++    // link cable (src/gbl_peer.c) drives the adapter through it exactly as a
++    // PC would through USB.
++    enum class Id : uint8_t { Usb, Serial, BridgeUart, Local };
+ 
+     using ReceiveHandler = void(*)(std::span<const uint8_t>, void*);
+ 
+@@ -18,23 +21,37 @@
+     void setActive(Id id);
+     Id active();
+ 
+-    // The host whose frame is being handled (setActive) starts a mode: the
+-    // mode's status and data now go to it, until another host starts one.
+-    // So a second host only querying the adapter -- a launcher polling
+-    // GetFirmwareInfo while a companion MCU runs it over the bridge UART --
+-    // neither takes the mode's traffic nor gets it.
++    // gbagate (PATCHES.md P11). The host whose frame is being handled
++    // (setActive) starts a mode: the mode's status and data now go to it,
++    // until another host starts one. So a second host only querying the
++    // adapter -- a launcher polling GetFirmwareInfo while a companion MCU runs
++    // it over the bridge UART -- neither takes the mode's traffic nor gets it.
+     void claimForMode();
+     Id owner();
+ 
++    // gbagate (PATCHES.md P8). A host frame arrived on id: make it active and
++    // say so -- unless the local host owns the adapter (a local sink is set),
++    // in which case the frame is refused, so a PC cannot take over or cancel
++    // the wireless link cable's session, nor draw its replies to USB.
++    bool claim(Id id);
++
+     // Register the same handler on every transport so the device accepts host
+     // commands/data regardless of which one is open.
+     void registerCommandHandler(ReceiveHandler handler, void* userData);
+     void registerDataHandler(ReceiveHandler handler, void* userData);
+ 
+-    // A running mode's status and data: to the host that started it.
++    // A running mode's status and data: to the host that started it (P11).
+     bool sendStatus(std::span<const uint8_t, 2> data);
+     bool sendData(std::span<const uint8_t> data);
+ 
+-    // The answer to the command being handled: to the host that sent it.
++    // The answer to the command being handled: to the host that sent it (P11).
+     bool sendReply(std::span<const uint8_t> data);
++
++    // gbagate (PATCHES.md P8). The local host's receive side, and its way in:
++    // inject* hand a command or data packet to the same handlers USB reaches,
++    // and make Local the active transport so the replies come back to it.
++    using LocalSink = void(*)(bool status, std::span<const uint8_t>, void*);
++    void setLocalSink(LocalSink sink, void* userData);
++    void injectCommand(std::span<const uint8_t> data);
++    void injectData(std::span<const uint8_t> data);
+ }
+--- a/src/layers/transport.cpp
++++ b/src/layers/transport.cpp
+@@ -7,14 +7,28 @@
+ {
+     namespace
+     {
++        // gbagate (PATCHES.md P11): the requester and the mode's owner apart.
+         // The host whose frame is being handled: replies go back to it.
+         Id g_active = Id::Usb;
+         // The host whose SetMode started the running mode: the mode's status
+         // and data go to it, whichever host spoke since.
+         Id g_owner = Id::Usb;
+ 
++        // gbagate (PATCHES.md P8)
++        ReceiveHandler g_cmdHandler = nullptr;
++        void* g_cmdUserData = nullptr;
++        ReceiveHandler g_dataHandler = nullptr;
++        void* g_dataUserData = nullptr;
++        LocalSink g_localSink = nullptr;
++        void* g_localUserData = nullptr;
++
+         bool sendStatusTo(Id id, std::span<const uint8_t, 2> data)
+         {
++            if (id == Id::Local)
++            {
++                if (g_localSink) g_localSink(true, data, g_localUserData);
++                return g_localSink != nullptr;
++            }
+             if (id == Id::Serial) return SerialLayer::getInstance().sendStatus(data);
+             if (id == Id::BridgeUart) return SerialLayer::getBridgeInstance().sendStatus(data);
+             return UsbLayer::getInstance().sendStatus(data);
+@@ -22,6 +36,11 @@
+ 
+         bool sendDataTo(Id id, std::span<const uint8_t> data)
+         {
++            if (id == Id::Local)
++            {
++                if (g_localSink) g_localSink(false, data, g_localUserData);
++                return g_localSink != nullptr;
++            }
+             if (id == Id::Serial) return SerialLayer::getInstance().sendData(data);
+             if (id == Id::BridgeUart) return SerialLayer::getBridgeInstance().sendData(data);
+             return UsbLayer::getInstance().sendData(data);
+@@ -34,8 +53,18 @@
+     void claimForMode() { g_owner = g_active; }
+     Id owner() { return g_owner; }
+ 
++    // gbagate (PATCHES.md P8)
++    bool claim(Id id)
++    {
++        if (g_localSink != nullptr && id != Id::Local) return false;
++        g_active = id;
++        return true;
++    }
++
+     void registerCommandHandler(ReceiveHandler handler, void* userData)
+     {
++        g_cmdHandler = handler;
++        g_cmdUserData = userData;
+         UsbLayer::getInstance().setReceiveCommandHandler(handler, userData);
+         SerialLayer::getInstance().setReceiveCommandHandler(handler, userData);
+         SerialLayer::getBridgeInstance().setReceiveCommandHandler(handler, userData);
+@@ -43,6 +72,8 @@
+ 
+     void registerDataHandler(ReceiveHandler handler, void* userData)
+     {
++        g_dataHandler = handler;
++        g_dataUserData = userData;
+         UsbLayer::getInstance().setReceiveDataHandler(handler, userData);
+         SerialLayer::getInstance().setReceiveDataHandler(handler, userData);
+         SerialLayer::getBridgeInstance().setReceiveDataHandler(handler, userData);
+@@ -51,4 +82,22 @@
+     bool sendStatus(std::span<const uint8_t, 2> data) { return sendStatusTo(g_owner, data); }
+     bool sendData(std::span<const uint8_t> data) { return sendDataTo(g_owner, data); }
+     bool sendReply(std::span<const uint8_t> data) { return sendDataTo(g_active, data); }
++
++    void setLocalSink(LocalSink sink, void* userData)
++    {
++        g_localSink = sink;
++        g_localUserData = userData;
++    }
++
++    void injectCommand(std::span<const uint8_t> data)
++    {
++        setActive(Id::Local);
++        if (g_cmdHandler) g_cmdHandler(data, g_cmdUserData);
++    }
++
++    void injectData(std::span<const uint8_t> data)
++    {
++        setActive(Id::Local);
++        if (g_dataHandler) g_dataHandler(data, g_dataUserData);
++    }
+ }

@@ -41,7 +41,7 @@ namespace
         r[11] = static_cast<uint8_t>(caps >> 24);
         r[12] = gbagate_ext_board();
         r[13] = gbagate_ext_image();
-        Transport::sendData(std::span<const uint8_t>(r, sizeof r));
+        Transport::sendReply(std::span<const uint8_t>(r, sizeof r));
     }
 
     // ---- 0x4E ---------------------------------------------------------------
@@ -58,7 +58,7 @@ namespace
         for (unsigned i = 0; i < GBX_PHY_STATS; i++)
             for (unsigned b = 0; b < 4; b++)
                 r[2 + 4 * i + b] = static_cast<uint8_t>(v[i] >> (8 * b));
-        Transport::sendData(std::span<const uint8_t>(r, sizeof r));
+        Transport::sendReply(std::span<const uint8_t>(r, sizeof r));
     }
 
     // ---- mode 0x80: Battle Chip Gate ----------------------------------------------
@@ -190,7 +190,7 @@ namespace
                 default:
                     return;
             }
-            Transport::sendData(std::span<const uint8_t>(r, n));
+            Transport::sendReply(std::span<const uint8_t>(r, n));
         }
 
     private:

@@ -318,7 +318,7 @@ void GBModule::printerModeLoop()
         // USB streams every 64 bytes as before. WebSerial accumulates the
         // whole image and flushes once at PRINT to keep IRQs off the
         // bit-bang loop during clocking.
-        if (usbBufPos >= 64 && Transport::active() == Transport::Id::Usb) {
+        if (usbBufPos >= 64 && Transport::owner() == Transport::Id::Usb) {
             flushUsbBuf();
         }
     };
@@ -482,7 +482,7 @@ void GBModule::printerModeLoop()
                 if (command == 0x02) {  // PRINT command
                     bufferUsbByte(0xFE);  // Print marker
                     flushUsbBuf();        // Always flush at PRINT (both transports)
-                } else if (Transport::active() == Transport::Id::Usb) {
+                } else if (Transport::owner() == Transport::Id::Usb) {
                     // WebUSB: original behaviour, flush at every protocol packet.
                     flushUsbBuf();
                 }

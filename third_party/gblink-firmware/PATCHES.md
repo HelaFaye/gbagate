@@ -22,12 +22,13 @@ upstream file. The fixes are offered back upstream as patches in
 |---|---|---|---|---|
 | P9 | `payloads/pokemon.cpp` `tradePkmnAtIndex` | the slot to trade comes from the GBA's `LINKCMD_READY_TO_TRADE` word, unchecked | an index past 5 (a corrupted link word, a homebrew ROM) reads past the partner's party and writes past ours | `trade_emu_party_index_bounded` (`test_party.cpp`, ASan: global-buffer-overflow upstream) |
 | P10 | `module/gb.cpp` printer loop | replies shifted out LSB first, where the Game Boy samples MSB first (received bytes were already assembled MSB first) | none today: the only bytes sent, 0x81 and 0x00, are bit-palindromes; a real status (0x02 busy) would arrive as 0x40 | `backport/verify-printer.sh` (status 0x02: read as 0x40 before, 0x02 after); `printer_stream` unchanged |
+| P11 | `layers/transport.{hpp,cpp}`, `control.hpp`, `module/gb.cpp` | every send went to whichever host last delivered a frame | a USB host only querying (the launcher polling 0x0F) drew a companion MCU's mode traffic to USB; GB-Link-Switch-LDN, hearing nothing, re-entered the mode after 3 s and reset the adapter under the game. Now a mode's status and data go to the host that started it (`claimForMode`), command replies to the host that asked (`sendReply`) | `bridge_companion_keeps_its_mode_while_usb_queries`; `test_ldn.py` with LDN's own `pico_link.c` (two SetModes before, one after) |
 
 P3 also holds a connect that arrives early until the adapter has sent eight
 `0xB9A0` rounds, the margin the netplay bridge measured a child GBA needs. A
 host that already waits is unaffected.
 
-P1-P6, P9 and P10 apply unchanged to 2.2.7: upstream has not touched those files since
+P1-P6 and P9-P11 apply unchanged to 2.2.7: upstream has not touched those files since
 2.2.3.
 
 ## Replaced files

@@ -13,9 +13,11 @@
 #   layers/usbLayer.hpp, layers/serialLayer.hpp
 #       upstream's sit on Zephyr's USB stack and UART driver; gbagate's keep
 #       their interface over the simulator's pipes (PATCHES.md, Replaced files);
-#   layers/transport.{hpp,cpp}
-#       only if the series does not touch them: gbagate's add the Local route
-#       the wireless-cable tests drive (PATCHES.md P8).
+#   backport/harness/transport-local*.diff
+#       applied to the tree's own layers/transport.{hpp,cpp}: the Local route
+#       the wireless-cable tests drive (PATCHES.md P8), and nothing else.
+#       transport-local.diff goes on top of the series (which changes those
+#       files), transport-local-base.diff on the unpatched base.
 #
 # So tests of gbagate-only features (0x4F, 0x4E, mode 0x80, the wireless
 # cable) fail here by design; every other test is upstream's code under test.
@@ -45,11 +47,8 @@ fi
 SRC="$WORK/tree/src"
 V="$ROOT/third_party/gblink-firmware/src"
 cp "$V/layers/usbLayer.hpp" "$V/layers/serialLayer.hpp" "$SRC/layers/"
-if git -C "$WORK/tree" diff --quiet "$BASE" -- src/layers/transport.hpp src/layers/transport.cpp; then
-    cp "$V/layers/transport.hpp" "$V/layers/transport.cpp" "$SRC/layers/"
-else
-    echo "note: the series changes layers/transport.*; the wireless-cable tests are left out"
-fi
+HARNESS="$HERE/harness/transport-local$([ $PATCHED = 1 ] || echo -base).diff"
+patch -s -d "$WORK/tree" -p1 < "$HARNESS" || { echo "the harness ($HARNESS) does not apply"; exit 1; }
 
 "$ROOT/test/gblink_sim/fetch_librfu.sh" >/dev/null 2>&1 || true
 make -s -C "$ROOT/test/gblink_sim" V="$SRC" OUT="$WORK/sim" \
