@@ -1,0 +1,36 @@
+From 88128f7fd3927f75d60b28c3a79b102ad0d8be9c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 01:02:36 +0000
+Subject: [PATCH 1/2] Forget a client's state when it leaves the session
+
+removeClient() unsubscribed the leaving client but kept its entry in
+clientState. A partner who joined and left before the link started
+left a ClientState with status Empty behind, and the HandshakeReceived
+case waits for every entry in clientState to reach HandshakeReceived,
+so the next pair to use the session never got StartHandshake.
+
+Celio-Client's exchangeWithPartnerReplaced test covers it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ src/session.ts | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/session.ts b/src/session.ts
+index 8a4d7bd..8a88c5a 100644
+--- a/src/session.ts
++++ b/src/session.ts
+@@ -253,6 +253,9 @@ export class Session {
+     private removeClient(client: Client) {
+         const index = this.clients.findIndex(clientToRemove => clientToRemove.id() === client.id());
+         this.clientState.get(client)?.subscription.unsubscribe();
++        // Forget its state too: a stale entry (a partner who left before the
++        // link started) would hold up the next pair's "all handshakes" check.
++        this.clientState.delete(client);
+         this.clients.splice(index, 1);
+         console.log("Client " + client.id() + " left session");
+         client.inSession(false);
+-- 
+2.43.0
+

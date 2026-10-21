@@ -230,7 +230,7 @@ checks LDN's own `pico_link_test.c` makes of its scripted adapter:
 | GB-Link software | status | tested by |
 |---|---|---|
 | gblink-netplay-bridge (engine) | gen3, AW, rfu all work | `test_adapter.mjs`, `test_netplay_e2e.mjs`, `test_rfu_netplay.mjs` |
-| Celio-Server + Celio-Client | relay works with the client from before b057315 (see below) | `test_celio.mjs` |
+| Celio-Server + Celio-Client | relay works with the client from before b057315; with the current client after `backport/Celio-Server` (see below) | `test_celio.mjs`, `backport/verify-celio.sh` |
 | gblink-ereader | e-Reader mode, preload, scan | `test_webapps.mjs` |
 | gb-pokemon-web | GB link mode | `test_webapps.mjs` |
 | gblink-distributor | GB link entry, byte exchange | `test_webapps.mjs` |
@@ -252,10 +252,13 @@ as root or after `sysctl -w net.ipv4.ip_unprivileged_port_start=0`, as CI does
   `backport/gblink-launcher` teaches the launcher to recognise gbagate and hide
   the updater. Until that is merged, flash gbagate with `pio run -t upload` or
   esptool.
-- **Celio.** The newest public Celio-Client (b057315, 3 October 2026) sends
-  with Socket.IO acks and retries. The newest public Celio-Server (9f02d3e) does
-  not answer acks. The two current heads therefore do not interoperate, with
-  any adapter. The relay test uses the client from just before that change.
+- **Celio.** The newest public Celio-Client (since b057315, 3 October 2026)
+  sends with Socket.IO acks and retries. The newest public Celio-Server
+  (9f02d3e) does not answer acks. The two current heads therefore do not
+  interoperate, with any adapter. The relay test uses the client from just
+  before that change. `backport/Celio-Server` fixes the server (it then links
+  the current client, the earlier one, and one of each);
+  `backport/verify-celio.sh` checks that.
 - **USB is GB-Link or a drive, not both.** The ESP32-S3 has four IN endpoints
   besides EP0, and GB-Link's interface plus CDC use them all. The `usb` setting
   chooses one, and the board reboots to apply it.

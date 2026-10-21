@@ -47,7 +47,8 @@ overflow.
 
 - **Celio-Client and Celio-Server do not interoperate at their current heads**
   (the client acks and retries since b057315; the server does not answer
-  acks). Nothing in the firmware is involved; see doc/GBLINK.md.
+  acks). Nothing in the firmware is involved; the server fix is offered in
+  `backport/Celio-Server/` (see backport/README.md).
 
 ## Known and left alone
 

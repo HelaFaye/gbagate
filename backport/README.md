@@ -69,12 +69,39 @@ the firmware's real descriptors. Upstream identifies the board as "GBLink
 v2.2.7" and shows the updater. Patched, it shows "gbagate (GBLink v2.2.7
 protocol)", no updater, and seven labelled LED slots.
 
-## Not patches: things worth knowing upstream
+## Celio-Server
 
-- **Celio-Client and Celio-Server do not interoperate at their current heads.**
-  Since b057315 the client sends status and data with Socket.IO acks and
-  retries. The public server (9f02d3e) neither acks them nor unwraps the ack
-  argument. gbagate's relay test pins the client to the commit before.
+Base: `main` at 9f02d3e (its head).
+
+    git am backport/Celio-Server/*.patch
+
+| # | patch |
+|---|---|
+| 1 | Forget a client's state when it leaves the session |
+| 2 | Speak Celio-Client's acked protocol, and keep serving earlier clients |
+
+The current Celio-Client and the public Celio-Server could not link at all.
+Since b057315 the client acks and retries what it sends, and the commits after
+it expect the server to do the same (deviceData as arrays both ways, acked
+commands, acked session events with a uuid). The server did none of it, and
+rxjs' `fromEvent` turned every acked emit into `[payload, ack]`. Patch 1 is a
+separate bug the client's tests also catch: a partner who left before the link
+started kept blocking the next pair's handshake. The client's tests start a
+server from `/Users/nilskirchhof/Repo/linkServer`, the package's own name, so
+its author's copy has probably moved on the same way; these patches make the
+public one match.
+
+The server learns what each client speaks from its traffic, so an earlier
+client is served as before. `backport/verify-celio.sh` checks the series:
+
+- **Celio-Client's own suite** (its `tests/`, pointed at the patched server):
+  25 of 25 pass, against 13 unpatched;
+- **gbagate's relay test** (`test_celio.mjs`, two adapters linked through the
+  server) with the current client (be562a9) at both ends, the client from
+  before b057315 at both ends, and one of each, in both orders: all four pass
+  patched; unpatched only the two earlier clients link.
+
+## Not patches: things worth knowing upstream
 - **The soft-reset pulse.** `linkLayer_rfu.c` catches AgbRFU_SoftReset by
   polling SD about once a millisecond against a 1.1 ms pulse, so a late poll
   misses it. gbagate times the pulse from its edges instead, and qualifies it
