@@ -10,8 +10,9 @@ its message what was wrong, how it shows on hardware, and how it was found.
 
 ## GBLink-Firmware
 
-Base: `Wireless-Adapter` at 1b49b76 (2.2.7, the source of the launcher's beta).
-Patches 1-5 also apply unchanged to `master` (4aef46a, 2.2.3).
+Base: `Wireless-Adapter` at 1b49b76 (2.2.7, the source of the launcher's beta,
+and still its head). Every patch also applies on its own to that base, in any
+order. Patches 1-5 also apply unchanged to `master` (4aef46a, 2.2.3).
 
     git am backport/GBLink-Firmware/*.patch
 
@@ -35,7 +36,8 @@ reimplemented transport headers came from gbagate. Under ASan and UBSan:
 
 - **patched 2.2.7**: every test passes except the three that exercise
   gbagate-only commands (0x4F, mode 0x80);
-- **unpatched 2.2.7**: the four tests named above fail as well;
+- **unpatched 2.2.7**: the six tests named for patches 1-4, 7 and 9 fail as
+  well;
 - **the Wireless Adapter mode**: all of `test_rfu.py`'s librfu checks pass on
   unpatched upstream code.
 
@@ -66,6 +68,17 @@ passes.
 gbagate's own Battle Chip Gate (mode 0x80) is not offered here. Upstream
 shipped its own gate in 2.2.6 (mode 0x06), and gbagate implements that mode
 too, so a second gate would only duplicate it.
+
+## Checking all of it
+
+    backport/verify.sh              the firmware series (and --unpatched)
+    backport/verify-printer.sh      patch 8's evidence
+    backport/verify-celio.sh        the Celio-Server series (--client-suite
+                                    adds Celio-Client's own tests)
+
+All three need the checkouts `make compat` makes, and build into
+`build/backport/`. Nothing is sent anywhere: the patches stay here until
+someone submits them.
 
 ## gblink-launcher
 
