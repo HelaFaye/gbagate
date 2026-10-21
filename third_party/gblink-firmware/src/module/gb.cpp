@@ -362,9 +362,10 @@ void GBModule::printerModeLoop()
             }
         }
 
-        // Clock is LOW — output our bit (LSB first)
-        gpio_put(PIN_SOUT, send_data & 0x1);
-        send_data = send_data >> 1;
+        // Clock is LOW — output our bit. gbagate (PATCHES.md P10): MSB first,
+        // as the Game Boy samples it (and as received_data is assembled).
+        gpio_put(PIN_SOUT, (send_data >> 7) & 0x1);
+        send_data = static_cast<uint8_t>(send_data << 1);
 
         // Wait for clock to go high
         while (!gpio_get(PIN_SCK)) {}

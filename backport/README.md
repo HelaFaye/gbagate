@@ -24,6 +24,7 @@ Patches 1-5 also apply unchanged to `master` (4aef46a, 2.2.3).
 | 5 | Stop the trade block-request timer when the section ends | inspection |
 | 6 | Initialise the client RECV_DATA packet pointer | GCC 14 `-Werror` (false positive) |
 | 7 | Bound the slot index of a trade request | ASan, `trade_emu_party_index_bounded` (code review) |
+| 8 | Shift printer replies out MSB first | `backport/verify-printer.sh` (code review) |
 
 The tests are in `test/gblink_sim/test_gblink.py`. To check the series, the
 simulator was built from upstream's tree with the series applied, and from the
@@ -35,6 +36,15 @@ reimplemented transport headers came from gbagate. Under ASan and UBSan:
 - **unpatched 2.2.7**: the four tests named above fail as well;
 - **the Wireless Adapter mode**: all of `test_rfu.py`'s librfu checks pass on
   unpatched upstream code.
+
+`backport/verify.sh` repeats that check: it builds the simulator from
+upstream's tree at the base, with the series or `--unpatched`.
+
+Patch 8 changes nothing a test of the shipped firmware can see: the only
+replies sent, 0x81 and 0x00, read the same in either bit order.
+`backport/verify-printer.sh` sets the status to 0x02 in both trees for the
+experiment: the simulated Game Boy, which samples MSB first, reads 0x40
+without the patch and 0x02 with it.
 
 Patch 7 came later, from a code review. Its test runs upstream's
 `payloads/pokemon.cpp` on its own under ASan: unpatched it reports a
@@ -107,6 +117,3 @@ client is served as before. `backport/verify-celio.sh` checks the series:
   misses it. gbagate times the pulse from its edges instead, and qualifies it
   by width. The same idea would work with the RP2040's edge latches and a
   timer.
-- **Printer replies are shifted out LSB first** (`gb.cpp`), where a Game Boy
-  reads MSB first. This works today only because the bytes sent (0x81, 0x00)
-  read the same either way.

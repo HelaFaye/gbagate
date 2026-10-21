@@ -21,12 +21,13 @@ upstream file. The fixes are offered back upstream as patches in
 | # | file | defect | effect on hardware | test |
 |---|---|---|---|---|
 | P9 | `payloads/pokemon.cpp` `tradePkmnAtIndex` | the slot to trade comes from the GBA's `LINKCMD_READY_TO_TRADE` word, unchecked | an index past 5 (a corrupted link word, a homebrew ROM) reads past the partner's party and writes past ours | `trade_emu_party_index_bounded` (`test_party.cpp`, ASan: global-buffer-overflow upstream) |
+| P10 | `module/gb.cpp` printer loop | replies shifted out LSB first, where the Game Boy samples MSB first (received bytes were already assembled MSB first) | none today: the only bytes sent, 0x81 and 0x00, are bit-palindromes; a real status (0x02 busy) would arrive as 0x40 | `backport/verify-printer.sh` (status 0x02: read as 0x40 before, 0x02 after); `printer_stream` unchanged |
 
 P3 also holds a connect that arrives early until the adapter has sent eight
 `0xB9A0` rounds, the margin the netplay bridge measured a child GBA needs. A
 host that already waits is unaffected.
 
-P1-P6 and P9 apply unchanged to 2.2.7: upstream has not touched those files since
+P1-P6, P9 and P10 apply unchanged to 2.2.7: upstream has not touched those files since
 2.2.3.
 
 ## Replaced files
@@ -52,10 +53,6 @@ overflow.
 
 ## Known and left alone
 
-- **Printer replies are shifted out LSB first** (`gb.cpp`), where the Game Boy
-  reads MSB first. It works because the only bytes ever sent, 0x81 and 0x00,
-  are bit-palindromes. Left as is so the vendored printer path stays upstream's;
-  noted upstream.
 - **`k_sem_take` on a shared semaphore** in `PacketLayer::getTransmittedHandshake`
   consumes the handshake semaphore it shares with `getReceivedHandshake`, so the
   two cannot both be waited on. Every caller uses them in an order where this is
