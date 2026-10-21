@@ -282,7 +282,8 @@ RfuProtocolSection::RfuProtocolSection(uint8_t role)
 
     rfuLink_setDoneCallback(&pioDoneCallback, nullptr);
 
-    g_revRx0 = g_revRx1 = 0;
+    g_revRx0 = 0;   // gbagate (PATCHES.md P12): not chained through a volatile
+    g_revRx1 = 0;
     g_dbgDelivFail = dfNone;
     g_dbgDelivSo = 0;
     g_retriesThisWait = 0;

@@ -26,6 +26,7 @@ Patches 1-5 also apply unchanged to `master` (4aef46a, 2.2.3).
 | 7 | Bound the slot index of a trade request | ASan, `trade_emu_party_index_bounded` (code review) |
 | 8 | Shift printer replies out MSB first | `backport/verify-printer.sh` (code review) |
 | 9 | Keep a mode's traffic with the host that started it | `bridge_companion_keeps_its_mode_while_usb_queries`; `test_ldn.py` with LDN's own link code |
+| 10 | Silence two compiler warnings | GCC 14 `-Wextra` (no change in behaviour) |
 
 The tests are in `test/gblink_sim/test_gblink.py`. To check the series, the
 simulator was built from upstream's tree with the series applied, and from the
@@ -123,6 +124,12 @@ client is served as before. `backport/verify-celio.sh` checks the series:
   patched; unpatched only the two earlier clients link.
 
 ## Not patches: things worth knowing upstream
+
+- **Multi-Play link counters.** gbagate's `0x4E` reports words clocked,
+  words dropped and late answers per PHY, which is what a bring-up or a field
+  report of a flaky link needs (upstream has the Wireless Adapter's `0x4C`
+  already). Offering it as a patch would claim a command number in GB-Link's
+  own protocol, which is theirs to allocate; it is offered as an idea.
 - **The soft-reset pulse.** `linkLayer_rfu.c` catches AgbRFU_SoftReset by
   polling SD about once a millisecond against a 1.1 ms pulse, so a late poll
   misses it. gbagate times the pulse from its edges instead, and qualifies it
