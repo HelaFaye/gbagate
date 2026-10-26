@@ -56,7 +56,7 @@ typedef struct {
     uint32_t    caps;       /* hw_caps of this board                        */
     cg_game_t   game;       /* meaningful only when has_game                */
     bool        has_game;
-    const char *hint;       /* the control hint, for a page's footer        */
+    const char *hint;       /* how to leave, "hold back": a footer's right  */
 
     /* Open the chip database for a game into *db. NULL when the image has
      * none. The blob lives in flash: the chipdb_t can be kept. */

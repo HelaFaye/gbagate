@@ -67,8 +67,11 @@ Three things to notice:
   Back, the host takes it as "leave". So Back always works unless the applet
   has something of its own to cancel first.
 - **`page()` only describes the screen.** The host has already set the title
-  (the applet's name) and the footer (the control hint). The applet adds
-  lines, and the host draws them in the current theme. A page holds 8 lines of
+  (the applet's name) and the right half of the footer (how to leave, such as
+  `hold back`). The applet adds lines, and the host draws them in the current
+  theme. To say what the confirm key does, put it in the left half: pass
+  `ui_keys_for()` and a verb of five letters or fewer to `ui_page_keys()`, or
+  write `p->footer` directly. A page holds 8 lines of
   20 characters; `ui_page_add_wrapped()` breaks a longer text at spaces.
 
 ## 2. Put it in the menu
@@ -163,7 +166,7 @@ const applet_t applet_chip_dice = {
   | `now_ms` | milliseconds since boot, refreshed every frame |
   | `caps` | which hardware this board has (`HW_CAP_*`) |
   | `game`, `has_game` | the chosen game, for an applet with `needs_game` |
-  | `hint` | the control hint, which a page uses as its footer |
+  | `hint` | how to leave (`hold back`, `B back`), the right half of a page's footer |
   | `open_db(game, &db)` | opens a game's chip database. **NULL** on an image without databases |
   | `random()` | 32 random bits (the ESP32's hardware generator). Never NULL |
 
@@ -211,7 +214,7 @@ Applets are portable C, so they run on your computer. The pattern from
 `test/test_applets.c`:
 
 ```c
-applet_env_t env = { .hint = "click: count" };
+applet_env_t env = { .hint = "hold back" };
 applet_bind_env(&env);
 
 check("enters", applet_hello.enter(&env), 1);

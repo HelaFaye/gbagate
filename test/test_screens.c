@@ -10,9 +10,9 @@
  * worth seeing. They used to be drawn only on the device, from its globals, so
  * the first time anyone saw one was on a panel.
  *
- * The footers are the real control hints, bound the way the device binds them
- * (controls.c, for a rotary encoder), so a hint that crowds out the screen it
- * belongs to shows here too.
+ * The footers are built the way the device builds them -- each page naming
+ * what its keys do, for an encoder -- so a footer that crowds out the screen
+ * it belongs to fails here.
  */
 
 #include <math.h>
@@ -22,7 +22,6 @@
 
 #include "applet.h"
 #include "chipgate.h"
-#include "controls.h"
 #include "hw_caps.h"
 #include "settings.h"
 #include "ui_font.h"
@@ -185,7 +184,11 @@ static void check_frame(const char *name, bool footer) {
 static void page(const char *name, const ui_page_t *p) {
     ui_render_page(&g_canvas, p);
     fits(name, "title", p->title, UI_SCREEN_W - 6);
-    fits(name, "footer", p->footer, FOOTER_W);
+    if (!ui_page_footer_fits(p)) {
+        printf("  FAIL %s: footer does not fit: \"%s\" + \"%s\"\n", name,
+               p->footer, p->footer_right);
+        g_fail++;
+    }
     check_frame(name, true);
     for (uint8_t i = 0; i < p->count; i++) {
         if (!ui_page_line_fits(p, i)) {
@@ -200,21 +203,6 @@ static void page(const char *name, const ui_page_t *p) {
         }
     }
     shot(name);
-}
-
-/* ---- controls, as the device binds them -------------------------------- */
-
-static ui_input_t g_in;
-static controls_t g_ctl;
-static uint32_t no_buttons(void *ctx) { (void)ctx; return 0; }
-
-#define CTRLS_PAGE (CTRL_BIT(CTRL_CONFIRM) | CTRL_BIT(CTRL_CANCEL))
-#define CTRLS_LIST (CTRLS_PAGE | CTRL_BIT(CTRL_PREV) | CTRL_BIT(CTRL_NEXT) | \
-                    CTRL_BIT(CTRL_PAGE_PREV) | CTRL_BIT(CTRL_PAGE_NEXT))
-
-static const char *hint(uint32_t wanted) {
-    controls_bind(&g_ctl, &g_in, wanted);
-    return controls_hint(&g_ctl);
 }
 
 /* ---- the menus --------------------------------------------------------- */
@@ -327,89 +315,230 @@ static void test_send_program(void) {
     }
 
     /* The bar must say how far, not just that something is happening. */
-    ui_render_progress(&g_canvas, "Send Program", "tester.gba", "power on the GBA",
-                       40, hint(CTRLS_PAGE));
-    fits("send-progress", "footer", hint(CTRLS_PAGE), FOOTER_W);
+    ui_keys_t enc = ui_keys_for(INPUT_ENCODER);
+    char foot[UI_PAGE_TEXT];
+    ui_keys_hint(foot, sizeof foot, &enc, NULL);
+    check("progress footer", strcmp(foot, "hold back"), 0);
+    const char *advice = NULL;
+    const char *status = ui_send_result_text(2, &advice);
+    ui_render_progress(&g_canvas, "Send Program", "tester.gba", "waiting for the GBA",
+                       "turn it on, no cart", 40, foot);
+    fits("send-progress", "status", "waiting for the GBA", UI_SCREEN_W - 4);
+    fits("send-progress", "advice", "turn it on, no cart", UI_SCREEN_W - 4);
     check_frame("progress", true);
     int bw = UI_SCREEN_W - 8, end = 4 + bw * 40 / 100;
-    check("progress: filled to 40%", px(end - 1, UI_LIST_Y + 44), COL_BAR_THUMB);
-    check("progress: track past 40%", px(end + 1, UI_LIST_Y + 44), COL_BAR_TRACK);
+    check("progress: filled to 40%", px(end - 1, UI_LIST_Y + 52), COL_BAR_THUMB);
+    check("progress: track past 40%", px(end + 1, UI_LIST_Y + 52), COL_BAR_TRACK);
+    check("progress: advice drawn", has_colour(2, UI_LIST_Y + 31, 120, UI_FONT_H, COL_TEXT), 1);
     shot("send-progress");
-    ui_render_progress(&g_canvas, "Send Program", "tester.gba", "sent", 250,
-                       hint(CTRLS_PAGE));
-    check("progress: over 100% clamps", px(4 + bw - 1, UI_LIST_Y + 44), COL_BAR_THUMB);
+    ui_render_progress(&g_canvas, "Send Program", "tester.gba", status, advice, 3, foot);
+    shot("send-no-gba");
+    ui_render_progress(&g_canvas, "Send Program", "tester.gba", "sent", "", 250, foot);
+    check("progress: over 100% clamps", px(4 + bw - 1, UI_LIST_Y + 52), COL_BAR_THUMB);
+
+    /* Every result reads as a player would say it, with something to do. */
+    for (int r = 0; r <= 6; r++) {
+        const char *a = NULL;
+        const char *t = ui_send_result_text(r, &a);
+        char what[40];
+        snprintf(what, sizeof what, "result %d", r);
+        check(what, t && t[0] && a != NULL, 1);
+        fits(what, "text", t, UI_SCREEN_W - 4);
+        fits(what, "advice", a, UI_SCREEN_W - 4);
+    }
+    check("advice is optional", ui_send_result_text(0, NULL) != NULL, 1);
 }
 
 /* ---- the pages --------------------------------------------------------- */
 
+/* The page's first line, and its colour: the state a player reads first. */
+static void lead(const char *name, const ui_page_t *p, const char *text, uint16_t colour) {
+    char what[96];
+    snprintf(what, sizeof what, "%s: says \"%s\"", name, text);
+    check(what, strcmp(p->line[0], text), 0);
+    snprintf(what, sizeof what, "%s: in its status colour", name);
+    check(what, p->colour[0], colour);
+}
+
+static void footer_is(const char *name, const ui_page_t *p, const char *left, const char *right) {
+    char what[96];
+    snprintf(what, sizeof what, "%s: footer \"%s\"", name, left);
+    check(what, strcmp(p->footer, left), 0);
+    snprintf(what, sizeof what, "%s: back \"%s\"", name, right);
+    check(what, strcmp(p->footer_right, right), 0);
+}
+
 static void test_pages(void) {
     printf("pages\n");
-    const char *foot = hint(CTRLS_PAGE);
+    ui_keys_t k = ui_keys_for(INPUT_ENCODER);
+    const ui_keys_t *foot = &k;
     ui_page_t p;
+
+    check("encoder keys", strcmp(k.confirm, "click") == 0 && strcmp(k.back, "hold") == 0, 1);
+    ui_keys_t ab = ui_keys_for(INPUT_DPAD4);
+    check("button keys", strcmp(ab.confirm, "A") == 0 && strcmp(ab.back, "B") == 0, 1);
+    ui_page_init(&p, "T", NULL);
+    ui_page_keys(&p, NULL, "x");
+    check("no keys, no footer", p.footer[0] || p.footer_right[0], 0);
 
     ui_diag_t d = { .caps = HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB,
                     .linked = true, .transfers = 123456, .chips_sent = 12,
                     .gate_id = 0x00C6, .ui_dropped = 0 };
     ui_page_diagnostics(&p, "Diagnostics", foot, &d);
+    footer_is("diagnostics", &p, "", "hold back");
     page("diagnostics", &p);
 
-    ui_page_refused(&p, "Infrared", foot, "no handler");
-    page("refused", &p);
+    const struct { int st; const char *name; } refusals[] = {
+        { 1, "refused-no-handler" }, { 2, "refused-hardware" }, { 3, "refused-game" },
+        { 4, "refused-busy" }, { 5, "refused-by-mode" },
+    };
+    for (unsigned i = 0; i < sizeof refusals / sizeof refusals[0]; i++) {
+        ui_page_refused(&p, "Infrared", foot, refusals[i].st);
+        lead(refusals[i].name, &p, "did not start", COL_BAD);
+        check(refusals[i].name, p.count >= 2, 1);
+        page(refusals[i].name, &p);
+    }
 
     link_bridge_t b;
     memset(&b, 0, sizeof b);
     ui_page_link_usb(&p, "Link: USB", foot, &b);
+    lead("usb-down", &p, "waiting for the PC", COL_WARN);
     page("usb-down", &p);
-    b.state = BRIDGE_READY; b.words_sent = 48211; b.words_received = 48190; b.rtt_us = 840;
+    b.state = BRIDGE_HELLO;
     ui_page_link_usb(&p, "Link: USB", foot, &b);
+    lead("usb-hello", &p, "PC found", COL_WARN);
+    page("usb-hello", &p);
+    b.state = BRIDGE_READY; b.words_sent = 48211; b.words_received = 48190;
+    ui_page_link_usb(&p, "Link: USB", foot, &b);
+    check("usb: measuring before a ping", strcmp(p.line[1], "measuring delay"), 0);
+    b.rtt_us = 840;
+    ui_page_link_usb(&p, "Link: USB", foot, &b);
+    lead("usb-ready", &p, "connected to PC", COL_GOOD);
+    check("usb: delay in ms", strcmp(p.line[1], "delay 0.8 ms good"), 0);
     page("usb-ready", &p);
+    b.rtt_us = 4200;
+    ui_page_link_usb(&p, "Link: USB", foot, &b);
+    check("usb: 4 ms is ok", p.colour[1], COL_WARN);
+    b.rtt_us = 31000;
+    ui_page_link_usb(&p, "Link: USB", foot, &b);
+    check("usb: 31 ms is slow", strcmp(p.line[1], "delay 31.0 ms slow"), 0);
+    check("usb: in red", p.colour[1], COL_BAD);
+    page("usb-slow", &p);
+    ui_page_link_usb(&p, "Link: USB", foot, NULL);
+    lead("usb-none", &p, "not available", COL_BAD);
+    page("usb-none", &p);
 
     gbl_peer_t peer;
     memset(&peer, 0, sizeof peer);
+    ui_page_wireless(&p, "Link: Wireless", foot, &peer, NULL, "Gen 3 cable");
+    check("wireless idle", strcmp(p.line[0], "starting..."), 0);
     peer.mode = 0x01;
     peer.state = GBL_PEER_SEARCHING;
     ui_page_wireless(&p, "Link: Wireless", foot, &peer, NULL, "Gen 3 cable");
+    lead("wireless-searching", &p, "looking for partner", COL_WARN);
     page("wireless-searching", &p);
     peer.mode_mismatch = 3;
     ui_page_wireless(&p, "Link: Wireless", foot, &peer, NULL, "Gen 3 cable");
+    check("wireless: says the other is set differently",
+          strstr(p.line[2], "different air link") != NULL, 1);
     page("wireless-other-mode", &p);
+    peer.state = GBL_PEER_LINKING;
+    ui_page_wireless(&p, "Link: Wireless", foot, &peer, NULL, "Gen 3 cable");
+    lead("wireless-linking", &p, "partner found", COL_WARN);
+    page("wireless-linking", &p);
     const uint8_t mac[6] = { 0x24, 0x6F, 0x28, 0xA1, 0x0B, 0x3C };
     peer.state = GBL_PEER_LINKED; peer.master = true;
-    peer.data_out = 1840; peer.data_in = 1838; peer.retransmits = 4;
+    peer.tx_datagrams = 2000; peer.retransmits = 40;     /* 2%: good */
     ui_page_wireless(&p, "Link: Wireless", foot, &peer, mac, "Gen 3 cable");
+    lead("wireless-linked", &p, "linked to partner", COL_GOOD);
+    check("wireless: carrying", strcmp(p.line[1], "as Gen 3 cable"), 0);
+    check("wireless: signal good", strcmp(p.line[2], "signal good"), 0);
+    check("wireless: partner id", strcmp(p.line[3], "partner ..0B3C"), 0);
     page("wireless-linked", &p);
+    peer.retransmits = 200;                               /* 10%: fair */
+    ui_page_wireless(&p, "Link: Wireless", foot, &peer, mac, "Gen 3 cable");
+    check("wireless: signal fair", strcmp(p.line[2], "signal fair"), 0);
+    peer.retransmits = 600;                               /* 30%: poor */
+    ui_page_wireless(&p, "Link: Wireless", foot, &peer, mac, "Gen 3 cable");
+    check("wireless: signal poor", p.colour[2], COL_BAD);
+    page("wireless-poor", &p);
+    peer.tx_datagrams = 5;
+    ui_page_wireless(&p, "Link: Wireless", foot, &peer, mac, "Gen 3 cable");
+    check("wireless: no verdict on 5 datagrams", strncmp(p.line[2], "signal", 6) != 0, 1);
     peer.mode = 0x07; peer.rfu.seen = true; peer.rfu.transfers = 900;
-    peer.rfu.any_rx = true; peer.rfu.found = true; peer.rfu.resets = 1;
+    peer.rfu.any_rx = true; peer.rfu.found = true; peer.tx_datagrams = 900; peer.retransmits = 9;
     ui_page_wireless(&p, "Link: Wireless", foot, &peer, mac, "Wireless Adapter");
+    check("wireless: the adapter's GBA", strcmp(p.line[3], "GBA: found adapter"), 0);
     page("wireless-adapter", &p);
+    peer.rfu.found = false; peer.rfu.any_rx = false;
+    ui_page_wireless(&p, "Link: Wireless", foot, &peer, mac, "Wireless Adapter");
+    check("wireless: wrong cable", strcmp(p.line[3], "GBA: use GBC cable"), 0);
+    peer.state = GBL_PEER_CLOSED;
+    ui_page_wireless(&p, "Link: Wireless", foot, &peer, NULL, "Gen 3 cable");
+    lead("wireless-closed", &p, "session ended", COL_WARN);
+    check("closed: no stale adapter telemetry", p.count, 2);
+    page("wireless-closed", &p);
 
-    ui_ir_t ir = { .ready = true, .commands = 17, .aborted = 2, .last = 0x123 };
+    ui_ir_t ir = { .ready = false };
     ui_page_infrared(&p, "Infrared", foot, &ir);
+    lead("infrared-none", &p, "no IR LED fitted", COL_BAD);
+    footer_is("infrared-none", &p, "", "hold back");
+    page("infrared-none", &p);
+    ir.ready = true;
+    ui_page_infrared(&p, "Infrared", foot, &ir);
+    lead("infrared-ready", &p, "IR ready", COL_GOOD);
+    footer_is("infrared-ready", &p, "", "hold back");   /* nothing to resend */
+    page("infrared-ready", &p);
+    ir.commands = 17; ir.aborted = 2; ir.last = 0x123;
+    ui_page_infrared(&p, "Infrared", foot, &ir);
+    footer_is("infrared", &p, "click send", "hold back");
+    check("infrared: garbled warned", p.colour[3], COL_WARN);
     page("infrared", &p);
 
-    ui_scan_t sc = { .reader = true, .advance = true, .id = 0x0101 };
+    ui_scan_t sc = { .reader = true, .advance = true, .id = 0x0101, .name = "Cannon" };
     ui_page_chip_scan(&p, "Read Chip", foot, &sc);
+    lead("read-chip", &p, "Cannon", COL_GOOD);
+    footer_is("read-chip", &p, "click send", "hold back");
     page("read-chip", &p);
+    sc.name = NULL;
+    ui_page_chip_scan(&p, "Read Chip", foot, &sc);
+    lead("read-chip-unnamed", &p, "chip read", COL_GOOD);
     sc.id = CG_CHIP_NONE;
     ui_page_chip_scan(&p, "Read Chip", foot, &sc);
+    lead("read-chip-unreadable", &p, "can't read the chip", COL_WARN);
+    footer_is("read-chip-unreadable", &p, "", "hold back");
     page("read-chip-unreadable", &p);
+    sc.advance = false;
+    ui_page_chip_scan(&p, "Read Chip", foot, &sc);
+    lead("read-chip-empty", &p, "insert a chip", COL_WARN);
+    page("read-chip-empty", &p);
     memset(&sc, 0, sizeof sc);
     ui_page_chip_scan(&p, "Read Chip", foot, &sc);
+    lead("read-chip-no-reader", &p, "no reader board", COL_BAD);
     page("read-chip-no-reader", &p);
 
     ui_page_usb_storage(&p, "USB Storage", foot, false);
+    footer_is("storage-ours", &p, "click lend", "hold back");
     page("storage-ours", &p);
     ui_page_usb_storage(&p, "USB Storage", foot, true);
+    footer_is("storage-pcs", &p, "click claim", "hold back");
+    lead("storage-pcs", &p, "drive is on the PC", COL_WARN);
     page("storage-pcs", &p);
+    ui_page_usb_storage(&p, "USB Storage", &ab, true);
+    footer_is("storage-pcs-buttons", &p, "A claim", "B back");
+    page("storage-pcs-buttons", &p);
 
     ui_selftest_t st = { .linked = false };
     ui_page_selftest(&p, "Self Test", foot, &st);
+    lead("selftest-waiting", &p, "waiting for the GBA", COL_WARN);
     page("selftest-waiting", &p);
     st.linked = true; st.transfers = 812; st.sent = 1;
     ui_page_selftest(&p, "Self Test", foot, &st);
     page("selftest-running", &p);
-    st.sent = 2;
+    st.sent = 3;
     ui_page_selftest(&p, "Self Test", foot, &st);
+    lead("selftest-done", &p, "test chips sent", COL_GOOD);
+    check("selftest: never more than 2 of 2", strcmp(p.line[1], "chips   2 of 2"), 0);
     page("selftest-done", &p);
 
     ui_page_status(&p, "Self Test", foot, "SELF TEST");
@@ -442,7 +571,7 @@ static void test_applet_screens(const char *db_path) {
         fclose(f);
     }
     applet_env_t env = { .caps = 0xFFFFFFFFu, .has_game = true,
-                         .game = CG_GAME_BN6_US, .hint = hint(CTRLS_PAGE),
+                         .game = CG_GAME_BN6_US, .hint = "hold back",
                          .open_db = open_db };
     applet_bind_env(&env);
 
@@ -554,7 +683,8 @@ static void test_theme_screens(void) {
         ui_page_t p;
         ui_diag_t d = { .caps = HW_CAP_DISPLAY | HW_CAP_LINK_PORT, .linked = true,
                         .transfers = 4096, .chips_sent = 3, .gate_id = 0x00C6 };
-        ui_page_diagnostics(&p, "Diagnostics", hint(CTRLS_PAGE), &d);
+        ui_keys_t k = ui_keys_for(INPUT_ENCODER);
+        ui_page_diagnostics(&p, "Diagnostics", &k, &d);
         snprintf(name, sizeof name, "theme-%s-page", ui_theme_name((ui_theme_id_t)id));
         page(name, &p);
     }
@@ -595,7 +725,6 @@ int main(int argc, char **argv) {
     /* argv[1] is the chip database every suite is handed; argv[2], if given,
      * is where to write the screens. */
     g_out = argc > 2 ? argv[2] : NULL;
-    ui_input_init(&g_in, INPUT_ENCODER, no_buttons, NULL);
 
     test_page_model();
     test_shell();

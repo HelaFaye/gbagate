@@ -18,13 +18,14 @@ extern "C" {
 #endif
 
 #define UI_FONT_W       5
-#define UI_FONT_H       7
+#define UI_FONT_H       7   /* cap height: what layout centres and spaces  */
+#define UI_FONT_ROWS    8   /* ...plus a row below it for g, j, p, q and y */
 #define UI_FONT_ADVANCE 6   /* 5 wide plus a 1px gap: 21 chars across 128px */
 #define UI_FONT_FIRST   32
 #define UI_FONT_LAST    126
 #define UI_FONT_GLYPHS  (UI_FONT_LAST - UI_FONT_FIRST + 1)
 
-/* Column major, one byte per column, bit 0 = top row. */
+/* Column major, one byte per column, bit 0 = top row, bit 7 the descender. */
 extern const uint8_t ui_font5x7[UI_FONT_GLYPHS][UI_FONT_W];
 
 /* Columns for a glyph, or the space glyph for anything unprintable. */

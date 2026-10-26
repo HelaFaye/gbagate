@@ -305,7 +305,7 @@ static void test_chip_dice(void) {
 /* Hello: the walkthrough's page applet, not in the menu. */
 static void test_hello(void) {
     printf("hello\n");
-    applet_env_t env = { .hint = "click: count" };
+    applet_env_t env = { .hint = "hold back" };
     applet_bind_env(&env);
     check("enters", applet_hello.enter(&env), 1);
     check("confirm used", applet_hello.input(&env, APPLET_IN_CONFIRM, 0), 1);
@@ -327,8 +327,8 @@ static void test_hello(void) {
     applet_render(&applet_hello, &env, &g_canvas);
     check("drawn as a page: header", px(UI_SCREEN_W - 2, 1), ui_theme()->header);
     check("with its title", has_colour(3, 3, 40, UI_FONT_H, ui_theme()->on_header), 1);
-    check("and the hint", has_colour(2, UI_SCREEN_H - 12, 60, UI_FONT_H,
-                                     ui_theme()->text_dim), 1);
+    check("and the hint, on the right", has_colour(64, UI_SCREEN_H - 12, 62, UI_FONT_H,
+                                                   ui_theme()->text_dim), 1);
     check("enter resets", applet_hello.enter(&env) && (ui_page_init(&p, "", ""),
           applet_hello.page(&env, &p), strcmp(p.line[1], "pressed 0 times") == 0), 1);
 

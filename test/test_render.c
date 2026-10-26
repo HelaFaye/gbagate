@@ -100,6 +100,36 @@ static void test_font(void) {
             g_fail++;
         }
     }
+    /*
+     * Descenders below the baseline, and nothing else there. g, p, q and y
+     * used to fit their tails inside the seven rows, which lifted their
+     * bodies a row above every other letter's: "game" read as "9ame".
+     */
+    for (int c = UI_FONT_FIRST; c <= UI_FONT_LAST; c++) {
+        const uint8_t *gl = ui_font_glyph((char)c);
+        int below = 0, x_top = 0;
+        for (int i = 0; i < UI_FONT_W; i++) {
+            below |= gl[i] & 0x80;
+            x_top |= gl[i] & 0x02;    /* row 1: above the x-height */
+        }
+        bool desc = c == 'g' || c == 'j' || c == 'p' || c == 'q' || c == 'y';
+        if (!!below != desc) {
+            printf("  FAIL glyph '%c' %s the descender row\n", c,
+                   desc ? "does not reach" : "spills into");
+            g_fail++;
+        }
+        if (desc && c != 'j' && x_top) {
+            printf("  FAIL glyph '%c' starts above the x-height\n", c);
+            g_fail++;
+        }
+    }
+    /* Every band a line of text sits in leaves room for the descender. */
+    check("row: descender inside", (UI_ROW_H - UI_FONT_H) / 2 + UI_FONT_ROWS <= UI_ROW_H, 1);
+    check("header: descender inside",
+          (UI_HEADER_H - UI_FONT_H) / 2 + UI_FONT_ROWS <= UI_HEADER_H, 1);
+    check("footer: descender inside",
+          (UI_FOOTER_H - UI_FONT_H) / 2 + UI_FONT_ROWS <= UI_FOOTER_H, 1);
+
     /* Space must be the exception. */
     const uint8_t *sp = ui_font_glyph(' ');
     int ink = 0;

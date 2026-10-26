@@ -7,6 +7,7 @@
  */
 
 #include <stddef.h>
+#include <stdio.h>
 #include <stdint.h>
 
 #include "applet.h"
@@ -64,8 +65,12 @@ void applet_render(const applet_t *a, const applet_env_t *env,
         a->draw(env, canvas);
         return;
     }
+    /* The host's hint is the Back half of a footer ("hold back"), so it sits
+     * on the right like every other page's; the left is the applet's own. */
     ui_page_t page;
-    ui_page_init(&page, a->name, env ? env->hint : NULL);
+    ui_page_init(&page, a->name, NULL);
+    snprintf(page.footer_right, sizeof page.footer_right, "%s",
+             env && env->hint ? env->hint : "");
     a->page(env, &page);
     ui_render_page(canvas, &page);
 }

@@ -34,7 +34,7 @@ static void draw_glyph(const ui_canvas_t *c, int x, int y, char ch, uint16_t col
     const uint8_t *cols = ui_font_glyph(ch);
     for (int gx = 0; gx < UI_FONT_W; gx++) {
         uint8_t bits = cols[gx];
-        for (int gy = 0; gy < UI_FONT_H; gy++) {
+        for (int gy = 0; gy < UI_FONT_ROWS; gy++) {
             if (!(bits & (1u << gy))) {
                 continue;
             }

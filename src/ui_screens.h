@@ -16,6 +16,7 @@
 #define UI_SCREENS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "gbl_peer.h"
@@ -39,8 +40,33 @@ typedef struct {
     uint8_t  count;
     char     line[UI_PAGE_LINES][UI_PAGE_TEXT];
     uint16_t colour[UI_PAGE_LINES];
-    char     footer[UI_PAGE_TEXT];
+    char     footer[UI_PAGE_TEXT];        /* left: what confirm does    */
+    char     footer_right[UI_PAGE_TEXT];  /* right-aligned: Back       */
 } ui_page_t;
+
+/*
+ * The short names of this board's two keys, for footers: "click" and "hold"
+ * on an encoder, "A" and "B" on buttons. A page names what each does here --
+ * "click lend", "hold back" -- so no footer claims an action the page does
+ * not have.
+ */
+typedef struct {
+    const char *confirm;
+    const char *back;
+} ui_keys_t;
+
+/* The keys for an input mode, as ui_input.h numbers them. */
+ui_keys_t ui_keys_for(int input_mode);
+
+/* Footer: "<confirm> <verb>" on the left (none when verb is NULL), and
+ * "<back> back" on the right. */
+void ui_page_keys(ui_page_t *p, const ui_keys_t *keys, const char *verb);
+
+/* The same as one string, for screens that are not pages. */
+void ui_keys_hint(char *out, size_t cap, const ui_keys_t *keys, const char *verb);
+
+/* Does the footer, both halves and the gap between, fit the panel? */
+bool ui_page_footer_fits(const ui_page_t *p);
 
 void ui_page_init(ui_page_t *p, const char *title, const char *footer);
 
@@ -70,23 +96,23 @@ typedef struct {
     uint32_t ui_dropped;
 } ui_diag_t;
 
-void ui_page_diagnostics(ui_page_t *p, const char *title, const char *footer,
+void ui_page_diagnostics(ui_page_t *p, const char *title, const ui_keys_t *keys,
                          const ui_diag_t *d);
 
-/* A mode whose enter() refused: why. */
-void ui_page_refused(ui_page_t *p, const char *title, const char *footer,
-                     const char *reason);
+/* A mode whose enter() refused: why, as app_dispatch_status_t. */
+void ui_page_refused(ui_page_t *p, const char *title, const ui_keys_t *keys,
+                     int status);
 
 /* A mode with nothing better to show than its status line. */
-void ui_page_status(ui_page_t *p, const char *title, const char *footer,
+void ui_page_status(ui_page_t *p, const char *title, const ui_keys_t *keys,
                     const char *status);
 
 /* Link: USB. b is NULL when the image has no bridge. */
-void ui_page_link_usb(ui_page_t *p, const char *title, const char *footer,
+void ui_page_link_usb(ui_page_t *p, const char *title, const ui_keys_t *keys,
                       const link_bridge_t *b);
 
 /* Link: Wireless. mac is the locked peer, or NULL before one is chosen. */
-void ui_page_wireless(ui_page_t *p, const char *title, const char *footer,
+void ui_page_wireless(ui_page_t *p, const char *title, const ui_keys_t *keys,
                       const gbl_peer_t *peer, const uint8_t *mac,
                       const char *air_link);
 
@@ -97,17 +123,18 @@ typedef struct {
     uint16_t last;
 } ui_ir_t;
 
-void ui_page_infrared(ui_page_t *p, const char *title, const char *footer,
+void ui_page_infrared(ui_page_t *p, const char *title, const ui_keys_t *keys,
                       const ui_ir_t *ir);
 
 typedef struct {
-    bool     reader;       /* a reader board answered */
-    bool     advance;      /* a chip is in the Advance slot */
-    bool     beast;        /* ... in the Beast slot */
-    uint16_t id;           /* decoded wire ID, CG_CHIP_NONE if unreadable */
+    bool        reader;    /* a reader board answered */
+    bool        advance;   /* a chip is in the Advance slot */
+    bool        beast;     /* ... in the Beast slot */
+    uint16_t    id;        /* decoded wire ID, CG_CHIP_NONE if unreadable */
+    const char *name;      /* the chip's name in the chosen game, or NULL */
 } ui_scan_t;
 
-void ui_page_chip_scan(ui_page_t *p, const char *title, const char *footer,
+void ui_page_chip_scan(ui_page_t *p, const char *title, const ui_keys_t *keys,
                        const ui_scan_t *s);
 
 /* Self Test: the device sends two test chips to rom/tester.gba, which does
@@ -118,19 +145,26 @@ typedef struct {
     uint32_t sent;        /* test chips delivered, of 2 */
 } ui_selftest_t;
 
-void ui_page_selftest(ui_page_t *p, const char *title, const char *footer,
+void ui_page_selftest(ui_page_t *p, const char *title, const ui_keys_t *keys,
                       const ui_selftest_t *t);
 
 /* USB Storage: who owns the volume. */
-void ui_page_usb_storage(ui_page_t *p, const char *title, const char *footer,
+void ui_page_usb_storage(ui_page_t *p, const char *title, const ui_keys_t *keys,
                          bool exposed);
 
 /* ---- screens that are not pages ---------------------------------------- */
 
 /* Send Program mid-transfer: the program, a status and a bar. */
 void ui_render_progress(const ui_canvas_t *c, const char *title,
-                        const char *name, const char *status, uint32_t pct,
-                        const char *footer);
+                        const char *name, const char *status,
+                        const char *advice, uint32_t pct, const char *footer);
+
+/*
+ * What Send Program's status line says for a multiboot result
+ * (gba_multiboot.h's mb_result_t): what happened, in a player's words, and
+ * what to do about it on the second line. Never NULL.
+ */
+const char *ui_send_result_text(int mb_result, const char **advice);
 
 /* A screen with one thing to say, such as an empty list. */
 void ui_render_notice(const ui_canvas_t *c, const char *title, const char *text);

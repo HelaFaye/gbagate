@@ -105,6 +105,7 @@ __attribute__((weak)) const chip_bus_io_t *chip_reader_bus(void) { return NULL; 
 __attribute__((weak)) void                *chip_reader_ctx(void) { return NULL; }
 #endif
 static uint16_t gate_scan_chip(bool advance, bool beast);
+static const char *chip_name_for(cg_game_t game, uint16_t id);
 #include "variant.h"
 
 static const char *TAG = "gate";
@@ -188,6 +189,7 @@ __attribute__((weak)) bool chip_reader_probe(void) { return false; }
 static rom_catalog_t s_cat;
 static romview_t     s_roms;
 static char          s_send_status[32];
+static const char   *s_send_advice = "";   /* the line under the status */
 static uint32_t      s_send_pct;
 
 /*
@@ -290,6 +292,14 @@ static const char *screen_controls(uint32_t wanted) {
         s_bound_set = wanted;
     }
     return controls_hint(&s_controls);
+}
+
+/* The board's two keys, for footers that say what each does here. */
+static ui_keys_t page_keys(void) {
+    /* Bound for its side effect: it sets which buttons need a long press.
+     * The footer itself is the page's, not the binding table's. */
+    (void)screen_controls(CTRL_BIT(CTRL_CONFIRM) | CTRL_BIT(CTRL_CANCEL));
+    return ui_keys_for((int)s_settings.input_mode);
 }
 
 /* What a plain page offers: confirm and back, nothing else. */
@@ -523,19 +533,18 @@ static void render_mode_screen(void)
         return;
     }
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
-    const char *title  = shell_chosen_name(&s_shell);
-    const char *footer = screen_controls(CTRLS_PAGE);
-    ui_page_t page;
+    const char *title = shell_chosen_name(&s_shell);
+    ui_keys_t   keys  = page_keys();
+    ui_page_t   page;
 
     if (!app_dispatch_running(&s_dispatch)) {
         /* The shell is on the running screen with nothing behind it, which is
          * what a refused enter() looks like. */
-        ui_page_refused(&page, title, footer,
-                        app_dispatch_status_name(s_dispatch.last_status));
+        ui_page_refused(&page, title, &keys, (int)s_dispatch.last_status);
     } else {
         /* A mode with no screen. app_mode_route() gives every mode the menu
          * reaches one, and test_modes checks it; this is the last resort. */
-        ui_page_status(&page, title, footer, s_status);
+        ui_page_status(&page, title, &keys, s_status);
     }
 
     ui_render_page(&canvas, &page);
@@ -573,7 +582,8 @@ static void send_program(void)
      */
     mb_xfer_fn xfer_fn = mb_spi_transfer();
     if (!xfer_fn) {
-        snprintf(s_send_status, sizeof s_send_status, "no link hardware");
+        snprintf(s_send_status, sizeof s_send_status, "no link port");
+        s_send_advice = "this board can't send";
         return;
     }
 
@@ -598,23 +608,30 @@ static void send_program(void)
     }
     if (!staging) {
         snprintf(s_send_status, sizeof s_send_status, "out of memory");
+        s_send_advice = "restart gbagate";
         return;
     }
 
     uint32_t len = 0;
 
-    snprintf(s_send_status, sizeof s_send_status, "staging");
+    /* The instruction comes first: the GBA has to be switched on with no
+     * cartridge while we wait, and saying so only after loading the file
+     * wasted the seconds the loading took. */
+    snprintf(s_send_status, sizeof s_send_status, "loading the file");
+    s_send_advice = "turn on the GBA, no cart";
     s_send_pct = 0;
 
     const rom_io_t *io = msc_io();
     if (!io || !rom_stage(&s_cat, s_roms.cursor, io, NULL,
                           staging, MB_MAX_SIZE, &len)) {
-        snprintf(s_send_status, sizeof s_send_status, "stage failed");
+        snprintf(s_send_status, sizeof s_send_status, "can't read the file");
+        s_send_advice = "check it on the PC";
         heap_caps_free(staging);
         return;
     }
 
-    snprintf(s_send_status, sizeof s_send_status, "power on the GBA");
+    snprintf(s_send_status, sizeof s_send_status, "waiting for the GBA");
+    s_send_advice = "turn it on, no cart";
     s_send_pct = 0;
 
     mb_session_t mb;
@@ -622,12 +639,12 @@ static void send_program(void)
     mb.progress = send_progress;
 
     mb_result_t r = mb_send(&mb, staging, len);
+    snprintf(s_send_status, sizeof s_send_status, "%s",
+             ui_send_result_text((int)r, &s_send_advice));
     if (r == MB_OK) {
-        snprintf(s_send_status, sizeof s_send_status, "sent");
         s_send_pct = 100;
-    } else {
-        snprintf(s_send_status, sizeof s_send_status, "%s", mb_result_name(r));
     }
+    ESP_LOGI(TAG, "send: %s", mb_result_name(r));
 
     heap_caps_free(staging);
 }
@@ -709,10 +726,11 @@ static void render_settings(const ui_event_t *e, bool have_event)
 
 static void render_simple_mode(const ui_event_t *e, bool have_event)
 {
-    const char *title  = shell_chosen_name(&s_shell);
-    const char *footer = screen_controls(CTRLS_PAGE);
-    ui_page_t page;
-    ui_page_init(&page, title, footer);
+    const char *title = shell_chosen_name(&s_shell);
+    ui_keys_t   keys  = page_keys();
+    const ui_keys_t *footer = &keys;   /* the builders take it as footer */
+    ui_page_t   page;
+    ui_page_init(&page, title, NULL);
 
     switch (s_shell.chosen_mode) {
 
@@ -753,6 +771,7 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
         scan.reader = chip_reader_detect(&scan.advance, &scan.beast);
         if (scan.reader && (scan.advance || scan.beast)) {
             scan.id = gate_scan_chip(scan.advance, scan.beast);
+            scan.name = chip_name_for(s_shell.chosen_game, scan.id);
         }
         ui_page_chip_scan(&page, title, footer, &scan);
         if (have_event && e && e->type == UI_EVENT_CHIP_SENT &&
@@ -831,9 +850,11 @@ static void render_rom_browser(void)
     /* Mid-transfer the list is meaningless; show progress instead. */
     if (s_send_status[0]) {
         const rom_entry_t *e = romview_current(&s_roms);
+        char foot[UI_PAGE_TEXT];
+        ui_keys_t keys = page_keys();
+        ui_keys_hint(foot, sizeof foot, &keys, NULL);
         ui_render_progress(&canvas, "Send Program", e ? e->name : "",
-                           s_send_status, s_send_pct,
-                           screen_controls(CTRLS_PAGE));
+                           s_send_status, s_send_advice, s_send_pct, foot);
         st7735_mark_all_dirty();
         st7735_flush();
         return;
@@ -942,10 +963,25 @@ static bool applet_open_db(cg_game_t game, chipdb_t *db) {
     return false;
 }
 
+/* A chip's name in a game, for Read Chip. NULL when unknown. The databases
+ * are in flash, so the name pointer outlives the chipdb_t. */
+static const char *chip_name_for(cg_game_t game, uint16_t id)
+{
+    chipdb_t db;
+    if (id == CG_CHIP_NONE || !applet_open_db(game, &db)) {
+        return NULL;
+    }
+    uint16_t slot = chipdb_slot_for_id(&db, id);
+    return slot == CHIPDB_NO_RECORD ? NULL : chipdb_name(&db, slot);
+}
+
 static void render_applet(const ui_event_t *e, bool have_event)
 {
     s_applet_env.now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    s_applet_env.hint   = screen_controls(CTRLS_PAGE);
+    static char hint[UI_PAGE_TEXT];
+    ui_keys_t keys = page_keys();
+    ui_keys_hint(hint, sizeof hint, &keys, NULL);
+    s_applet_env.hint   = hint;
 
     if (have_event && e) {
         app_mode_t m = s_shell.chosen_mode;

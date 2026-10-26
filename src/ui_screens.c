@@ -67,24 +67,68 @@ bool ui_page_line_fits(const ui_page_t *p, uint8_t i) {
     return ui_font_fit(p->line[i], TEXT_W) == strlen(p->line[i]);
 }
 
+/* ---- keys and footers -------------------------------------------------- */
+
+ui_keys_t ui_keys_for(int input_mode) {
+    /* ui_input.h: INPUT_ENCODER is 0; every other mode has A and B. */
+    if (input_mode == 0) {
+        return (ui_keys_t){ "click", "hold" };
+    }
+    return (ui_keys_t){ "A", "B" };
+}
+
+void ui_page_keys(ui_page_t *p, const ui_keys_t *keys, const char *verb) {
+    p->footer[0] = p->footer_right[0] = '\0';
+    if (!keys) {
+        return;
+    }
+    if (verb && keys->confirm) {
+        snprintf(p->footer, sizeof p->footer, "%s %s", keys->confirm, verb);
+    }
+    if (keys->back) {
+        snprintf(p->footer_right, sizeof p->footer_right, "%s back", keys->back);
+    }
+}
+
+void ui_keys_hint(char *out, size_t cap, const ui_keys_t *keys, const char *verb) {
+    ui_page_t p;
+    ui_page_keys(&p, keys, verb);
+    snprintf(out, cap, "%s%s%s", p.footer, p.footer[0] && p.footer_right[0] ? "  " : "",
+             p.footer_right);
+}
+
+#define FOOTER_GAP 6
+
+bool ui_page_footer_fits(const ui_page_t *p) {
+    uint16_t l = ui_font_width(p->footer), r = ui_font_width(p->footer_right);
+    return l + r + ((l && r) ? FOOTER_GAP : 0) <= TEXT_W;
+}
+
 /* Header, background and footer: what every screen here shares. */
-static void frame(const ui_canvas_t *c, const char *title, const char *footer) {
+static void frame(const ui_canvas_t *c, const char *title, const char *footer,
+                  const char *right) {
     ui_fill(c, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
     ui_fill(c, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
     ui_text_clipped(c, 3, (UI_HEADER_H - UI_FONT_H) / 2, UI_SCREEN_W - 6,
                     title, COL_ON_HEADER);
-    if (!footer) {
+    if (!footer && !right) {
         return;
     }
     int fy = UI_SCREEN_H - UI_FOOTER_H;
+    int ty = fy + (UI_FOOTER_H - UI_FONT_H) / 2;
     ui_fill(c, 0, fy, UI_SCREEN_W, UI_FOOTER_H, COL_ROW_ALT);
     ui_fill(c, 0, fy, UI_SCREEN_W, 1, COL_HEADER);
-    ui_text_clipped(c, TEXT_X, fy + (UI_FOOTER_H - UI_FONT_H) / 2, TEXT_W,
-                    footer, COL_TEXT_DIM);
+    int rw = right && right[0] ? (int)ui_font_width(right) : 0;
+    if (rw) {
+        ui_text(c, UI_SCREEN_W - TEXT_X - rw, ty, right, COL_TEXT_DIM);
+    }
+    /* The left half never runs into the right one. */
+    ui_text_clipped(c, TEXT_X, ty, TEXT_W - (rw ? rw + FOOTER_GAP : 0),
+                    footer ? footer : "", COL_TEXT);
 }
 
 void ui_render_page(const ui_canvas_t *c, const ui_page_t *p) {
-    frame(c, p->title, p->footer);
+    frame(c, p->title, p->footer, p->footer_right);
     for (uint8_t i = 0; i < p->count; i++) {
         ui_text_clipped(c, TEXT_X, LINE_Y0 + i * LINE_PITCH, TEXT_W,
                         p->line[i], p->colour[i]);
@@ -94,53 +138,121 @@ void ui_render_page(const ui_canvas_t *c, const ui_page_t *p) {
 /* ---- the pages --------------------------------------------------------- */
 
 /*
+ * Every page has the same shape: what is happening, in a status colour, on
+ * the first line; what to do about it next; then a fact or two. The counters
+ * an engineer wants are on Diagnostics, where a player never has to read
+ * them.
+ */
+
+static void begin(ui_page_t *p, const char *title, const ui_keys_t *keys,
+                  const char *verb) {
+    ui_page_init(p, title, NULL);
+    ui_page_keys(p, keys, verb);
+}
+
+/*
  * Diagnostics is the mode you reach for when nothing else works, so it reports
  * the things that are otherwise only visible in a serial log: which
  * capabilities were detected, whether the link ever moved, and whether the UI
  * is losing events.
  */
-void ui_page_diagnostics(ui_page_t *p, const char *title, const char *footer,
+void ui_page_diagnostics(ui_page_t *p, const char *title, const ui_keys_t *keys,
                          const ui_diag_t *d) {
     char caps[64];
     hw_caps_describe(d->caps, caps, sizeof caps);
-    ui_page_init(p, title, footer);
+    begin(p, title, keys, NULL);
     ui_page_add(p, COL_TEXT_DIM, "detected:");
     ui_page_add_wrapped(p, COL_TEXT, caps);
-    ui_page_add(p, COL_TEXT, "link   %s", d->linked ? "linked" : "waiting");
+    ui_page_add(p, d->linked ? COL_GOOD : COL_WARN, "link   %s",
+                d->linked ? "linked" : "waiting");
     ui_page_add(p, COL_TEXT, "xfers  %lu", (unsigned long)d->transfers);
     ui_page_add(p, COL_TEXT, "chips  %lu", (unsigned long)d->chips_sent);
     ui_page_add(p, COL_TEXT, "gate   %04X", d->gate_id);
-    ui_page_add(p, COL_TEXT, "uidrop %lu", (unsigned long)d->ui_dropped);
+    ui_page_add(p, d->ui_dropped ? COL_WARN : COL_TEXT, "uidrop %lu",
+                (unsigned long)d->ui_dropped);
 }
 
-/*
- * Naming the reason matters: this page used to read "no screen for this mode
- * yet", which describes the firmware rather than the fault the user just hit.
- */
-void ui_page_refused(ui_page_t *p, const char *title, const char *footer,
-                     const char *reason) {
-    ui_page_init(p, title, footer);
-    ui_page_add(p, COL_TEXT, "mode did not start");
-    ui_page_add(p, COL_TEXT_DIM, "%s", reason ? reason : "");
+/* Values of app_dispatch_status_t (app_modes.h), which this file need not
+ * include to read. */
+enum { ST_OK, ST_NO_HANDLER, ST_MISSING_CAPS, ST_NEEDS_GAME, ST_BUSY, ST_REFUSED };
+
+void ui_page_refused(ui_page_t *p, const char *title, const ui_keys_t *keys,
+                     int status) {
+    begin(p, title, keys, NULL);
+    ui_page_add(p, COL_BAD, "did not start");
+    switch (status) {
+    case ST_MISSING_CAPS:
+        ui_page_add(p, COL_TEXT_DIM, "needs hardware this");
+        ui_page_add(p, COL_TEXT_DIM, "board does not have");
+        break;
+    case ST_NEEDS_GAME:
+        ui_page_add(p, COL_TEXT_DIM, "choose a game first");
+        break;
+    case ST_BUSY:
+        ui_page_add(p, COL_TEXT_DIM, "another mode is on");
+        break;
+    case ST_REFUSED:
+        /* The mode's own enter() said no: usually something it needs --
+         * a database, a radio, the USB port -- is not there. */
+        ui_page_add(p, COL_TEXT_DIM, "something it needs");
+        ui_page_add(p, COL_TEXT_DIM, "is not available");
+        break;
+    default:
+        ui_page_add(p, COL_TEXT_DIM, "not in this firmware");
+        break;
+    }
+    ui_page_add(p, COL_TEXT_DIM, "Diagnostics may say");
 }
 
-void ui_page_status(ui_page_t *p, const char *title, const char *footer,
+void ui_page_status(ui_page_t *p, const char *title, const ui_keys_t *keys,
                     const char *status) {
-    ui_page_init(p, title, footer);
+    begin(p, title, keys, NULL);
     ui_page_add(p, COL_TEXT, "%s", status ? status : "");
-    ui_page_add(p, COL_TEXT_DIM, "no screen for this");
-    ui_page_add(p, COL_TEXT_DIM, "mode yet");
 }
 
-void ui_page_link_usb(ui_page_t *p, const char *title, const char *footer,
+/* How usable a measured round trip is. Gen 3 games tolerate a few
+ * milliseconds; tens of them and the link drops. */
+static const char *delay_word(uint32_t us, uint16_t *colour) {
+    if (us < 2000)  { *colour = COL_GOOD; return "good"; }
+    if (us < 8000)  { *colour = COL_WARN; return "ok"; }
+    *colour = COL_BAD;
+    return "slow";
+}
+
+void ui_page_link_usb(ui_page_t *p, const char *title, const ui_keys_t *keys,
                       const link_bridge_t *b) {
-    ui_page_init(p, title, footer);
-    ui_page_add(p, COL_TEXT, "%s", b ? bridge_state_name(b->state) : "no bridge");
-    ui_page_add(p, COL_TEXT_DIM, "sent   %lu", b ? (unsigned long)b->words_sent : 0ul);
-    ui_page_add(p, COL_TEXT_DIM, "recvd  %lu", b ? (unsigned long)b->words_received : 0ul);
-    /* Round trip is the number that says whether a link is usable: under a
-     * millisecond is fine, tens are not. */
-    ui_page_add(p, COL_TEXT_DIM, "rtt    %lu us", b ? (unsigned long)b->rtt_us : 0ul);
+    begin(p, title, keys, NULL);
+    if (!b) {
+        ui_page_add(p, COL_BAD, "not available");
+        ui_page_add(p, COL_TEXT_DIM, "this image has no");
+        ui_page_add(p, COL_TEXT_DIM, "USB link");
+        return;
+    }
+    switch (b->state) {
+    case BRIDGE_READY: {
+        ui_page_add(p, COL_GOOD, "connected to PC");
+        if (b->rtt_us) {
+            uint16_t c;
+            const char *w = delay_word(b->rtt_us, &c);
+            ui_page_add(p, c, "delay %lu.%lu ms %s", (unsigned long)(b->rtt_us / 1000),
+                        (unsigned long)(b->rtt_us % 1000 / 100), w);
+        } else {
+            ui_page_add(p, COL_TEXT_DIM, "measuring delay");
+        }
+        ui_page_add(p, COL_TEXT_DIM, "out %lu in %lu", (unsigned long)b->words_sent,
+                    (unsigned long)b->words_received);
+        break;
+    }
+    case BRIDGE_HELLO:
+        ui_page_add(p, COL_WARN, "PC found");
+        ui_page_add(p, COL_TEXT_DIM, "pairing...");
+        break;
+    default:
+        ui_page_add(p, COL_WARN, "waiting for the PC");
+        ui_page_add(p, COL_TEXT_DIM, "plug in USB, then");
+        ui_page_add(p, COL_TEXT_DIM, "start mGBA's link");
+        break;
+    }
 }
 
 /*
@@ -148,73 +260,128 @@ void ui_page_link_usb(ui_page_t *p, const char *title, const char *footer,
  * ESP-NOW (src/gbl_peer.c). Retransmits climbing while frames still flow is a
  * noisy channel; frames stopping is the peer gone.
  */
-void ui_page_wireless(ui_page_t *p, const char *title, const char *footer,
+void ui_page_wireless(ui_page_t *p, const char *title, const ui_keys_t *keys,
                       const gbl_peer_t *peer, const uint8_t *mac,
                       const char *air_link) {
-    ui_page_init(p, title, footer);
-    ui_page_add(p, COL_TEXT, "%s%s", gbl_peer_state_name(peer->state),
-                peer->state >= GBL_PEER_SETTLING ? (peer->master ? " (M)" : " (S)") : "");
-    if (mac) {
-        ui_page_add(p, COL_TEXT_DIM, "%02X%02X%02X%02X%02X%02X",
-                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    } else if (peer->mode_mismatch && peer->state == GBL_PEER_SEARCHING) {
-        /* A board is there but set to another air link. */
-        ui_page_add(p, COL_TEXT_DIM, "peer: other link");
-    } else {
-        ui_page_add(p, COL_TEXT_DIM, "%s: no peer", air_link ? air_link : "");
+    begin(p, title, keys, NULL);
+    const char *carry = air_link ? air_link : "";
+    switch (peer->state) {
+    case GBL_PEER_LINKED: {
+        ui_page_add(p, COL_GOOD, "linked to partner");
+        ui_page_add(p, COL_TEXT_DIM, "as %s", carry);
+        /* Signal: the share of datagrams sent again. A few percent is a
+         * normal room; a fifth is a wall or a microwave in the way. */
+        if (peer->tx_datagrams >= 20) {
+            uint32_t pct = (uint32_t)((peer->retransmits * 100u) / peer->tx_datagrams);
+            uint16_t c = pct < 5 ? COL_GOOD : pct < 20 ? COL_WARN : COL_BAD;
+            ui_page_add(p, c, "signal %s", pct < 5 ? "good" : pct < 20 ? "fair" : "poor");
+        }
+        break;
     }
-    if (peer->mode == 0x07) {
+    case GBL_PEER_SETTLING:
+    case GBL_PEER_LINKING:
+        ui_page_add(p, COL_WARN, "partner found");
+        ui_page_add(p, COL_TEXT_DIM, "starting the link");
+        break;
+    case GBL_PEER_CLOSED:
+        ui_page_add(p, COL_WARN, "session ended");
+        ui_page_add(p, COL_TEXT_DIM, "restarting...");
+        break;
+    case GBL_PEER_SEARCHING:
+        ui_page_add(p, COL_WARN, "looking for partner");
+        if (peer->mode_mismatch) {
+            /* A board is there but set to another air link. */
+            ui_page_add(p, COL_TEXT_DIM, "one is set to a");
+            ui_page_add(p, COL_TEXT_DIM, "different air link");
+        } else {
+            ui_page_add(p, COL_TEXT_DIM, "on the other one:");
+            ui_page_add(p, COL_TEXT_DIM, "Link > Wireless");
+        }
+        ui_page_add(p, COL_TEXT_DIM, "as %s", carry);
+        break;
+    default:
+        ui_page_add(p, COL_TEXT_DIM, "starting...");
+        break;
+    }
+
+    /* Only while there is a session: the telemetry is the last session's,
+     * and after it ends it describes a GBA that is no longer linked. */
+    if (peer->mode == 0x07 &&
+        (peer->state == GBL_PEER_LINKING || peer->state == GBL_PEER_LINKED)) {
         /* Wireless Adapter: whether the game has found the adapter is the
          * first question; the firmware's own telemetry answers it. */
-        const char *gba = !peer->rfu.seen      ? "GBA: --"
+        const char *gba = !peer->rfu.seen      ? "GBA: not seen yet"
                         : peer->rfu.found      ? "GBA: found adapter"
                         : !peer->rfu.transfers ? "GBA: no clock"
                         : !peer->rfu.any_rx    ? "GBA: use GBC cable"
                                                : "GBA: looking";
-        ui_page_add(p, COL_TEXT_DIM, "%s", gba);
-        ui_page_add(p, COL_TEXT_DIM, "out %lu in %lu",
-                    (unsigned long)peer->data_out, (unsigned long)peer->data_in);
-        ui_page_add(p, COL_TEXT_DIM, "resets %u", peer->rfu.resets);
-    } else {
-        ui_page_add(p, COL_TEXT_DIM, "out %lu in %lu",
-                    (unsigned long)peer->data_out, (unsigned long)peer->data_in);
-        ui_page_add(p, COL_TEXT_DIM, "resent %lu", (unsigned long)peer->retransmits);
+        ui_page_add(p, peer->rfu.found ? COL_GOOD : COL_TEXT_DIM, "%s", gba);
+    }
+    if (mac) {
+        /* The end of the partner's address: enough to tell two boards apart
+         * across a room, which is the only use it has here. */
+        ui_page_add(p, COL_TEXT_DIM, "partner ..%02X%02X", mac[4], mac[5]);
     }
 }
 
-void ui_page_infrared(ui_page_t *p, const char *title, const char *footer,
+void ui_page_infrared(ui_page_t *p, const char *title, const ui_keys_t *keys,
                       const ui_ir_t *ir) {
-    ui_page_init(p, title, footer);
-    ui_page_add(p, COL_TEXT, "%s", ir->ready ? "IR ready" : "no IR fitted");
-    ui_page_add(p, COL_TEXT_DIM, "cmds   %lu", (unsigned long)ir->commands);
-    ui_page_add(p, COL_TEXT_DIM, "last   %03X  %X/%X/%X", (unsigned)ir->last,
+    if (!ir->ready) {
+        begin(p, title, keys, NULL);
+        ui_page_add(p, COL_BAD, "no IR LED fitted");
+        ui_page_add(p, COL_TEXT_DIM, "see BRINGUP for the");
+        ui_page_add(p, COL_TEXT_DIM, "IR transmitter");
+        return;
+    }
+    /* Verbs stay at five letters: "click" plus one has to share the
+     * footer with "hold back". */
+    begin(p, title, keys, ir->commands ? "send" : NULL);
+    ui_page_add(p, COL_GOOD, "IR ready");
+    if (!ir->commands) {
+        ui_page_add(p, COL_TEXT_DIM, "point the Zoid at it");
+        return;
+    }
+    ui_page_add(p, COL_TEXT_DIM, "heard %lu", (unsigned long)ir->commands);
+    ui_page_add(p, COL_TEXT_DIM, "last %03X %X/%X/%X", (unsigned)ir->last,
                 cdz_category(ir->last), cdz_motion(ir->last), cdz_action(ir->last));
     /*
      * Aborted trains is the number that tells you whether the timing is right.
      * A decoder measuring the wrong thing aborts nearly everything while still
      * looking alive, so a bare command count would not show it.
      */
-    ui_page_add(p, COL_TEXT_DIM, "aborted %lu", (unsigned long)ir->aborted);
-}
-
-void ui_page_chip_scan(ui_page_t *p, const char *title, const char *footer,
-                       const ui_scan_t *s) {
-    ui_page_init(p, title, footer);
-    ui_page_add(p, COL_TEXT, "%s", s->reader ? "reader ready" : "no reader");
-    ui_page_add(p, COL_TEXT_DIM, "advance %s", s->advance ? "chip in" : "empty");
-    ui_page_add(p, COL_TEXT_DIM, "beast   %s", s->beast ? "chip in" : "empty");
-    if (s->reader && (s->advance || s->beast)) {
-        if (s->id != CG_CHIP_NONE) {
-            ui_page_add(p, COL_TEXT_DIM, "id     %04X", s->id);
-        } else {
-            ui_page_add(p, COL_TEXT_DIM, "unreadable");
-        }
+    if (ir->aborted) {
+        ui_page_add(p, COL_WARN, "garbled %lu", (unsigned long)ir->aborted);
     }
 }
 
-void ui_page_selftest(ui_page_t *p, const char *title, const char *footer,
+void ui_page_chip_scan(ui_page_t *p, const char *title, const ui_keys_t *keys,
+                       const ui_scan_t *s) {
+    bool readable = s->reader && (s->advance || s->beast) && s->id != CG_CHIP_NONE;
+    begin(p, title, keys, readable ? "send" : NULL);
+    if (!s->reader) {
+        ui_page_add(p, COL_BAD, "no reader board");
+        ui_page_add(p, COL_TEXT_DIM, "check its connector");
+        return;
+    }
+    if (!s->advance && !s->beast) {
+        ui_page_add(p, COL_WARN, "insert a chip");
+        ui_page_add(p, COL_TEXT_DIM, "Advance or Beast");
+        return;
+    }
+    const char *slot = s->advance ? "Advance slot" : "Beast slot";
+    if (!readable) {
+        ui_page_add(p, COL_WARN, "can't read the chip");
+        ui_page_add(p, COL_TEXT_DIM, "reseat it in the");
+        ui_page_add(p, COL_TEXT_DIM, "%s", slot);
+        return;
+    }
+    ui_page_add(p, COL_GOOD, "%s", s->name && s->name[0] ? s->name : "chip read");
+    ui_page_add(p, COL_TEXT_DIM, "id %04X, %s", s->id, s->advance ? "Advance" : "Beast");
+}
+
+void ui_page_selftest(ui_page_t *p, const char *title, const ui_keys_t *keys,
                       const ui_selftest_t *t) {
-    ui_page_init(p, title, footer);
+    begin(p, title, keys, NULL);
     if (!t->linked) {
         ui_page_add(p, COL_WARN, "waiting for the GBA");
         ui_page_add(p, COL_TEXT_DIM, "run tester.gba on it");
@@ -235,25 +402,51 @@ void ui_page_selftest(ui_page_t *p, const char *title, const char *footer,
  * One owner at a time, and saying which is the whole point of the mode --
  * guessing at it is what corrupts a FAT volume.
  */
-void ui_page_usb_storage(ui_page_t *p, const char *title, const char *footer,
+void ui_page_usb_storage(ui_page_t *p, const char *title, const ui_keys_t *keys,
                          bool exposed) {
-    ui_page_init(p, title, footer);
-    ui_page_add(p, COL_TEXT, "%s", exposed ? "drive is the PC's" : "drive is ours");
-    ui_page_add(p, COL_TEXT_DIM, "%s", exposed ? "safe to copy files" : "press to hand over");
+    begin(p, title, keys, exposed ? "claim" : "lend");
     if (exposed) {
-        ui_page_add(p, COL_TEXT_DIM, "eject before back");
+        ui_page_add(p, COL_WARN, "drive is on the PC");
+        ui_page_add(p, COL_TEXT_DIM, "copy your files,");
+        ui_page_add(p, COL_TEXT_DIM, "eject it on the PC,");
+        ui_page_add(p, COL_TEXT_DIM, "then claim it back");
+    } else {
+        ui_page_add(p, COL_TEXT, "drive is gbagate's");
+        ui_page_add(p, COL_TEXT_DIM, "lend it to the PC to");
+        ui_page_add(p, COL_TEXT_DIM, "copy programs on");
     }
+}
+
+const char *ui_send_result_text(int r, const char **advice) {
+    const char *a = "";
+    const char *t;
+    /* gba_multiboot.h's mb_result_t. */
+    switch (r) {
+    case 0:  t = "sent";                a = "the GBA runs it now";  break;
+    case 2:  t = "no GBA answered";     a = "power it on, no cart"; break;
+    case 3:  t = "GBA didn't agree";    a = "restart it and retry"; break;
+    case 4:  t = "transfer stopped";    a = "check the cable";      break;
+    case 5:  t = "arrived damaged";     a = "retry; check cable";   break;
+    case 1:  t = "can't send this";     a = "the file is unusable"; break;
+    default: t = "failed";              break;
+    }
+    if (advice) {
+        *advice = a;
+    }
+    return t;
 }
 
 /* ---- the rest ---------------------------------------------------------- */
 
 void ui_render_progress(const ui_canvas_t *c, const char *title,
-                        const char *name, const char *status, uint32_t pct,
-                        const char *footer) {
-    frame(c, title, footer);
-    ui_text_clipped(c, TEXT_X, UI_LIST_Y + 4, TEXT_W, name ? name : "", COL_TEXT);
-    ui_text_clipped(c, TEXT_X, UI_LIST_Y + 22, TEXT_W, status ? status : "",
+                        const char *name, const char *status,
+                        const char *advice, uint32_t pct, const char *footer) {
+    frame(c, title, footer, NULL);
+    ui_text_clipped(c, TEXT_X, UI_LIST_Y + 4, TEXT_W, name ? name : "", COL_TEXT_DIM);
+    ui_text_clipped(c, TEXT_X, UI_LIST_Y + 20, TEXT_W, status ? status : "",
                     COL_CURSOR);
+    ui_text_clipped(c, TEXT_X, UI_LIST_Y + 31, TEXT_W, advice ? advice : "",
+                    COL_TEXT);
 
     /* A bar, because a percentage alone does not show that a transfer has
      * stopped moving. */
@@ -261,16 +454,16 @@ void ui_render_progress(const ui_canvas_t *c, const char *title,
         pct = 100;
     }
     int bw = UI_SCREEN_W - 8;
-    ui_fill(c, 4, UI_LIST_Y + 40, bw, 8, COL_BAR_TRACK);
-    ui_fill(c, 4, UI_LIST_Y + 40, (int)((bw * (int)pct) / 100), 8, COL_BAR_THUMB);
+    ui_fill(c, 4, UI_LIST_Y + 48, bw, 8, COL_BAR_TRACK);
+    ui_fill(c, 4, UI_LIST_Y + 48, (int)((bw * (int)pct) / 100), 8, COL_BAR_THUMB);
 
     char text[12];
     snprintf(text, sizeof text, "%lu%%", (unsigned long)pct);
-    ui_text_clipped(c, 4, UI_LIST_Y + 54, 60, text, COL_TEXT_DIM);
+    ui_text_clipped(c, 4, UI_LIST_Y + 62, 60, text, COL_TEXT_DIM);
 }
 
 void ui_render_notice(const ui_canvas_t *c, const char *title, const char *text) {
-    frame(c, title, NULL);
+    frame(c, title, NULL, NULL);
     ui_text_clipped(c, TEXT_X, UI_LIST_Y + 20, TEXT_W, text ? text : "", COL_TEXT);
 }
 
@@ -279,7 +472,7 @@ void ui_render_notice(const ui_canvas_t *c, const char *title, const char *text)
  * task or a wrong QEMU serial mapping. Say which it is instead.
  */
 void ui_render_no_interface(const ui_canvas_t *c) {
-    frame(c, "NO INTERFACE", NULL);
+    frame(c, "NO INTERFACE", NULL, NULL);
     ui_text(c, 4, UI_LIST_Y + 6,  "shell not started", COL_TEXT);
     ui_text(c, 4, UI_LIST_Y + 20, "app_main must call", COL_TEXT_DIM);
     ui_text(c, 4, UI_LIST_Y + 32, "gate_shell_start()", COL_TEXT_DIM);
