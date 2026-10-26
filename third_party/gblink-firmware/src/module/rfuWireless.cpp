@@ -16,19 +16,23 @@ void RfuWirelessModule::execute()
 
     {
         RfuProtocolSection section(m_role);
+        // gbagate (PATCHES.md P13): set and cleared under the lock cancel() takes,
+        // and cleared before the section is destroyed.
+        unsigned int key = irq_lock();
         m_currentSection = &section;
-        if (m_cancel)
-        {
-            m_currentSection = nullptr;
-            return;
-        }
+        const bool cancelled = m_cancel;
+        if (cancelled) m_currentSection = nullptr;
+        irq_unlock(key);
+        if (cancelled) return;
         rfuLink_enable();
         section.process();
         // Stop the PIO before the section destructor deregisters the done
         // callback, so the PIO ISR cannot fire mid-deregistration.
         rfuLink_disable();
+        key = irq_lock();
+        m_currentSection = nullptr;
+        irq_unlock(key);
     }
-    m_currentSection = nullptr;
 }
 
 void RfuWirelessModule::receiveCommand(std::span<const uint8_t> command)

@@ -11,8 +11,8 @@ its message what was wrong, how it shows on hardware, and how it was found.
 ## GBLink-Firmware
 
 Base: `Wireless-Adapter` at 1b49b76 (2.2.7, the source of the launcher's beta,
-and still its head). Every patch also applies on its own to that base, in any
-order. Patches 1-5 also apply unchanged to `master` (4aef46a, 2.2.3).
+and still its head). Every patch but 11 also applies on its own to that base,
+in any order; 11 needs 2 under it (it locks the null check 2 adds). Patches 1-5 also apply unchanged to `master` (4aef46a, 2.2.3).
 
     git am backport/GBLink-Firmware/*.patch
 
@@ -28,6 +28,7 @@ order. Patches 1-5 also apply unchanged to `master` (4aef46a, 2.2.3).
 | 8 | Shift printer replies out MSB first | `backport/verify-printer.sh` (code review) |
 | 9 | Keep a mode's traffic with the host that started it | `bridge_companion_keeps_its_mode_while_usb_queries`; `test_ldn.py` with LDN's own link code |
 | 10 | Silence two compiler warnings | GCC 14 `-Wextra` (no change in behaviour) |
+| 11 | Stop cancel() reaching a section that has gone | ASan, `link_cancel_while_the_section_ends` (intermittent) |
 
 The tests are in `test/gblink_sim/test_gblink.py`. To check the series, the
 simulator was built from upstream's tree with the series applied, and from the

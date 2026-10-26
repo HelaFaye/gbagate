@@ -21,14 +21,16 @@ void AdvanceWarsModule::execute()
     // SLAVE = attached GBA is bus master (P1), MASTER = GBA is bus slave (P2).
     {
         AwProtocolSection section(m_variant, m_linkMode);
-        m_currentSection = &section;
         // A cancel between the check above and this assignment would miss the
         // section; re-check now that cancel() can reach it.
-        if (m_cancel)
-        {
-            m_currentSection = nullptr;
-            return;
-        }
+        // gbagate (PATCHES.md P13): set and cleared under the lock cancel() takes,
+        // and cleared before the section is destroyed.
+        unsigned int key = irq_lock();
+        m_currentSection = &section;
+        const bool cancelled = m_cancel;
+        if (cancelled) m_currentSection = nullptr;
+        irq_unlock(key);
+        if (cancelled) return;
         link_changeMode(m_linkMode);
         sendLinkStatus(LinkStatus::LinkConnected);
         section.process();
@@ -37,8 +39,10 @@ void AdvanceWarsModule::execute()
         // mid-deregistration. Also stops the GBA from being fed the link
         // layer's 0xDEAD placeholder after the session ends.
         link_changeMode(DISABLED);
+        key = irq_lock();
+        m_currentSection = nullptr;
+        irq_unlock(key);
     }
-    m_currentSection = nullptr;
 }
 
 void AdvanceWarsModule::receiveCommand(std::span<const uint8_t> command)

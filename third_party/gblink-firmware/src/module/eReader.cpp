@@ -16,10 +16,12 @@ EReaderModule::EReaderModule(erproto::Profile profile)
 
 void EReaderModule::cancel()
 {
+    const unsigned int key = irq_lock();   // gbagate (PATCHES.md P13): the section cannot go meanwhile
     m_cancel = true;
     k_sem_give(&m_waitForLinkModeCommand);
     k_sem_give(&m_waitForStart);
     if (m_currentSection) m_currentSection->cancel();
+    irq_unlock(key);
 }
 
 bool EReaderModule::canHandle(uint8_t command)
@@ -41,21 +43,25 @@ void EReaderModule::execute()
 
     {
         EReaderProtocolSection section(m_profile);
-        m_currentSection = &section;
         // A cancel between the check above and this assignment would miss the
         // section; re-check now that cancel() can reach it.
-        if (m_cancel)
-        {
-            m_currentSection = nullptr;
-            return;
-        }
+        // gbagate (PATCHES.md P13): set and cleared under the lock cancel() takes,
+        // and cleared before the section is destroyed.
+        unsigned int key = irq_lock();
+        m_currentSection = &section;
+        const bool cancelled = m_cancel;
+        if (cancelled) m_currentSection = nullptr;
+        irq_unlock(key);
+        if (cancelled) return;
         section.armLink();
         sendLinkStatus(LinkStatus::LinkConnected);
         section.process();
         link_changeMode(DISABLED);
         link_releasePartnerPins();
+        key = irq_lock();
+        m_currentSection = nullptr;
+        irq_unlock(key);
     }
-    m_currentSection = nullptr;
 }
 
 void EReaderModule::receiveCommand(std::span<const uint8_t> command)

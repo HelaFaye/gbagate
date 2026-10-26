@@ -18,10 +18,21 @@ void LinkModule::execute()
     {
         {
             UsbSection section(m_packetLayerMode);
+            // gbagate (PATCHES.md P13): cancel() and receiveCommand() run on
+            // the host's thread and reach the section through this pointer, so
+            // it is set and cleared under irq_lock, and cleared before the
+            // section is destroyed, not after. A Cancel that came while the
+            // section was being built cancels it now.
+            unsigned int key = irq_lock();
             m_currentSection = &section;
+            const bool cancelled = m_cancel;
+            irq_unlock(key);
+            if (cancelled) section.cancel();
             keepAlive = section.process();
+            key = irq_lock();
+            m_currentSection = nullptr;
+            irq_unlock(key);
         }
-        m_currentSection = nullptr; //kinda sketch but commands should only arrive when we have a current section
 
         if (keepAlive)
         {
@@ -47,11 +58,19 @@ void LinkModule::receiveCommand(std::span<const uint8_t> command)
         // between sections (the 400 ms reconnect pause) there is none either;
         // upstream dereferenced null in both windows.
         case LinkModeCommand::StartHandshake:
+        {
+            const unsigned int key = irq_lock();   // P13: the section stays while used
             if (UsbSection* s = m_currentSection) s->startHandshake();
+            irq_unlock(key);
             return;
+        }
         case LinkModeCommand::ConnectLink:
+        {
+            const unsigned int key = irq_lock();
             if (UsbSection* s = m_currentSection) s->connectLink();
+            irq_unlock(key);
             return;
+        }
         default: break;
     }
 }

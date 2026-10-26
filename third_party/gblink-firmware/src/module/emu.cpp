@@ -11,29 +11,33 @@ void EmuModule::execute()
             case NextSection::setup:
             {
                 TradeSetup tradeSetup(LINKTYPE_TRADE_SETUP);
-                m_currentSection = &tradeSetup;
+                publish(&tradeSetup);
                 nextSection = tradeSetup.process(); // -> exit / -> connection / -> cancel
+                publish(nullptr);   // before tradeSetup goes
                 break;
             }
             case NextSection::connection:
             {
                 TradeConnection tradeConnection;
-                m_currentSection = &tradeConnection;
+                publish(&tradeConnection);
                 nextSection = tradeConnection.process(); // -> tradeLounge / -> disconnect / -> cancel
+                publish(nullptr);   // before tradeConnection goes
                 break;
             }
             case NextSection::disconnect:
             {
                 TradeDisconnect tradeDisconnection;
-                m_currentSection = &tradeDisconnection;
+                publish(&tradeDisconnection);
                 nextSection = tradeDisconnection.process(); // -> connection / -> cancel
+                publish(nullptr);   // before tradeDisconnection goes
                 break;
             }
             case NextSection::lounge:
             {
                 TradeLounge tradeLounge;
-                m_currentSection = &tradeLounge;
+                publish(&tradeLounge);
                 nextSection = tradeLounge.process(); // -> exit / -> connection / -> cancel
+                publish(nullptr);   // before tradeLounge goes
                 break;
             }
             case NextSection::cancel: [[fallthrough]];
@@ -42,6 +46,5 @@ void EmuModule::execute()
                 return;
             }
         }
-        m_currentSection = nullptr;
     }
 }

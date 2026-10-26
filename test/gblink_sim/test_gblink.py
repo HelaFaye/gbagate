@@ -9,6 +9,7 @@ means a real GB-Link host would fail the same way.
     python3 -I test/gblink_sim/test_gblink.py -k cable only matching tests
 """
 import os
+import random
 import struct
 import subprocess
 import sys
@@ -732,6 +733,31 @@ def bridge_companion_keeps_its_mode_while_usb_queries():
         mark = len(s.status)
         s.cmd(0x00, 0x07, 0x00)
         s.wait_status(ST['AwaitMode'], start=mark)
+    finally:
+        s.close()
+
+
+@test
+def link_cancel_while_the_section_ends():
+    """PATCHES.md P13. A Cancel that lands while the link module tears its
+    section down (the first Cancel just ended it, or the link dropped) used
+    to reach the section through a pointer cleared only after the section
+    was gone: ASan, stack-use-after-scope in PacketLayer::cancel. Two Cancels
+    back to back, many times over, to land one in that window."""
+    s = Sim()
+    try:
+        rng = random.Random(1)
+        for _ in range(300):
+            mark = len(s.status)
+            s.cmd(0x00, 0x01)
+            s.wait_status(ST['AwaitMode'], start=mark)
+            s.cmd(0x10)                      # master, no GBA: waits for a handshake
+            time.sleep(0.002)
+            s.cmd(0x01)
+            time.sleep(rng.random() * 0.0006)
+            s.cmd(0x01)                      # while the section ends
+            s.wait_status(ST['LinkClosed'], 3, start=mark)
+        check(s.p.poll() is None, 'the adapter survived')
     finally:
         s.close()
 
