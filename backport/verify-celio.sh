@@ -30,6 +30,7 @@ WORK="$ROOT/build/backport/celio-$([ $PATCHED = 1 ] && echo patched || echo unpa
 
 rm -rf "$WORK"; mkdir -p "$WORK"
 git -C "$SRC/Celio-Server" worktree prune
+git -C "$SRC/Celio-Client" worktree prune
 git -C "$SRC/Celio-Server" worktree add -q --detach "$WORK/server" "$SERVER_BASE" || exit 1
 if [ $PATCHED = 1 ]; then
     git -C "$WORK/server" -c user.name=verify -c user.email=verify@localhost \
