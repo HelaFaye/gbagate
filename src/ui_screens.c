@@ -72,7 +72,7 @@ static void frame(const ui_canvas_t *c, const char *title, const char *footer) {
     ui_fill(c, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
     ui_fill(c, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
     ui_text_clipped(c, 3, (UI_HEADER_H - UI_FONT_H) / 2, UI_SCREEN_W - 6,
-                    title, COL_BG);
+                    title, COL_ON_HEADER);
     if (!footer) {
         return;
     }

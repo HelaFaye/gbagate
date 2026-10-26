@@ -25,7 +25,8 @@ extern "C" {
 #endif
 
 typedef enum {
-    SETFIELD_COLSTART = 0,
+    SETFIELD_THEME = 0, /* colour palette; applies at once                 */
+    SETFIELD_COLSTART,
     SETFIELD_ROWSTART,
     SETFIELD_COLOUR,
     SETFIELD_GAME,

@@ -215,6 +215,30 @@ static void test_round_trip_with_storage(void) {
     check("game", back.game, s.game);
 }
 
+/* The theme row: first, so it is the first thing a new owner finds; wraps
+ * both ways; names the palette; and counts as a display change, which is what
+ * makes the device repaint in it at once. */
+static void test_theme_row(void) {
+    printf("theme\n");
+    settings_t s;
+    settings_defaults(&s);
+    ui_settings_t v;
+    uiset_init(&v, &s);
+    check("first row is the theme", strncmp(uiset_label(&v, 0), "theme", 5), 0);
+    check("shows the palette", strstr(uiset_label(&v, 0), "Classic") != NULL, 1);
+    uiset_toggle_edit(&v);
+    uiset_move(&v, 1);
+    check("next palette", s.theme, UI_THEME_NAVI);
+    check("named", strstr(uiset_label(&v, 0), "Navi") != NULL, 1);
+    check("is a display change", uiset_display_affected(&v), 1);
+    check("is saved", uiset_dirty(&v), 1);
+    uiset_move(&v, -1);
+    uiset_move(&v, -1);
+    check("wraps backwards", s.theme, UI_THEME_COUNT - 1);
+    uiset_move(&v, 1);
+    check("and forwards", s.theme, UI_THEME_CLASSIC);
+}
+
 int main(void) {
     test_navigation();
     test_edit_mode();
@@ -222,6 +246,7 @@ int main(void) {
     test_clamping_and_wrapping();
     test_acceleration_ignored();
     test_round_trip_with_storage();
+    test_theme_row();
     printf("\n%s\n", g_fail ? "FAILURES" : "all checks passed");
     return g_fail != 0;
 }

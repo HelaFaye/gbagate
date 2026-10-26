@@ -104,10 +104,14 @@ bool ui_render_row(const ui_canvas_t *c, const chipview_t *v, const chipdb_t *db
     ui_fill(c, 0, y, UI_SCROLLBAR_X, UI_ROW_H, bg);
 
     int ty = y + (UI_ROW_H - UI_FONT_H) / 2; /* centre the 7px font in 12px */
-    uint16_t fg = selected ? COL_BG : COL_TEXT;
+    /* Text on the header colour or the held colour uses on_header: those
+     * are the two bright bands, and body text on them is unreadable in most
+     * themes. */
+    bool bright = selected || chipview_held(v) == item_index;
+    uint16_t fg = bright ? COL_ON_HEADER : COL_TEXT;
 
     if (selected) {
-        draw_glyph(c, UI_COL_CURSOR_X, ty, '>', COL_BG);
+        draw_glyph(c, UI_COL_CURSOR_X, ty, '>', COL_ON_HEADER);
     }
 
     /* Element as a small block, which is all there is room for at 10px. */
@@ -121,7 +125,7 @@ bool ui_render_row(const ui_canvas_t *c, const chipview_t *v, const chipdb_t *db
     if (code) {
         ui_fill(c, UI_COL_CODE_X, y + 1, 9, UI_ROW_H - 2,
                 ui_element_colour(rec.element));
-        draw_glyph(c, UI_COL_CODE_X + 2, ty, code, COL_BG);
+        draw_glyph(c, UI_COL_CODE_X + 2, ty, code, COL_ON_ELEMENT);
     }
 
     /* Uses: the Chip Gate Use Limit, 1 or 3. */
@@ -148,14 +152,14 @@ void ui_render_header(const ui_canvas_t *c, const chipview_t *v) {
     ui_fill(c, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
     int ty = (UI_HEADER_H - UI_FONT_H) / 2;
 
-    draw_glyph(c, 1, ty, '<', COL_BG);
-    ui_text_clipped(c, 9, ty, 46, chipview_tab_name(v->tab), COL_BG);
-    draw_glyph(c, 56, ty, '>', COL_BG);
+    draw_glyph(c, 1, ty, '<', COL_ON_HEADER);
+    ui_text_clipped(c, 9, ty, 46, chipview_tab_name(v->tab), COL_ON_HEADER);
+    draw_glyph(c, 56, ty, '>', COL_ON_HEADER);
 
     for (int t = 0; t < CHIP_TAB_COUNT; t++) {
         int px = 70 + t * 9;
         bool avail = chipview_tab_available(v, (chip_tab_t)t);
-        uint16_t colour = (t == (int)v->tab) ? COL_BG
+        uint16_t colour = (t == (int)v->tab) ? COL_ON_HEADER
                         : avail               ? COL_TEXT
                                               : COL_TEXT_DIM;
         ui_fill(c, px, ty + 1, 5, 5, colour);
@@ -209,7 +213,7 @@ void ui_render_menu(const ui_canvas_t *c, const char *title,
 
     ui_fill(c, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
     ui_text_clipped(c, 3, (UI_HEADER_H - UI_FONT_H) / 2, UI_SCREEN_W - 6,
-                    title, COL_BG);
+                    title, COL_ON_HEADER);
 
     /*
      * Scroll the window with the cursor rather than clipping the list, so a
@@ -237,10 +241,10 @@ void ui_render_menu(const ui_canvas_t *c, const char *title,
 
         int ty = y + (UI_ROW_H - UI_FONT_H) / 2;
         if (selected) {
-            draw_glyph(c, 2, ty, '>', COL_BG);
+            draw_glyph(c, 2, ty, '>', COL_ON_HEADER);
         }
         ui_text_clipped(c, 12, ty, UI_SCREEN_W - 16, label,
-                        selected ? COL_BG : COL_TEXT);
+                        selected ? COL_ON_HEADER : COL_TEXT);
     }
 
     int fy = UI_SCREEN_H - UI_FOOTER_H;

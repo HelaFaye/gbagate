@@ -23,6 +23,7 @@
 
 #include "chipgate.h"
 #include "ui_input.h"
+#include "ui_theme.h"   /* the enum only: settings need not link it */
 
 #ifdef __cplusplus
 extern "C" {
@@ -77,6 +78,8 @@ typedef struct {
      * Union Room), or an Advance Wars link. Tail extension like usb_mode.
      */
     uint8_t  air_link;
+    /* Colour palette (ui_theme_id_t). Tail extension like usb_mode. */
+    uint8_t  theme;
 } settings_t;
 
 typedef enum {

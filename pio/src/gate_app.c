@@ -1158,6 +1158,8 @@ void gate_enter_mode(app_mode_t mode, cg_game_t game) {
  * whole persistence path mean anything.
  */
 void gate_apply_display_settings(void) {
+    /* The palette is ours to apply, panel or not; QEMU's framebuffer too. */
+    ui_theme_set((ui_theme_id_t)s_settings.theme);
 #if !defined(GBAGATE_QEMU)
     extern void st7735_set_offset(uint8_t colstart, uint8_t rowstart);
     extern void st7735_set_bgr(bool bgr);
@@ -1179,6 +1181,7 @@ void gate_settings_start(void) {
          * the ones most 128x128 modules want. */
         ESP_LOGI(TAG, "no stored settings; using defaults");
     }
+    ui_theme_set((ui_theme_id_t)s_settings.theme);
     s_settings_dirty = false;
     uiset_init(&s_setedit, &s_settings);
 }

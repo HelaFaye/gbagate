@@ -116,6 +116,7 @@ static size_t pack_payload(const settings_t *s, uint8_t *p) {
     n += SETTINGS_FAV_BYTES;
     p[n++] = s->usb_mode;      /* tail extension, see settings_t */
     p[n++] = s->air_link;      /* likewise */
+    p[n++] = s->theme;         /* likewise */
     return n;
 }
 
@@ -187,8 +188,13 @@ bool settings_unpack(settings_t *s, const uint8_t *buf, size_t len) {
     if (plen >= n + 1) {
         s->air_link = p[n];
     }
+    n += 1;
+    if (plen >= n + 1) {
+        s->theme = p[n];
+    }
     if (s->usb_mode >= USB_MODE_COUNT) s->usb_mode = (uint8_t)USB_MODE_GBLINK;
     if (s->air_link >= AIR_LINK_COUNT) s->air_link = (uint8_t)AIR_GEN3;
+    if (s->theme >= UI_THEME_COUNT) s->theme = (uint8_t)UI_THEME_CLASSIC;
 
     /*
      * Clamp rather than trust. A blob can be intact and still hold a value this

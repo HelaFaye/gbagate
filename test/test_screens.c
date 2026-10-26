@@ -15,6 +15,7 @@
  * belongs to shows here too.
  */
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,7 +48,7 @@ static uint16_t px(int x, int y) { return g_fb[(size_t)y * UI_SCREEN_W + x]; }
 static const char *g_out;    /* directory for .ppm files, or NULL */
 
 #define GAL_COLS   4
-#define GAL_MAX    40
+#define GAL_MAX    64
 #define GAL_SCALE  2
 #define GAL_CAP_H  14
 #define GAL_PAD    8
@@ -171,7 +172,7 @@ static void check_frame(const char *name, bool footer) {
     snprintf(what, sizeof what, "%s: header bar", name);
     check(what, px(UI_SCREEN_W - 2, 1), COL_HEADER);
     snprintf(what, sizeof what, "%s: title has ink", name);
-    check(what, has_colour(3, 3, 60, UI_FONT_H, COL_BG), 1);
+    check(what, has_colour(3, 3, 60, UI_FONT_H, COL_ON_HEADER), 1);
     if (footer) {
         snprintf(what, sizeof what, "%s: footer rule", name);
         check(what, px(10, UI_SCREEN_H - UI_FOOTER_H), COL_HEADER);
@@ -395,6 +396,103 @@ static void test_pages(void) {
     shot("no-interface");
 }
 
+/* ---- themes ------------------------------------------------------------ */
+
+/* WCAG relative luminance of an RGB565 colour, as the panel shows it. */
+static double luminance(uint16_t c) {
+    uint8_t v[3];
+    rgb(c, v);
+    double ch[3];
+    for (int i = 0; i < 3; i++) {
+        double x = v[i] / 255.0;
+        ch[i] = x <= 0.03928 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4);
+    }
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+}
+
+static double contrast(uint16_t a, uint16_t b) {
+    double la = luminance(a), lb = luminance(b);
+    return la > lb ? (la + 0.05) / (lb + 0.05) : (lb + 0.05) / (la + 0.05);
+}
+
+/*
+ * Every pair a screen draws, at the WCAG thresholds: 4.5 for text that must
+ * be read, 3 for secondary text and status colours. A 1.44" panel at arm's
+ * length is a harder read than a monitor, so these are a floor.
+ */
+static void test_theme_contrast(void) {
+    printf("theme contrast\n");
+    for (int id = 0; id < UI_THEME_COUNT; id++) {
+        const ui_theme_t *t = ui_theme_get((ui_theme_id_t)id);
+        const struct { const char *what; uint16_t fg, bg; double min; } pairs[] = {
+            { "text on bg",          t->text,      t->bg,      4.5 },
+            { "text on row band",    t->text,      t->row_alt, 4.5 },
+            { "dim on bg",           t->text_dim,  t->bg,      3.0 },
+            { "dim on footer",       t->text_dim,  t->row_alt, 3.0 },
+            { "title on header",     t->on_header, t->header,  4.5 },
+            { "text on held row",    t->on_header, t->held,    3.0 },
+            { "accent on footer",    t->accent,    t->row_alt, 3.0 },
+            { "accent on bg",        t->accent,    t->bg,      3.0 },
+            { "good on bg",          t->good,      t->bg,      3.0 },
+            { "warn on bg",          t->warn,      t->bg,      3.0 },
+            { "bad on bg",           t->bad,       t->bg,      3.0 },
+            { "favourite star",      t->star_on,   t->bg,      3.0 },
+            { "scroll thumb",        t->bar_thumb, t->bar_track, 2.0 },
+        };
+        for (unsigned i = 0; i < sizeof pairs / sizeof pairs[0]; i++) {
+            double r = contrast(pairs[i].fg, pairs[i].bg);
+            if (r < pairs[i].min) {
+                printf("  FAIL %s: %s %.2f, want %.1f\n", t->name, pairs[i].what,
+                       r, pairs[i].min);
+                g_fail++;
+            }
+        }
+    }
+    /* The code letter keeps the games' element colours in every theme. */
+    const uint8_t elems[] = { CHIP_ELEM_NONE, CHIP_ELEM_FIRE, CHIP_ELEM_AQUA,
+                              CHIP_ELEM_ELEC, CHIP_ELEM_WOOD };
+    for (unsigned i = 0; i < sizeof elems; i++) {
+        double r = contrast(COL_ON_ELEMENT, ui_element_colour(elems[i]));
+        if (r < 4.5) {
+            printf("  FAIL code letter on element %u: %.2f\n", elems[i], r);
+            g_fail++;
+        }
+    }
+
+    check("out-of-range theme is Classic",
+          ui_theme_get((ui_theme_id_t)99) == ui_theme_get(UI_THEME_CLASSIC), 1);
+    ui_theme_set((ui_theme_id_t)99);
+    check("setting one selects Classic", ui_theme_current(), UI_THEME_CLASSIC);
+    check("unknown name", strcmp(ui_theme_name((ui_theme_id_t)99), "?"), 0);
+}
+
+/* The menu and a page in every theme, for the gallery, with the frame checked
+ * in each: a theme that left a colour behind would show here. */
+static void test_theme_screens(void) {
+    printf("theme screens\n");
+    for (int id = 0; id < UI_THEME_COUNT; id++) {
+        ui_theme_set((ui_theme_id_t)id);
+        char name[40];
+        ui_shell_t s;
+        shell_init(&s, 0xFFFFFFFFu);
+        shell_move(&s, 2);
+        ui_render_menu(&g_canvas, "gbagate", shell_label, &s, shell_item_count(&s),
+                       shell_cursor(&s), "gate");
+        snprintf(name, sizeof name, "theme-%s", ui_theme_name((ui_theme_id_t)id));
+        check_frame(name, true);
+        check(name, px(UI_SCREEN_W - 2, UI_SCREEN_H / 2), ui_theme()->bg);
+        shot(name);
+
+        ui_page_t p;
+        ui_diag_t d = { .caps = HW_CAP_DISPLAY | HW_CAP_LINK_PORT, .linked = true,
+                        .transfers = 4096, .chips_sent = 3, .gate_id = 0x00C6 };
+        ui_page_diagnostics(&p, "Diagnostics", hint(CTRLS_PAGE), &d);
+        snprintf(name, sizeof name, "theme-%s-page", ui_theme_name((ui_theme_id_t)id));
+        page(name, &p);
+    }
+    ui_theme_set(UI_THEME_CLASSIC);
+}
+
 /* ---- the page model itself --------------------------------------------- */
 
 static void test_page_model(void) {
@@ -436,6 +534,8 @@ int main(int argc, char **argv) {
     test_settings();
     test_send_program();
     test_pages();
+    test_theme_contrast();
+    test_theme_screens();
     write_gallery();
 
     if (g_fail) {

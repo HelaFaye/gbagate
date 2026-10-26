@@ -25,7 +25,7 @@ DEPS_encoder   = input_encoder.c ui_list.c
 DEPS_panel     = st7735_panel.c
 DEPS_slot      = chip_slot.c chip_reader.c
 DEPS_chipview  = ui_chipview.c ui_shell.c chipdb.c hw_caps.c chipgate.c
-DEPS_render    = ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c
+DEPS_render    = ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c
 DEPS_multiboot = gba_multiboot.c
 DEPS_catalog   = rom_catalog.c gba_multiboot.c
 DEPS_variant   = variant.c
@@ -36,7 +36,7 @@ DEPS_board     =
 EXTRA_board    = -Iport/esp32s3 test/test_board_supermini.c
 DEPS_controls  = controls.c ui_input.c
 DEPS_input     = ui_input.c
-DEPS_uiset     = ui_settings.c settings.c chipgate.c ui_input.c
+DEPS_uiset     = ui_theme.c ui_settings.c settings.c chipgate.c ui_input.c
 DEPS_settings  = settings.c chipgate.c ui_input.c
 DEPS_romview   = ui_romview.c rom_catalog.c gba_multiboot.c
 DEPS_mcp       = mcp23017.c chip_slot.c chip_reader.c
@@ -46,12 +46,12 @@ DEPS_mbe2e     = rom_catalog.c gba_multiboot.c
 # instead: using an actual file, with an actual unpadded length, is the point
 # of it -- that is what found the alignment bug the synthetic fixtures missed.
 ARG_mbe2e      = rom/tester.gba
-DEPS_menu      = ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c ui_shell.c hw_caps.c chipgate.c
+DEPS_menu      = ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c ui_shell.c hw_caps.c chipgate.c
 DEPS_modes     = app_modes.c ui_shell.c hw_caps.c chipgate.c
 DEPS_frame     = gblink_frame.c
 DEPS_usbdesc   = gblink_usbdesc.c
 DEPS_peer      = gbl_peer.c
-DEPS_screens   = ui_screens.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c \
+DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c \
                  ui_shell.c hw_caps.c chipgate.c ir_cdz.c gbl_peer.c link_bridge.c \
                  link_proto.c link_session.c ui_settings.c settings.c ui_input.c \
                  controls.c ui_romview.c rom_catalog.c gba_multiboot.c
@@ -120,7 +120,7 @@ define SUITE_rule
 # a struct layout) leaves every test binary stale, and a suite reports on code
 # that no longer exists. Found when a corrected descriptor length kept failing.
 $(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) $(wildcard src/*.h) | $(BUILD)
-	@$$(CC) $$(CFLAGS) $$(EXTRA_$(1)) -o $$@ $$< $$(addprefix src/,$$(DEPS_$(1)))
+	@$$(CC) $$(CFLAGS) $$(EXTRA_$(1)) -o $$@ $$< $$(addprefix src/,$$(DEPS_$(1))) -lm
 run-$(1): $(BUILD)/test_$(1)
 	@printf '%-14s ' $(1); \
 	if ./$$< $$(ARG_$(1)) > $(BUILD)/$(1).out 2>&1; then \
@@ -149,7 +149,7 @@ strict-$(1): | $(BUILD)
 	for cfg in "-O0" "-O2" "-O3 -flto" "-g -fsanitize=address,undefined"; do \
 	  echo "=== $$$$cfg ===" >> $(BUILD)/s_$(1).log; \
 	  if ! $$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wshadow $$$$cfg -Isrc $$(EXTRA_$(1)) \
-	       -o $(BUILD)/s_$(1) test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) \
+	       -o $(BUILD)/s_$(1) test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) -lm \
 	       >> $(BUILD)/s_$(1).log 2>&1; \
 	  then printf ' BUILD  '; \
 	  elif ./$(BUILD)/s_$(1) $$(ARG_$(1)) >> $(BUILD)/s_$(1).log 2>&1; \

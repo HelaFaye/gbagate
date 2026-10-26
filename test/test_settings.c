@@ -241,6 +241,39 @@ static void test_io_failure(void) {
     check("short buffer refused", (long)settings_pack(&s, tiny, sizeof tiny), 0);
 }
 
+/*
+ * Rebuild a packed blob as an older build wrote it: the last `fields` tail
+ * bytes gone, the payload length cut to match and the CRC recomputed.
+ * Returns the blob's new length.
+ */
+static size_t drop_tail(uint8_t *buf, size_t fields) {
+    size_t plen = (size_t)(buf[6] | (buf[7] << 8)) - fields;
+    buf[6] = (uint8_t)plen; buf[7] = (uint8_t)(plen >> 8);
+    uint32_t crc = settings_crc32(buf, 8 + plen);
+    buf[8 + plen] = (uint8_t)crc; buf[9 + plen] = (uint8_t)(crc >> 8);
+    buf[10 + plen] = (uint8_t)(crc >> 16); buf[11 + plen] = (uint8_t)(crc >> 24);
+    return 12 + plen;
+}
+
+/* theme is the last tail field, with the same rules. */
+static void test_theme_tail(void) {
+    printf("theme\n");
+    settings_t a, b;
+    settings_defaults(&a);
+    check("default is Classic", a.theme, UI_THEME_CLASSIC);
+    a.theme = UI_THEME_DMG;
+    a.air_link = AIR_ADAPTER;      /* not the default: "kept" must mean kept */
+    uint8_t buf[SETTINGS_BLOB_MAX + 16];
+    size_t n = settings_pack(&a, buf, sizeof buf);
+    check("round trip", settings_unpack(&b, buf, n) && b.theme == UI_THEME_DMG, 1);
+    check("a pre-theme blob still loads", settings_unpack(&b, buf, drop_tail(buf, 1)), 1);
+    check("and reads as Classic", b.theme, UI_THEME_CLASSIC);
+    check("keeping what it had", b.air_link, AIR_ADAPTER);
+    a.theme = 200;
+    n = settings_pack(&a, buf, sizeof buf);
+    check("out of range clamps", settings_unpack(&b, buf, n) && b.theme == UI_THEME_CLASSIC, 1);
+}
+
 /* The USB personality rides on the blob's tail: a blob packed before the field
  * existed must still load (as GB-Link), and the field must survive a round
  * trip and be clamped when out of range. */
@@ -254,14 +287,8 @@ static void test_usb_mode_tail(void) {
     size_t n = settings_pack(&a, buf, sizeof buf);
     check("round trip", settings_unpack(&b, buf, n) && b.usb_mode == USB_MODE_DRIVE, 1);
 
-    /* Rebuild the same blob two bytes shorter (usb_mode and air_link), as a
-     * pre-usb_mode build wrote it: payload length minus two, CRC recomputed. */
-    size_t plen = (size_t)(buf[6] | (buf[7] << 8)) - 2;
-    buf[6] = (uint8_t)plen; buf[7] = (uint8_t)(plen >> 8);
-    uint32_t crc = settings_crc32(buf, 8 + plen);
-    buf[8 + plen] = (uint8_t)crc; buf[9 + plen] = (uint8_t)(crc >> 8);
-    buf[10 + plen] = (uint8_t)(crc >> 16); buf[11 + plen] = (uint8_t)(crc >> 24);
-    check("old blob still loads", settings_unpack(&b, buf, 12 + plen), 1);
+    /* As a pre-usb_mode build wrote it: without usb_mode, air_link, theme. */
+    check("old blob still loads", settings_unpack(&b, buf, drop_tail(buf, 3)), 1);
     check("old blob reads as GB-Link", b.usb_mode, USB_MODE_GBLINK);
 
     a.usb_mode = 9;
@@ -281,12 +308,8 @@ static void test_air_link_tail(void) {
     size_t n = settings_pack(&a, buf, sizeof buf);
     check("round trip", settings_unpack(&b, buf, n) && b.air_link == AIR_ADAPTER, 1);
 
-    size_t plen = (size_t)(buf[6] | (buf[7] << 8)) - 1;   /* a pre-air_link blob */
-    buf[6] = (uint8_t)plen; buf[7] = (uint8_t)(plen >> 8);
-    uint32_t crc = settings_crc32(buf, 8 + plen);
-    buf[8 + plen] = (uint8_t)crc; buf[9 + plen] = (uint8_t)(crc >> 8);
-    buf[10 + plen] = (uint8_t)(crc >> 16); buf[11 + plen] = (uint8_t)(crc >> 24);
-    check("old blob still loads", settings_unpack(&b, buf, 12 + plen), 1);
+    /* A pre-air_link blob: without air_link and theme. */
+    check("old blob still loads", settings_unpack(&b, buf, drop_tail(buf, 2)), 1);
     check("old blob reads as the cable", b.air_link, AIR_GEN3);
     check("and keeps its usb mode", b.usb_mode, USB_MODE_DRIVE);
 
@@ -303,6 +326,7 @@ static void test_air_link_tail(void) {
 
 int main(void) {
     test_air_link_tail();
+    test_theme_tail();
     test_usb_mode_tail();
     test_round_trip();
     test_new_device();

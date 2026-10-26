@@ -23,6 +23,7 @@ uint8_t uiset_count(void) { return SETFIELD_COUNT; }
 
 static const char *field_name(setfield_t f) {
     switch (f) {
+    case SETFIELD_THEME:    return "theme";
     case SETFIELD_COLSTART: return "col offset";
     case SETFIELD_ROWSTART: return "row offset";
     case SETFIELD_COLOUR:   return "colour";
@@ -38,6 +39,9 @@ static const char *field_name(setfield_t f) {
 
 static void field_value(const settings_t *s, setfield_t f, char *out, size_t cap) {
     switch (f) {
+    case SETFIELD_THEME:
+        snprintf(out, cap, "%s", ui_theme_name((ui_theme_id_t)s->theme));
+        break;
     case SETFIELD_COLSTART: snprintf(out, cap, "%u", s->colstart); break;
     case SETFIELD_ROWSTART: snprintf(out, cap, "%u", s->rowstart); break;
     case SETFIELD_COLOUR:   snprintf(out, cap, "%s", s->bgr ? "BGR" : "RGB"); break;
@@ -85,6 +89,13 @@ const char *uiset_label(void *ctx, uint8_t index) {
 static void adjust(settings_t *s, setfield_t f, int32_t d) {
     int32_t v;
     switch (f) {
+    case SETFIELD_THEME:
+        /* Wraps, and redraws at once: a palette is chosen by looking at it. */
+        v = ((int32_t)s->theme + d) % UI_THEME_COUNT;
+        if (v < 0) v += UI_THEME_COUNT;
+        s->theme = (uint8_t)v;
+        s_display_dirty = true;
+        break;
     case SETFIELD_COLSTART:
         v = (int32_t)s->colstart + d;
         s->colstart = (uint8_t)(v < 0 ? 0 : (v > 8 ? 8 : v));

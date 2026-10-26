@@ -19,6 +19,7 @@
 #include "chipdb.h"
 #include "ui_chipview.h"
 #include "ui_list.h"
+#include "ui_theme.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,17 +29,29 @@ extern "C" {
 #define RGB565(r, g, b) \
     ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
 
-#define COL_BG        RGB565(16, 20, 32)
-#define COL_HEADER    RGB565(232, 120, 24)
-#define COL_TEXT      RGB565(240, 244, 248)
-#define COL_TEXT_DIM  RGB565(120, 128, 144)
-#define COL_ROW_ALT   RGB565(28, 34, 50)
-#define COL_CURSOR    RGB565(255, 208, 64)
-#define COL_STAR_ON   RGB565(255, 200, 48)
-#define COL_STAR_OFF  RGB565(72, 78, 96)
-#define COL_BAR_TRACK RGB565(40, 46, 64)
-#define COL_BAR_THUMB RGB565(160, 170, 200)
-#define COL_HELD      RGB565(64, 200, 120)
+/*
+ * The current theme's colours (ui_theme.h). Read at draw time, so a theme
+ * change repaints everything on the next frame.
+ */
+#define COL_BG        (ui_theme()->bg)
+#define COL_HEADER    (ui_theme()->header)
+#define COL_ON_HEADER (ui_theme()->on_header)
+#define COL_TEXT      (ui_theme()->text)
+#define COL_TEXT_DIM  (ui_theme()->text_dim)
+#define COL_ROW_ALT   (ui_theme()->row_alt)
+#define COL_CURSOR    (ui_theme()->accent)
+#define COL_STAR_ON   (ui_theme()->star_on)
+#define COL_STAR_OFF  (ui_theme()->star_off)
+#define COL_BAR_TRACK (ui_theme()->bar_track)
+#define COL_BAR_THUMB (ui_theme()->bar_thumb)
+#define COL_HELD      (ui_theme()->held)
+#define COL_GOOD      (ui_theme()->good)
+#define COL_WARN      (ui_theme()->warn)
+#define COL_BAD       (ui_theme()->bad)
+
+/* The code letter on an element box. The boxes keep the games' colours in
+ * every theme, so the letter on them is fixed too. */
+#define COL_ON_ELEMENT RGB565(16, 20, 32)
 
 /* Element tints for the code box, matching the games' own colour language. */
 #define COL_ELEM_NONE RGB565(150, 150, 150)
