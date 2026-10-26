@@ -39,6 +39,11 @@ reimplemented transport headers came from gbagate. Under ASan and UBSan:
   gbagate-only commands (0x4F, mode 0x80);
 - **unpatched 2.2.7**: the six tests named for patches 1-4, 7 and 9 fail as
   well;
+- **patch 11's race** shows only now and then: 12 runs of
+  `link_cancel_while_the_section_ends` on each tree, under ASan, failed 2
+  times unpatched (stack-use-after-scope in `LinkModule::cancel` and in
+  `PacketLayer::cancel`, both through the cleared-too-late section pointer)
+  and 0 times patched;
 - **the Wireless Adapter mode**: all of `test_rfu.py`'s librfu checks pass on
   unpatched upstream code.
 
