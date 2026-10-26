@@ -44,6 +44,10 @@ reimplemented transport headers came from gbagate. Under ASan and UBSan:
   times unpatched (stack-use-after-scope in `LinkModule::cancel` and in
   `PacketLayer::cancel`, both through the cleared-too-late section pointer)
   and 0 times patched;
+- **upstream's own build** (`build.yml`: Zephyr v3.7-branch, SDK 0.16.8,
+  `west build -b rpi_pico`): the base and every step of the series build with
+  no warnings; the whole series adds 1.4 KB of flash and 8 bytes of RAM. Not
+  run on RP2040 hardware;
 - **the Wireless Adapter mode**: all of `test_rfu.py`'s librfu checks pass on
   unpatched upstream code.
 
