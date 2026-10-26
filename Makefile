@@ -51,11 +51,15 @@ DEPS_modes     = app_modes.c ui_shell.c hw_caps.c chipgate.c
 DEPS_frame     = gblink_frame.c
 DEPS_usbdesc   = gblink_usbdesc.c
 DEPS_peer      = gbl_peer.c
+DEPS_screens   = ui_screens.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c \
+                 ui_shell.c hw_caps.c chipgate.c ir_cdz.c gbl_peer.c link_bridge.c \
+                 link_proto.c link_session.c ui_settings.c settings.c ui_input.c \
+                 controls.c ui_romview.c rom_catalog.c gba_multiboot.c
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens
 
-.PHONY: all strict lint clean chipdb gblink gblink-asan compat
+.PHONY: all strict lint clean chipdb gblink gblink-asan compat screens
 all: $(addprefix run-,$(SUITES)) gblink
 	@./qemu/lint.sh
 
@@ -154,6 +158,14 @@ strict-$(1): | $(BUILD)
 .PHONY: strict-$(1)
 endef
 $(foreach s,$(SUITES),$(eval $(call STRICT_rule,$(s))))
+
+# Every screen as a picture: build/screens/<name>.ppm, and gallery.png with
+# all of them side by side. doc/screens-all.png is a copy of that gallery.
+screens: $(BUILD)/test_screens
+	@mkdir -p $(BUILD)/screens
+	@./$< $(DB) $(BUILD)/screens | tail -1
+	@python3 tools/ppm2png.py $(BUILD)/screens/gallery.ppm $(BUILD)/screens/gallery.png
+	@echo "$(BUILD)/screens/gallery.png"
 
 # Compile-check the ESP-IDF-only sources against stub headers. Cheap, and it
 # covers the files no suite can reach.

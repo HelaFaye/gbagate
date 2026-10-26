@@ -25,8 +25,8 @@
 #include "link_source.h"
 #include "ui_chipview.h"
 #include "ui_list.h"
-#include "ui_font.h"    /* UI_FONT_H, for centring the banner */
 #include "ui_render.h"
+#include "ui_screens.h"
 #include "controls.h"
 #include "ir_cdz.h"
 #include "ui_romview.h"
@@ -521,78 +521,30 @@ static void render_mode_screen(void)
         return;
     }
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
-
-    ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
-    ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
-    ui_text_clipped(&canvas, 3, (UI_HEADER_H - UI_FONT_H) / 2, UI_SCREEN_W - 6,
-                    shell_mode_name(s_shell.chosen_mode), COL_BG);
-
-    int y = UI_LIST_Y + 2;
-    char line[32];
+    const char *title  = shell_mode_name(s_shell.chosen_mode);
+    const char *footer = screen_controls(CTRLS_PAGE);
+    ui_page_t page;
 
     if (s_shell.chosen_mode == APP_MODE_DIAGNOSTICS) {
-        /*
-         * Diagnostics is the mode you reach for when nothing else works, so it
-         * reports the things that are otherwise only visible in a serial log:
-         * which capabilities were detected, whether the link ever moved, and
-         * whether the UI is losing events.
-         */
-        char caps[64];
-        hw_caps_describe(s_shell.caps, caps, sizeof caps);
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, "detected:", COL_TEXT_DIM);
-        y += 10;
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, caps, COL_TEXT);
-        y += 14;
-
-        snprintf(line, sizeof line, "link   %s",
-                 chipgate_connected(&s_gate) ? "linked" : "waiting");
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, line, COL_TEXT);
-        y += 10;
-
-        snprintf(line, sizeof line, "xfers  %lu", (unsigned long)s_transfers);
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, line, COL_TEXT);
-        y += 10;
-
-        snprintf(line, sizeof line, "chips  %lu", (unsigned long)s_chips_sent);
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, line, COL_TEXT);
-        y += 10;
-
-        snprintf(line, sizeof line, "gate   %04X", s_gate.gate_id);
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, line, COL_TEXT);
-        y += 10;
-
-        snprintf(line, sizeof line, "uidrop %lu",
-                 (unsigned long)tasks_ui_events_dropped());
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, line, COL_TEXT);
+        ui_diag_t d = {
+            .caps       = s_shell.caps,
+            .linked     = chipgate_connected(&s_gate),
+            .transfers  = s_transfers,
+            .chips_sent = s_chips_sent,
+            .gate_id    = s_gate.gate_id,
+            .ui_dropped = tasks_ui_events_dropped(),
+        };
+        ui_page_diagnostics(&page, title, footer, &d);
     } else if (!app_dispatch_running(&s_dispatch)) {
-        /*
-         * The shell is on the running screen with nothing behind it, which is
-         * what a refused enter() looks like. Naming the reason matters: the
-         * page used to read "no screen for this mode yet", which describes the
-         * firmware rather than the fault the user just hit.
-         */
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4,
-                        "mode did not start", COL_TEXT);
-        y += 14;
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4,
-                        app_dispatch_status_name(s_dispatch.last_status),
-                        COL_TEXT_DIM);
+        /* The shell is on the running screen with nothing behind it, which is
+         * what a refused enter() looks like. */
+        ui_page_refused(&page, title, footer,
+                        app_dispatch_status_name(s_dispatch.last_status));
     } else {
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, s_status, COL_TEXT);
-        y += 14;
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4,
-                        "no screen for this", COL_TEXT_DIM);
-        y += 10;
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4,
-                        "mode yet", COL_TEXT_DIM);
+        ui_page_status(&page, title, footer, s_status);
     }
 
-    int fy = UI_SCREEN_H - UI_FOOTER_H;
-    ui_fill(&canvas, 0, fy, UI_SCREEN_W, UI_FOOTER_H, COL_ROW_ALT);
-    ui_fill(&canvas, 0, fy, UI_SCREEN_W, 1, COL_HEADER);
-    ui_text_clipped(&canvas, 2, fy + (UI_FOOTER_H - UI_FONT_H) / 2,
-                    UI_SCREEN_W - 4, screen_controls(CTRLS_PAGE), COL_TEXT_DIM);
-
+    ui_render_page(&canvas, &page);
     st7735_mark_all_dirty();
     st7735_flush();
 }
@@ -687,43 +639,6 @@ static void send_program(void)
 }
 
 /*
- * A titled page of lines. The link modes, Read Chip and USB Storage are all
- * "show a few facts and one instruction", and giving each its own renderer
- * would be four copies of the same layout drifting apart.
- */
-static void render_page(const char *title, const char *const *lines, int n,
-                        const char *footer)
-{
-    uint16_t *fb = st7735_framebuffer();
-    if (!fb) {
-        return;
-    }
-    ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
-
-    ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
-    ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
-    ui_text_clipped(&canvas, 3, (UI_HEADER_H - UI_FONT_H) / 2, UI_SCREEN_W - 6,
-                    title, COL_BG);
-
-    for (int i = 0; i < n && i < 8; i++) {
-        if (!lines[i]) {
-            continue;
-        }
-        ui_text_clipped(&canvas, 2, UI_LIST_Y + 4 + i * 11, UI_SCREEN_W - 4,
-                        lines[i], i == 0 ? COL_TEXT : COL_TEXT_DIM);
-    }
-
-    int fy = UI_SCREEN_H - UI_FOOTER_H;
-    ui_fill(&canvas, 0, fy, UI_SCREEN_W, UI_FOOTER_H, COL_ROW_ALT);
-    ui_fill(&canvas, 0, fy, UI_SCREEN_W, 1, COL_HEADER);
-    ui_text_clipped(&canvas, 2, fy + (UI_FOOTER_H - UI_FONT_H) / 2,
-                    UI_SCREEN_W - 4, footer ? footer : "", COL_TEXT_DIM);
-
-    st7735_mark_all_dirty();
-    st7735_flush();
-}
-
-/*
  * The four modes whose whole interface is a page of facts and one button.
  * Written together because they share the shape; splitting them would be four
  * copies of the same event handling.
@@ -800,49 +715,20 @@ static void render_settings(const ui_event_t *e, bool have_event)
 
 static void render_simple_mode(const ui_event_t *e, bool have_event)
 {
-    char l0[32], l1[32], l2[32], l3[32];
-    const char *lines[4] = { l0, l1, l2, l3 };
-    const char *footer = NULL;
-    const char *title = shell_mode_name(s_shell.chosen_mode);
-
-    l0[0] = l1[0] = l2[0] = l3[0] = '\0';
+    const char *title  = shell_mode_name(s_shell.chosen_mode);
+    const char *footer = screen_controls(CTRLS_PAGE);
+    ui_page_t page;
+    ui_page_init(&page, title, footer);
 
     switch (s_shell.chosen_mode) {
 
 #if !defined(GBAGATE_QEMU)
     case APP_MODE_LINK_WIRELESS: {
-        /* The wireless link cable: GB-Link's relay, run against another board
-         * over ESP-NOW (src/gbl_peer.c). Retransmits climbing while frames
-         * still flow is a noisy channel; frames stopping is the peer gone. */
-        const gbl_peer_t *p = gblink_peer_state();
         uint8_t mac[6];
-        snprintf(l0, sizeof l0, "%s%s", gbl_peer_state_name(p->state),
-                 p->state >= GBL_PEER_SETTLING ? (p->master ? " (M)" : " (S)") : "");
-        if (wireless_cable_peer_mac(mac)) {
-            snprintf(l1, sizeof l1, "%02X%02X%02X%02X%02X%02X",
-                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        } else if (p->mode_mismatch && p->state == GBL_PEER_SEARCHING) {
-            /* A board is there but set to another air link. */
-            snprintf(l1, sizeof l1, "peer: other link");
-        } else {
-            snprintf(l1, sizeof l1, "%s: no peer", air_link_name((air_link_t)s_settings.air_link));
-        }
-        if (p->mode == 0x07) {
-            /* Wireless Adapter: whether the game has found the adapter is the
-             * first question; the firmware's own telemetry answers it. */
-            const char *gba = !p->rfu.seen          ? "GBA: --"
-                            : p->rfu.found          ? "GBA: found adapter"
-                            : !p->rfu.transfers     ? "GBA: no clock"
-                            : !p->rfu.any_rx        ? "GBA: use GBC cable"
-                                                    : "GBA: looking";
-            snprintf(l2, sizeof l2, "%s", gba);
-            snprintf(l3, sizeof l3, "rst %u out %lu in %lu", p->rfu.resets,
-                     (unsigned long)p->data_out, (unsigned long)p->data_in);
-        } else {
-            snprintf(l2, sizeof l2, "out %lu in %lu", (unsigned long)p->data_out, (unsigned long)p->data_in);
-            snprintf(l3, sizeof l3, "resent %lu", (unsigned long)p->retransmits);
-        }
-        footer = screen_controls(CTRLS_PAGE);
+        bool locked = wireless_cable_peer_mac(mac);
+        ui_page_wireless(&page, title, footer, gblink_peer_state(),
+                         locked ? mac : NULL,
+                         air_link_name((air_link_t)s_settings.air_link));
         break;
     }
 #endif
@@ -851,57 +737,33 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
 #if defined(GBAGATE_QEMU)
     case APP_MODE_LINK_WIRELESS:   /* QEMU has no radio: the UART bridge */
 #endif
-    {
-        link_bridge_t *b = tasks_bridge();
-        snprintf(l0, sizeof l0, "%s", b ? bridge_state_name(b->state) : "no bridge");
-        snprintf(l1, sizeof l1, "sent   %lu", b ? (unsigned long)b->words_sent : 0ul);
-        snprintf(l2, sizeof l2, "recvd  %lu", b ? (unsigned long)b->words_received : 0ul);
-        /* Round trip is the number that says whether a wireless link is
-         * usable: under a millisecond is fine, tens are not. */
-        snprintf(l3, sizeof l3, "rtt    %lu us", b ? (unsigned long)b->rtt_us : 0ul);
-        footer = screen_controls(CTRLS_PAGE);
+        ui_page_link_usb(&page, title, footer, tasks_bridge());
         break;
-    }
 
     case APP_MODE_INFRARED: {
-        uint16_t last = ir_last_command();
-        snprintf(l0, sizeof l0, "%s", ir_ready() ? "IR ready" : "no IR fitted");
-        snprintf(l1, sizeof l1, "cmds   %lu", (unsigned long)ir_commands());
-        snprintf(l2, sizeof l2, "last   %03X  %X/%X/%X", (unsigned)last,
-                 cdz_category(last), cdz_motion(last), cdz_action(last));
-        /*
-         * Aborted trains is the number that tells you whether the timing is
-         * right. A decoder measuring the wrong thing aborts nearly everything
-         * while still looking alive, so a bare command count would not show it.
-         */
-        snprintf(l3, sizeof l3, "aborted %lu", (unsigned long)ir_aborted());
-        footer = screen_controls(CTRLS_PAGE);
-        if (have_event && e && e->type == UI_EVENT_CHIP_SENT && ir_ready()) {
-            ir_send(last);
+        ui_ir_t ir = {
+            .ready    = ir_ready(),
+            .commands = ir_commands(),
+            .aborted  = ir_aborted(),
+            .last     = ir_last_command(),
+        };
+        ui_page_infrared(&page, title, footer, &ir);
+        if (have_event && e && e->type == UI_EVENT_CHIP_SENT && ir.ready) {
+            ir_send(ir.last);
         }
         break;
     }
 
     case APP_MODE_CHIP_SCAN: {
-        bool adv = false, beast = false;
-        bool ok = chip_reader_detect(&adv, &beast);
-        snprintf(l0, sizeof l0, ok ? "reader ready" : "no reader");
-        snprintf(l1, sizeof l1, "advance %s", adv ? "chip in" : "empty");
-        snprintf(l2, sizeof l2, "beast   %s", beast ? "chip in" : "empty");
-        if (ok && (adv || beast)) {
-            uint16_t id = gate_scan_chip(adv, beast);
-            if (id != CG_CHIP_NONE) {
-                snprintf(l3, sizeof l3, "id     %04X", id);
-            } else {
-                snprintf(l3, sizeof l3, "unreadable");
-            }
+        ui_scan_t scan = { .id = CG_CHIP_NONE };
+        scan.reader = chip_reader_detect(&scan.advance, &scan.beast);
+        if (scan.reader && (scan.advance || scan.beast)) {
+            scan.id = gate_scan_chip(scan.advance, scan.beast);
         }
-        footer = screen_controls(CTRLS_PAGE);
-        if (have_event && e && e->type == UI_EVENT_CHIP_SENT && (adv || beast)) {
-            uint16_t id = gate_scan_chip(adv, beast);
-            if (id != CG_CHIP_NONE) {
-                gate_send_chip(id);
-            }
+        ui_page_chip_scan(&page, title, footer, &scan);
+        if (have_event && e && e->type == UI_EVENT_CHIP_SENT &&
+            scan.id != CG_CHIP_NONE) {
+            gate_send_chip(scan.id);
         }
         break;
     }
@@ -914,20 +776,12 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
                 s_exposed = msc_release_to_host() == ESP_OK;
             }
         }
-        snprintf(l0, sizeof l0, s_exposed ? "drive is the PC's"
-                                          : "drive is ours");
-        snprintf(l1, sizeof l1, s_exposed ? "safe to copy files"
-                                          : "press to hand over");
-        /* One owner at a time, and saying which is the whole point of the
-         * mode -- guessing at it is what corrupts a FAT volume. */
-        snprintf(l2, sizeof l2, "%s", s_exposed ? "eject before back"
-                                                : "");
         /*
-         * The hint names the control; the line above already says what the
-         * action does, and which way round it is. Restating "enter" here was
-         * wrong on every board without a keyboard.
+         * The footer names the control; the page already says what the action
+         * does, and which way round it is. Restating "enter" there was wrong
+         * on every board without a keyboard.
          */
-        footer = screen_controls(CTRLS_PAGE);
+        ui_page_usb_storage(&page, title, footer, s_exposed);
         break;
 
     case APP_MODE_SETTINGS:
@@ -936,7 +790,14 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
         break;
     }
 
-    render_page(title, lines, 4, footer);
+    uint16_t *fb = st7735_framebuffer();
+    if (!fb) {
+        return;
+    }
+    ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
+    ui_render_page(&canvas, &page);
+    st7735_mark_all_dirty();
+    st7735_flush();
 }
 
 static void render_rom_browser(void)
@@ -949,45 +810,17 @@ static void render_rom_browser(void)
 
     /* Mid-transfer the list is meaningless; show progress instead. */
     if (s_send_status[0]) {
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
-        ui_text_clipped(&canvas, 3, (UI_HEADER_H - UI_FONT_H) / 2,
-                        UI_SCREEN_W - 6, "Send Program", COL_BG);
-
         const rom_entry_t *e = romview_current(&s_roms);
-        ui_text_clipped(&canvas, 2, UI_LIST_Y + 4, UI_SCREEN_W - 4,
-                        e ? e->name : "", COL_TEXT);
-        ui_text_clipped(&canvas, 2, UI_LIST_Y + 22, UI_SCREEN_W - 4,
-                        s_send_status, COL_CURSOR);
-
-        /* A bar, because a percentage alone does not show that a transfer has
-         * stopped moving. */
-        int bw = UI_SCREEN_W - 8;
-        ui_fill(&canvas, 4, UI_LIST_Y + 40, bw, 8, COL_BAR_TRACK);
-        ui_fill(&canvas, 4, UI_LIST_Y + 40,
-                (int)((bw * (int)s_send_pct) / 100), 8, COL_BAR_THUMB);
-
-        char pct[12];   /* "100%" plus slack: %lu can print ten digits */
-        snprintf(pct, sizeof pct, "%lu%%", (unsigned long)s_send_pct);
-        ui_text_clipped(&canvas, 4, UI_LIST_Y + 54, 60, pct, COL_TEXT_DIM);
-
-        int fy = UI_SCREEN_H - UI_FOOTER_H;
-        ui_fill(&canvas, 0, fy, UI_SCREEN_W, UI_FOOTER_H, COL_ROW_ALT);
-        ui_fill(&canvas, 0, fy, UI_SCREEN_W, 1, COL_HEADER);
-        ui_text_clipped(&canvas, 2, fy + (UI_FOOTER_H - UI_FONT_H) / 2,
-                        UI_SCREEN_W - 4, screen_controls(CTRLS_PAGE), COL_TEXT_DIM);
+        ui_render_progress(&canvas, "Send Program", e ? e->name : "",
+                           s_send_status, s_send_pct,
+                           screen_controls(CTRLS_PAGE));
         st7735_mark_all_dirty();
         st7735_flush();
         return;
     }
 
     if (romview_count(&s_roms) == 0) {
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
-        ui_text_clipped(&canvas, 3, (UI_HEADER_H - UI_FONT_H) / 2,
-                        UI_SCREEN_W - 6, "Send Program", COL_BG);
-        ui_text_clipped(&canvas, 2, UI_LIST_Y + 20, UI_SCREEN_W - 4,
-                        romview_empty_text(&s_roms), COL_TEXT);
+        ui_render_notice(&canvas, "Send Program", romview_empty_text(&s_roms));
         st7735_mark_all_dirty();
         st7735_flush();
         return;
@@ -1079,14 +912,7 @@ void ui_service(const ui_event_t *e, bool have_event) {
             return;
         }
         ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
-        ui_text(&canvas, 3, (UI_HEADER_H - UI_FONT_H) / 2, "NO INTERFACE", COL_BG);
-        ui_text(&canvas, 4, UI_LIST_Y + 6,  "shell not started", COL_TEXT);
-        ui_text(&canvas, 4, UI_LIST_Y + 20, "app_main must call", COL_TEXT_DIM);
-        ui_text(&canvas, 4, UI_LIST_Y + 32, "gate_shell_start()", COL_TEXT_DIM);
-        ui_text(&canvas, 4, UI_LIST_Y + 52, "display+uart are OK", COL_TEXT_DIM);
-        ui_text(&canvas, 4, UI_LIST_Y + 64, "if you can read this", COL_TEXT_DIM);
+        ui_render_no_interface(&canvas);
         st7735_mark_all_dirty();
         st7735_flush();
         return;
