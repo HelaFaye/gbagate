@@ -34,6 +34,10 @@ static const app_mode_handler_t *find_handler(const app_dispatch_t *d,
     return NULL;
 }
 
+static void *handler_ctx(const app_dispatch_t *d, const app_mode_handler_t *h) {
+    return h->ctx ? h->ctx : d->ctx;
+}
+
 static app_dispatch_status_t finish(app_dispatch_t *d,
                                     app_dispatch_status_t s) {
     d->last_status = s;
@@ -61,7 +65,7 @@ app_dispatch_status_t app_dispatch_enter(app_dispatch_t *d, app_mode_t mode,
         return finish(d, APP_DISPATCH_BUSY);
     }
 
-    if (mode >= APP_MODE_COUNT) {
+    if (mode >= APP_MODE_COUNT && !APP_MODE_IS_APPLET(mode)) {
         return finish(d, APP_DISPATCH_NO_HANDLER);
     }
 
@@ -70,22 +74,22 @@ app_dispatch_status_t app_dispatch_enter(app_dispatch_t *d, app_mode_t mode,
         return finish(d, APP_DISPATCH_NO_HANDLER);
     }
 
-    if ((mode_requires(mode) & ~d->caps) != 0) {
+    if (((mode_requires(mode) | h->requires) & ~d->caps) != 0) {
         return finish(d, APP_DISPATCH_MISSING_CAPS);
     }
 
     /* The stale-game guard. has_game is authoritative; the cg_game_t beside it
      * means nothing without it. */
-    if (shell_mode_needs_game(mode)) {
+    if (shell_mode_needs_game(mode) || h->needs_game) {
         if (!has_game || game >= CG_GAME_COUNT) {
             return finish(d, APP_DISPATCH_NEEDS_GAME);
         }
     }
 
-    if (!h->enter(d->ctx, game, has_game)) {
+    if (!h->enter(handler_ctx(d, h), game, has_game)) {
         /* enter() may have taken resources before deciding to refuse. */
         if (h->exit) {
-            h->exit(d->ctx);
+            h->exit(handler_ctx(d, h));
         }
         return finish(d, APP_DISPATCH_REFUSED);
     }
@@ -137,7 +141,7 @@ void app_dispatch_exit(app_dispatch_t *d) {
     }
     const app_mode_handler_t *h = find_handler(d, d->active);
     if (h && h->exit) {
-        h->exit(d->ctx);
+        h->exit(handler_ctx(d, h));
     }
     d->running  = false;
     d->has_game = false;
@@ -149,7 +153,26 @@ void app_dispatch_tick(app_dispatch_t *d) {
     }
     const app_mode_handler_t *h = find_handler(d, d->active);
     if (h && h->tick) {
-        h->tick(d->ctx);
+        h->tick(handler_ctx(d, h));
+    }
+}
+
+app_route_t app_mode_route(app_mode_t mode) {
+    if (APP_MODE_IS_APPLET(mode)) {
+        return APP_ROUTE_APPLET;
+    }
+    switch (mode) {
+    case APP_MODE_CHIP_GATE:     return APP_ROUTE_CHIPS;
+    case APP_MODE_MULTIBOOT:     return APP_ROUTE_ROMS;
+    case APP_MODE_SETTINGS:      return APP_ROUTE_SETTINGS;
+    case APP_MODE_LINK_USB:
+    case APP_MODE_LINK_WIRELESS:
+    case APP_MODE_CHIP_SCAN:
+    case APP_MODE_USB_STORAGE:
+    case APP_MODE_INFRARED:
+    case APP_MODE_SELFTEST:
+    case APP_MODE_DIAGNOSTICS:   return APP_ROUTE_PAGE;
+    default:                     return APP_ROUTE_NONE;
     }
 }
 
@@ -168,7 +191,8 @@ const char *app_dispatch_status_name(app_dispatch_status_t s) {
 /* ---- mode handlers ----------------------------------------------------- */
 
 static bool chipgate_enter(void *ctx, cg_game_t game, bool has_game) {
-    (void)has_game;  /* gate identity is per-game but we don't need it here */
+    (void)ctx;
+    (void)game; (void)has_game;  /* gate identity is per-game but not needed here */
     return true;
 }
 
@@ -177,6 +201,7 @@ static void chipgate_exit(void *ctx) { (void)ctx; }
 static void chipgate_tick(void *ctx) { (void)ctx; }
 
 static bool link_usb_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx;
     (void)game; (void)has_game;
     return true;
 }
@@ -186,6 +211,7 @@ static void link_usb_exit(void *ctx) { (void)ctx; }
 static void link_usb_tick(void *ctx) { (void)ctx; }
 
 static bool link_wireless_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx;
     (void)game; (void)has_game;
     return true;
 }
@@ -195,6 +221,7 @@ static void link_wireless_exit(void *ctx) { (void)ctx; }
 static void link_wireless_tick(void *ctx) { (void)ctx; }
 
 static bool multiboot_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx;
     (void)game; (void)has_game;
     return true;
 }
@@ -204,6 +231,7 @@ static void multiboot_exit(void *ctx) { (void)ctx; }
 static void multiboot_tick(void *ctx) { (void)ctx; }
 
 static bool chip_scan_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx;
     (void)game; (void)has_game;
     return true;
 }
@@ -213,6 +241,7 @@ static void chip_scan_exit(void *ctx) { (void)ctx; }
 static void chip_scan_tick(void *ctx) { (void)ctx; }
 
 static bool usb_storage_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx;
     (void)game; (void)has_game;
     return true;
 }
@@ -235,6 +264,7 @@ static void ir_exit(void *ctx) { (void)ctx; }
 static void ir_tick(void *ctx) { (void)ctx; }
 
 static bool selftest_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx;
     (void)game; (void)has_game;
     return true;
 }
@@ -244,6 +274,7 @@ static void selftest_exit(void *ctx) { (void)ctx; }
 static void selftest_tick(void *ctx) { (void)ctx; }
 
 static bool settings_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx;
     (void)game; (void)has_game;
     return true;
 }
@@ -253,6 +284,7 @@ static void settings_exit(void *ctx) { (void)ctx; }
 static void settings_tick(void *ctx) { (void)ctx; }
 
 static bool diagnostics_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx;
     (void)game; (void)has_game;
     return true;
 }
@@ -264,16 +296,16 @@ static void diagnostics_tick(void *ctx) { (void)ctx; }
 /* ---- handler table ---------------------------------------------------- */
 
 static const app_mode_handler_t k_handlers[] = {
-    { APP_MODE_CHIP_GATE,  chipgate_enter,   chipgate_exit,   chipgate_tick },
-    { APP_MODE_LINK_USB,   link_usb_enter,   link_usb_exit,   link_usb_tick },
-    { APP_MODE_LINK_WIRELESS, link_wireless_enter, link_wireless_exit, link_wireless_tick },
-    { APP_MODE_MULTIBOOT,  multiboot_enter,  multiboot_exit,  multiboot_tick },
-    { APP_MODE_CHIP_SCAN,  chip_scan_enter,  chip_scan_exit,  chip_scan_tick },
-    { APP_MODE_USB_STORAGE, usb_storage_enter, usb_storage_exit, usb_storage_tick },
-    { APP_MODE_INFRARED,   ir_enter,         ir_exit,         ir_tick },
-    { APP_MODE_SELFTEST,   selftest_enter,   selftest_exit,   selftest_tick },
-    { APP_MODE_SETTINGS,   settings_enter,   settings_exit,   settings_tick },
-    { APP_MODE_DIAGNOSTICS, diagnostics_enter, diagnostics_exit, diagnostics_tick },
+    { .mode = APP_MODE_CHIP_GATE, .enter = chipgate_enter, .exit = chipgate_exit, .tick = chipgate_tick },
+    { .mode = APP_MODE_LINK_USB, .enter = link_usb_enter, .exit = link_usb_exit, .tick = link_usb_tick },
+    { .mode = APP_MODE_LINK_WIRELESS, .enter = link_wireless_enter, .exit = link_wireless_exit, .tick = link_wireless_tick },
+    { .mode = APP_MODE_MULTIBOOT, .enter = multiboot_enter, .exit = multiboot_exit, .tick = multiboot_tick },
+    { .mode = APP_MODE_CHIP_SCAN, .enter = chip_scan_enter, .exit = chip_scan_exit, .tick = chip_scan_tick },
+    { .mode = APP_MODE_USB_STORAGE, .enter = usb_storage_enter, .exit = usb_storage_exit, .tick = usb_storage_tick },
+    { .mode = APP_MODE_INFRARED, .enter = ir_enter, .exit = ir_exit, .tick = ir_tick },
+    { .mode = APP_MODE_SELFTEST, .enter = selftest_enter, .exit = selftest_exit, .tick = selftest_tick },
+    { .mode = APP_MODE_SETTINGS, .enter = settings_enter, .exit = settings_exit, .tick = settings_tick },
+    { .mode = APP_MODE_DIAGNOSTICS, .enter = diagnostics_enter, .exit = diagnostics_exit, .tick = diagnostics_tick },
 };
 
 #define HANDLER_COUNT (sizeof k_handlers / sizeof k_handlers[0])

@@ -1,0 +1,17 @@
+/*
+ * applets.def -- the applets built into the firmware, in menu order.
+ *
+ * One line per applet: APPLET(name) for a `const applet_t applet_name` defined
+ * in applets/name.c. Remove a line to leave an applet out; the file stays
+ * compiled but --gc-sections drops it. See doc/APPLETS.md.
+ *
+ * Plain lines only -- this file is included into an array initialiser, so
+ * anything but APPLET(...) and comments breaks the build.
+ */
+
+APPLET(test_pattern)
+APPLET(chip_dice)
+
+/* The walkthrough's example: uncomment to see it in the menu.
+APPLET(hello)
+*/

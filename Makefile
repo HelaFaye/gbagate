@@ -51,13 +51,19 @@ DEPS_modes     = app_modes.c ui_shell.c hw_caps.c chipgate.c
 DEPS_frame     = gblink_frame.c
 DEPS_usbdesc   = gblink_usbdesc.c
 DEPS_peer      = gbl_peer.c
+DEPS_applets   = applet.c app_modes.c ui_shell.c hw_caps.c chipgate.c chipdb.c \
+                 ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c \
+                 ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c
+# The example applets live outside src/, like any applet would.
+EXTRA_applets  = -Iapplets $(wildcard applets/*.c)
 DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c \
                  ui_shell.c hw_caps.c chipgate.c ir_cdz.c gbl_peer.c link_bridge.c \
                  link_proto.c link_session.c ui_settings.c settings.c ui_input.c \
-                 controls.c ui_romview.c rom_catalog.c gba_multiboot.c
+                 controls.c ui_romview.c rom_catalog.c gba_multiboot.c applet.c app_modes.c
+EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets
 
 .PHONY: all strict lint clean chipdb gblink gblink-asan compat screens
 all: $(addprefix run-,$(SUITES)) gblink
@@ -119,7 +125,7 @@ define SUITE_rule
 # Headers are dependencies too: without them a header-only change (a constant,
 # a struct layout) leaves every test binary stale, and a suite reports on code
 # that no longer exists. Found when a corrected descriptor length kept failing.
-$(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) $(wildcard src/*.h) | $(BUILD)
+$(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) $(wildcard src/*.h) $(wildcard applets/*) | $(BUILD)
 	@$$(CC) $$(CFLAGS) $$(EXTRA_$(1)) -o $$@ $$< $$(addprefix src/,$$(DEPS_$(1))) -lm
 run-$(1): $(BUILD)/test_$(1)
 	@printf '%-14s ' $(1); \

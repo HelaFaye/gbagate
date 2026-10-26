@@ -554,8 +554,26 @@ overlap nor overrun the scrollbar.
 
 ### Mode shell
 
-`Battle Chip · Link: USB · Link: Wireless · Send Program · Read Chip ·
-Settings · Diagnostics`, filtered by `hw_caps`.
+`Battle Chip · Link · Send Program · Read Chip · Infrared · USB Storage ·
+Self Test · (applets) · Settings · Diagnostics`, filtered by `hw_caps`.
+
+**Link** opens a choice of interface, `USB - PC or mGBA` or `Wireless -
+gbagate`, showing only what the board has. A board with only one goes
+straight to it. Back from a running link returns to that choice.
+
+**Applets** are modes added without touching the core: one C file in
+`applets/` and a line in `applets/applets.def`. Test Pattern (panel
+calibration) and Chip Dice ship as examples; `doc/APPLETS.md` is the
+walkthrough.
+
+**Themes**: Settings' first row picks one of five palettes (Classic, Navi,
+DMG, Contrast, Daylight). It applies at once and is saved. `test_screens`
+checks every theme's contrast.
+
+`app_mode_route()` names the screen every mode draws on, and `test_modes`
+walks the whole menu, every row and every interface behind Link, to check
+that none reaches a placeholder. That's how Infrared was found: listed, but
+refused with "no handler".
 
 **Diagnostics requires no capabilities at all**, on purpose: the screen that
 explains why something is missing must not itself be gated on parts being
@@ -567,6 +585,11 @@ than starting. Backing out of a running mode lands on the game list rather than
 the top — changing game is the usual reason to leave.
 
 ## Renderer
+
+`make screens` renders every screen, in every state worth seeing and in
+every theme, to `build/screens/gallery.png`; `doc/screens-all.png` is a
+copy. `test_screens` asserts on them too: the frame, every line drawn, no
+page line clipped, and a list of the titles, footers and menu rows that are.
 
 `ui_render.{h,c}` draws the chip screen into a plain RGB565 array — no SPI, no
 hardware — so `test_render` can render a screen, assert on the pixels, and dump

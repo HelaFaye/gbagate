@@ -110,6 +110,17 @@ typedef struct {
 void ui_page_chip_scan(ui_page_t *p, const char *title, const char *footer,
                        const ui_scan_t *s);
 
+/* Self Test: the device sends two test chips to rom/tester.gba, which does
+ * the checking and shows the verdict on the GBA. */
+typedef struct {
+    bool     linked;      /* the GBA is clocking us */
+    uint32_t transfers;
+    uint32_t sent;        /* test chips delivered, of 2 */
+} ui_selftest_t;
+
+void ui_page_selftest(ui_page_t *p, const char *title, const char *footer,
+                      const ui_selftest_t *t);
+
 /* USB Storage: who owns the volume. */
 void ui_page_usb_storage(ui_page_t *p, const char *title, const char *footer,
                          bool exposed);

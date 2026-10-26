@@ -212,6 +212,25 @@ void ui_page_chip_scan(ui_page_t *p, const char *title, const char *footer,
     }
 }
 
+void ui_page_selftest(ui_page_t *p, const char *title, const char *footer,
+                      const ui_selftest_t *t) {
+    ui_page_init(p, title, footer);
+    if (!t->linked) {
+        ui_page_add(p, COL_WARN, "waiting for the GBA");
+        ui_page_add(p, COL_TEXT_DIM, "run tester.gba on it");
+        ui_page_add(p, COL_TEXT_DIM, "(Send Program can)");
+        return;
+    }
+    bool done = t->sent >= 2;
+    ui_page_add(p, done ? COL_GOOD : COL_TEXT, "%s",
+                done ? "test chips sent" : "testing...");
+    ui_page_add(p, COL_TEXT_DIM, "chips   %lu of 2", (unsigned long)(t->sent > 2 ? 2 : t->sent));
+    ui_page_add(p, COL_TEXT_DIM, "xfers   %lu", (unsigned long)t->transfers);
+    if (done) {
+        ui_page_add(p, COL_TEXT_DIM, "result: see the GBA");
+    }
+}
+
 /*
  * One owner at a time, and saying which is the whole point of the mode --
  * guessing at it is what corrupts a FAT volume.

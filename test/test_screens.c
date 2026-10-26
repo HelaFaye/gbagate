@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "applet.h"
 #include "chipgate.h"
 #include "controls.h"
 #include "hw_caps.h"
@@ -48,7 +49,7 @@ static uint16_t px(int x, int y) { return g_fb[(size_t)y * UI_SCREEN_W + x]; }
 static const char *g_out;    /* directory for .ppm files, or NULL */
 
 #define GAL_COLS   4
-#define GAL_MAX    64
+#define GAL_MAX    72
 #define GAL_SCALE  2
 #define GAL_CAP_H  14
 #define GAL_PAD    8
@@ -246,6 +247,19 @@ static void test_shell(void) {
                    shell_cursor(&s), "no handler");
     shot("menu-refused");
 
+    /* The link choice, on a board with both. */
+    shell_init(&s, 0xFFFFFFFFu);
+    for (uint8_t i = 0; i < shell_item_count(&s); i++) {
+        if (!strcmp(shell_label_at(&s, i), "Link")) s.mode_cursor = i;
+    }
+    shell_select(&s);
+    check("Link opens the choice", s.screen, SHELL_SCREEN_LINK);
+    ui_render_menu(&g_canvas, shell_screen_title(&s), shell_label, &s,
+                   shell_item_count(&s), shell_cursor(&s), "back: hold");
+    menu_fits("link", shell_label, &s, shell_item_count(&s), "back: hold");
+    check_frame("link", true);
+    shot("link-choice");
+
     /* Only what this board has: no WiFi, no reader, no USB. */
     shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
     ui_render_menu(&g_canvas, "gbagate", shell_label, &s, shell_item_count(&s),
@@ -388,12 +402,66 @@ static void test_pages(void) {
     ui_page_usb_storage(&p, "USB Storage", foot, true);
     page("storage-pcs", &p);
 
+    ui_selftest_t st = { .linked = false };
+    ui_page_selftest(&p, "Self Test", foot, &st);
+    page("selftest-waiting", &p);
+    st.linked = true; st.transfers = 812; st.sent = 1;
+    ui_page_selftest(&p, "Self Test", foot, &st);
+    page("selftest-running", &p);
+    st.sent = 2;
+    ui_page_selftest(&p, "Self Test", foot, &st);
+    page("selftest-done", &p);
+
     ui_page_status(&p, "Self Test", foot, "SELF TEST");
     page("placeholder", &p);
 
     ui_render_no_interface(&g_canvas);
     check_frame("no-interface", false);
     shot("no-interface");
+}
+
+/* ---- applets ------------------------------------------------------------ */
+
+static void  *g_blob;
+static size_t g_blob_len;
+
+static bool open_db(cg_game_t game, chipdb_t *db) {
+    (void)game;
+    return g_blob && chipdb_open(db, g_blob, g_blob_len);
+}
+
+static void test_applet_screens(const char *db_path) {
+    printf("applets\n");
+    FILE *f = db_path ? fopen(db_path, "rb") : NULL;
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        g_blob = malloc((size_t)n);
+        g_blob_len = fread(g_blob, 1, (size_t)n, f);
+        fclose(f);
+    }
+    applet_env_t env = { .caps = 0xFFFFFFFFu, .has_game = true,
+                         .game = CG_GAME_BN6_US, .hint = hint(CTRLS_PAGE),
+                         .open_db = open_db };
+    applet_bind_env(&env);
+
+    for (uint8_t i = 0; i < applet_count(); i++) {
+        const applet_t *a = applet_at(i);
+        check(a->name, a->enter ? a->enter(&env) : 1, 1);
+        int frames = a == applet_for_mode((app_mode_t)APP_MODE_APPLET_FIRST) ? 4 : 2;
+        for (int k = 0; k < frames; k++) {
+            ui_fill(&g_canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, 0);
+            applet_render(a, &env, &g_canvas);
+            char name[40];
+            snprintf(name, sizeof name, "applet-%s-%d", a->name, k + 1);
+            for (char *c = name; *c; c++) if (*c == ' ') *c = '-';
+            shot(name);
+            a->input(&env, APPLET_IN_CONFIRM, 0);
+        }
+        if (a->exit) a->exit();
+    }
+    applet_bind_env(NULL);
 }
 
 /* ---- themes ------------------------------------------------------------ */
@@ -534,6 +602,7 @@ int main(int argc, char **argv) {
     test_settings();
     test_send_program();
     test_pages();
+    test_applet_screens(argc > 1 ? argv[1] : NULL);
     test_theme_contrast();
     test_theme_screens();
     write_gallery();

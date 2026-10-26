@@ -68,7 +68,32 @@ typedef struct {
     bool (*enter)(void *ctx, cg_game_t game, bool has_game);
     void (*exit)(void *ctx);
     void (*tick)(void *ctx);
+    /*
+     * Optional, for handlers the built-in table does not describe -- applets.
+     * ctx, when set, is passed to this handler's callbacks instead of the
+     * dispatcher's, so one adapter can serve every applet. requires and
+     * needs_game add to what the mode table says.
+     */
+    void    *ctx;
+    uint32_t requires;
+    bool     needs_game;
 } app_mode_handler_t;
+
+/*
+ * Which screen a mode is drawn on. Every mode the menu can reach must have
+ * one: a mode with APP_ROUTE_NONE would start and show nothing, which looks
+ * exactly like a freeze. test_modes checks it for every menu entry.
+ */
+typedef enum {
+    APP_ROUTE_NONE = 0,
+    APP_ROUTE_CHIPS,       /* the chip list: Battle Chip                     */
+    APP_ROUTE_ROMS,        /* the program browser: Send Program              */
+    APP_ROUTE_SETTINGS,    /* the settings editor                            */
+    APP_ROUTE_PAGE,        /* a page of facts and one action                 */
+    APP_ROUTE_APPLET       /* the applet draws itself                        */
+} app_route_t;
+
+app_route_t app_mode_route(app_mode_t mode);
 
 typedef struct {
     const app_mode_handler_t *handlers;

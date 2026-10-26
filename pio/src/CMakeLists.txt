@@ -23,6 +23,12 @@ if(PORTABLE STREQUAL "")
     message(FATAL_ERROR "no sources found in src/ -- wrong path?")
 endif()
 
+# Applets: applets/*.c, globbed for the same reason as src/. Which of them are
+# in the menu is applets/applets.def's business, not the build's: an applet
+# that is compiled but not listed is dropped by --gc-sections.
+file(GLOB APPLETS ${CMAKE_CURRENT_LIST_DIR}/../../applets/*.c)
+list(APPEND PORTABLE ${APPLETS})
+
 # The application layer. Not globbed: pio/src holds the CMakeLists and the
 # generated files too, so a glob here would sweep up things that are not
 # sources.

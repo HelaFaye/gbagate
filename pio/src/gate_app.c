@@ -49,6 +49,8 @@ __attribute__((weak)) mb_xfer_fn mb_spi_transfer(void) { return NULL; }
 #endif
 #include "ui_shell.h"
 #include "app_modes.h"
+#include "applet.h"
+#include "esp_random.h"
 
 extern uint32_t tasks_ui_events_dropped(void);
 
@@ -521,26 +523,18 @@ static void render_mode_screen(void)
         return;
     }
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
-    const char *title  = shell_mode_name(s_shell.chosen_mode);
+    const char *title  = shell_chosen_name(&s_shell);
     const char *footer = screen_controls(CTRLS_PAGE);
     ui_page_t page;
 
-    if (s_shell.chosen_mode == APP_MODE_DIAGNOSTICS) {
-        ui_diag_t d = {
-            .caps       = s_shell.caps,
-            .linked     = chipgate_connected(&s_gate),
-            .transfers  = s_transfers,
-            .chips_sent = s_chips_sent,
-            .gate_id    = s_gate.gate_id,
-            .ui_dropped = tasks_ui_events_dropped(),
-        };
-        ui_page_diagnostics(&page, title, footer, &d);
-    } else if (!app_dispatch_running(&s_dispatch)) {
+    if (!app_dispatch_running(&s_dispatch)) {
         /* The shell is on the running screen with nothing behind it, which is
          * what a refused enter() looks like. */
         ui_page_refused(&page, title, footer,
                         app_dispatch_status_name(s_dispatch.last_status));
     } else {
+        /* A mode with no screen. app_mode_route() gives every mode the menu
+         * reaches one, and test_modes checks it; this is the last resort. */
         ui_page_status(&page, title, footer, s_status);
     }
 
@@ -715,7 +709,7 @@ static void render_settings(const ui_event_t *e, bool have_event)
 
 static void render_simple_mode(const ui_event_t *e, bool have_event)
 {
-    const char *title  = shell_mode_name(s_shell.chosen_mode);
+    const char *title  = shell_chosen_name(&s_shell);
     const char *footer = screen_controls(CTRLS_PAGE);
     ui_page_t page;
     ui_page_init(&page, title, footer);
@@ -784,9 +778,35 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
         ui_page_usb_storage(&page, title, footer, s_exposed);
         break;
 
+    case APP_MODE_DIAGNOSTICS: {
+        /* Redrawn every call: the counters change on their own, and a screen
+         * that only updates on input is indistinguishable from one that has
+         * stopped. */
+        ui_diag_t d = {
+            .caps       = s_shell.caps,
+            .linked     = chipgate_connected(&s_gate),
+            .transfers  = s_transfers,
+            .chips_sent = s_chips_sent,
+            .gate_id    = s_gate.gate_id,
+            .ui_dropped = tasks_ui_events_dropped(),
+        };
+        ui_page_diagnostics(&page, title, footer, &d);
+        break;
+    }
+
+    case APP_MODE_SELFTEST: {
+        ui_selftest_t t = {
+            .linked    = chipgate_connected(&s_gate),
+            .transfers = s_transfers,
+            .sent      = s_selftest_sent,
+        };
+        ui_page_selftest(&page, title, footer, &t);
+        break;
+    }
+
     case APP_MODE_SETTINGS:
     default:
-        /* Handled by its own renderer: it is a list, not a page of facts. */
+        /* Settings has its own renderer: it is a list, not a page of facts. */
         break;
     }
 
@@ -857,8 +877,7 @@ static void render_shell(void)
     }
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
 
-    const char *title = (s_shell.screen == SHELL_SCREEN_GAMES)
-                            ? "Choose game" : "gbagate";
+    const char *title = shell_screen_title(&s_shell);
 
     /*
      * A mode that refused to start says so here. Without it, being bounced
@@ -869,7 +888,7 @@ static void render_shell(void)
     const char *foot;
     if (s_last_refusal != APP_DISPATCH_OK) {
         foot = app_dispatch_status_name(s_last_refusal);
-    } else if (s_shell.screen == SHELL_SCREEN_GAMES) {
+    } else if (s_shell.screen != SHELL_SCREEN_MODES) {
         foot = "back: hold";
     } else {
         foot = GBAGATE_VARIANT_NAME;
@@ -896,6 +915,69 @@ static void leave_mode(void)
     shell_back(&s_shell);
     app_dispatch_from_shell(&s_dispatch, &s_shell);
     render_shell();
+}
+
+/* ---- applets ------------------------------------------------------------ */
+
+/*
+ * What applets get from the device. now_ms and the hint are refreshed before
+ * each frame; the game is filled in by the dispatcher's adapter on entry.
+ */
+static applet_env_t s_applet_env;
+
+static bool applet_open_db(cg_game_t game, chipdb_t *db) {
+#if defined(GBAGATE_HAS_CHIPDB)
+    for (unsigned i = 0; i < DB_COUNT; i++) {
+        /* BN6 JP has no database of its own; it shares the US one, as the
+         * Battle Chip mode does. */
+        cg_game_t want = game == CG_GAME_BN6_JP ? CG_GAME_BN6_US : game;
+        if (k_databases[i].game == want) {
+            return chipdb_open(db, k_databases[i].start,
+                               (size_t)(k_databases[i].end - k_databases[i].start));
+        }
+    }
+#else
+    (void)game; (void)db;
+#endif
+    return false;
+}
+
+static void render_applet(const ui_event_t *e, bool have_event)
+{
+    s_applet_env.now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_applet_env.hint   = screen_controls(CTRLS_PAGE);
+
+    if (have_event && e) {
+        app_mode_t m = s_shell.chosen_mode;
+        switch (e->type) {
+        case UI_EVENT_ENCODER:
+            applet_input_to(m, APPLET_IN_MOVE, e->a);
+            break;
+        case UI_EVENT_CHIP_SENT:
+            applet_input_to(m, APPLET_IN_CONFIRM, 0);
+            break;
+        case UI_EVENT_CHIP_OUT:
+            /* Back is the applet's first, so it can cancel something of its
+             * own; one it does not use leaves. */
+            if (!applet_input_to(m, APPLET_IN_BACK, 0)) {
+                leave_mode();
+                return;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    uint16_t *fb = st7735_framebuffer();
+    if (!fb) {
+        return;
+    }
+    ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
+    /* Every frame: an applet may animate, and its tick() runs regardless. */
+    applet_render(applet_for_mode(s_shell.chosen_mode), &s_applet_env, &canvas);
+    st7735_mark_all_dirty();
+    st7735_flush();
 }
 
 void ui_service(const ui_event_t *e, bool have_event) {
@@ -979,13 +1061,22 @@ void ui_service(const ui_event_t *e, bool have_event) {
      */
     app_dispatch_tick(&s_dispatch);
 
-    /* ---- the modes that are a page plus one action ---- */
-    if (s_shell.chosen_mode == APP_MODE_LINK_USB ||
-        s_shell.chosen_mode == APP_MODE_LINK_WIRELESS ||
-        s_shell.chosen_mode == APP_MODE_CHIP_SCAN ||
-        s_shell.chosen_mode == APP_MODE_USB_STORAGE ||
-        s_shell.chosen_mode == APP_MODE_SETTINGS) {
+    app_route_t route = app_mode_route(s_shell.chosen_mode);
 
+    /* A mode that did not start says why, whatever its screen would be. */
+    if (!app_dispatch_running(&s_dispatch) || route == APP_ROUTE_NONE ||
+        (route == APP_ROUTE_CHIPS && !s_db_open)) {
+        if (have_event && e && e->type == UI_EVENT_CHIP_OUT) {
+            leave_mode();
+            return;
+        }
+        render_mode_screen();
+        return;
+    }
+
+    switch (route) {
+    case APP_ROUTE_PAGE:
+    case APP_ROUTE_SETTINGS:
         /* The claim-back and the settings flush that used to be written out
          * here are now this mode's exit handler, so they also run when the
          * mode is left any other way. */
@@ -993,15 +1084,14 @@ void ui_service(const ui_event_t *e, bool have_event) {
             leave_mode();
             return;
         }
-        if (s_shell.chosen_mode == APP_MODE_SETTINGS) {
+        if (route == APP_ROUTE_SETTINGS) {
             render_settings(e, have_event);
         } else {
             render_simple_mode(e, have_event);
         }
         return;
-    }
 
-    if (s_shell.chosen_mode == APP_MODE_MULTIBOOT) {
+    case APP_ROUTE_ROMS:
         if (have_event && e) {
             switch (e->type) {
             case UI_EVENT_ENCODER:
@@ -1019,19 +1109,14 @@ void ui_service(const ui_event_t *e, bool have_event) {
         }
         render_rom_browser();
         return;
-    }
 
-    if (s_shell.chosen_mode != APP_MODE_CHIP_GATE || !s_db_open ||
-        !app_dispatch_running(&s_dispatch)) {
-        if (have_event && e && e->type == UI_EVENT_CHIP_OUT) {
-            leave_mode();
-            return;
-        }
-        /* Redraw every call: the diagnostics counters change on their own, and
-         * a screen that only updates on input is indistinguishable from one
-         * that has stopped. */
-        render_mode_screen();
+    case APP_ROUTE_APPLET:
+        render_applet(e, have_event);
         return;
+
+    case APP_ROUTE_CHIPS:
+    default:
+        break;   /* the chip screen, below */
     }
 
     if (have_event && e) {
@@ -1330,33 +1415,60 @@ static void mode_exit_settings(void *ctx) {
     settings_flush();   /* deferred save, flushed as the running screen is left */
 }
 
+/*
+ * Infrared needs nothing set up: the page reads the transmitter's state, and
+ * says "no IR fitted" when there is none -- more use than refusing a mode the
+ * menu shows. It had no entry here, so choosing it was refused with "no
+ * handler".
+ */
+static bool mode_enter_infrared(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    return true;
+}
+
 static bool mode_enter_diagnostics(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
     return true;   /* reads live state only; nothing to set up or refuse */
 }
 
 static const app_mode_handler_t k_handlers[] = {
-    { APP_MODE_CHIP_GATE,     mode_enter_chip_gate,   mode_exit_chip_gate,   NULL           },
-    { APP_MODE_LINK_USB,      mode_enter_link,        NULL,                  mode_tick_link },
-    { APP_MODE_LINK_WIRELESS, mode_enter_wireless,    mode_exit_wireless,    mode_tick_link },
-    { APP_MODE_MULTIBOOT,     mode_enter_multiboot,   mode_exit_multiboot,   NULL           },
-    { APP_MODE_CHIP_SCAN,     mode_enter_chip_scan,   NULL,                  NULL           },
-    { APP_MODE_USB_STORAGE,   mode_enter_usb_storage, mode_exit_usb_storage, NULL           },
-    { APP_MODE_SELFTEST,      mode_enter_selftest,    mode_exit_selftest,    NULL           },
-    { APP_MODE_SETTINGS,      mode_enter_settings,    mode_exit_settings,    NULL           },
-    { APP_MODE_DIAGNOSTICS,   mode_enter_diagnostics, NULL,                  NULL           },
+    { .mode = APP_MODE_CHIP_GATE, .enter = mode_enter_chip_gate, .exit = mode_exit_chip_gate, .tick = NULL },
+    { .mode = APP_MODE_LINK_USB, .enter = mode_enter_link, .exit = NULL, .tick = mode_tick_link },
+    { .mode = APP_MODE_LINK_WIRELESS, .enter = mode_enter_wireless, .exit = mode_exit_wireless, .tick = mode_tick_link },
+    { .mode = APP_MODE_MULTIBOOT, .enter = mode_enter_multiboot, .exit = mode_exit_multiboot, .tick = NULL },
+    { .mode = APP_MODE_CHIP_SCAN, .enter = mode_enter_chip_scan, .exit = NULL, .tick = NULL },
+    { .mode = APP_MODE_USB_STORAGE, .enter = mode_enter_usb_storage, .exit = mode_exit_usb_storage, .tick = NULL },
+    { .mode = APP_MODE_INFRARED, .enter = mode_enter_infrared, .exit = NULL, .tick = NULL },
+    { .mode = APP_MODE_SELFTEST, .enter = mode_enter_selftest, .exit = mode_exit_selftest, .tick = NULL },
+    { .mode = APP_MODE_SETTINGS, .enter = mode_enter_settings, .exit = mode_exit_settings, .tick = NULL },
+    { .mode = APP_MODE_DIAGNOSTICS, .enter = mode_enter_diagnostics, .exit = NULL, .tick = NULL },
 };
 #define HANDLER_COUNT (sizeof k_handlers / sizeof k_handlers[0])
 
+/* Every built-in mode, exactly once each. A mode the menu lists without a
+ * handler is refused with "no handler" -- how Infrared was shipped. */
+_Static_assert(HANDLER_COUNT == APP_MODE_COUNT,
+               "every built-in mode needs a handler in k_handlers");
+
+/* The built-in handlers, then one per applet (src/applet.c). */
+static app_mode_handler_t s_handlers[HANDLER_COUNT + APPLET_MAX];
+
 void gate_shell_start(uint32_t caps) {
     shell_init(&s_shell, caps);
+    applet_add_to_shell(&s_shell);   /* applets/applets.def, after the modes */
     /*
      * Bind the dispatcher to the handler table. caps is the same mask
      * shell_init() was given, which app_modes.h requires: the menu and the
      * dispatcher must agree about what each mode needs, or a mode lists but
      * refuses to start.
      */
-    app_dispatch_init(&s_dispatch, k_handlers, HANDLER_COUNT, caps, NULL);
+    memcpy(s_handlers, k_handlers, sizeof k_handlers);
+    size_t n = HANDLER_COUNT + applet_handlers(s_handlers + HANDLER_COUNT, APPLET_MAX);
+    s_applet_env.caps   = caps;
+    s_applet_env.open_db = applet_open_db;
+    s_applet_env.random  = esp_random;
+    applet_bind_env(&s_applet_env);
+    app_dispatch_init(&s_dispatch, s_handlers, n, caps, NULL);
     s_shell_ready = true;
     ui_service(NULL, false);
 }
