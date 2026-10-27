@@ -29,6 +29,14 @@ __attribute__((weak)) esp_err_t msc_storage_init(void) { return ESP_ERR_NOT_SUPP
 #error "platformio.ini must define VARIANT"
 #endif
 
+/* What USB became at boot, for the Link: USB page: the setting can change
+ * since, but only a restart applies it. */
+static bool s_gblink;       /* GB-Link's firmware runs on this image */
+static bool s_usb_gblink;   /* ... and USB is its adapter, not the drive */
+
+bool app_gblink_running(void) { return s_gblink; }
+bool app_usb_is_gblink(void) { return s_usb_gblink; }
+
 void app_main(void) {
     ESP_LOGI(TAG, "gbagate %s", GBAGATE_VARIANT_NAME);
 
@@ -123,10 +131,12 @@ void app_main(void) {
     if (v.resolved & FEAT_GBLINK) {
         extern void gblink_start(void);
         gblink_start();            /* answer before the host can ask */
+        s_gblink = true;
     }
     if (as_gblink) {
         extern esp_err_t usb_gblink_start(void);
         if (usb_gblink_start() == ESP_OK) {
+            s_usb_gblink = true;
             ESP_LOGI(TAG, "USB: GB-Link adapter");
         } else {
             ESP_LOGE(TAG, "USB: GB-Link personality failed to start");

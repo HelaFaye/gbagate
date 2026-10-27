@@ -76,6 +76,42 @@ def firmware_info_layout():
 
 
 @test
+def state_follows_the_mode_and_its_host():
+    """gblink_state(), behind the device's Link: USB page: idle until a host
+    starts a mode, that mode and that host while it runs, idle after Cancel;
+    the USB bus state as the port reports it."""
+    s = Sim()
+    try:
+        st = s.state()
+        check(st['configured'], 'the sim enumerates at boot')
+        check(st['mode'] == -1, 'no mode before a host asks: %r' % st)
+        check(st['status'] == 0 and st['statuses'] == 0, 'no status yet: %r' % st)
+        mark = len(s.status)
+        s.cmd(0x00, 0x01)
+        s.wait_status(ST['AwaitMode'], start=mark)
+        st = s.state()
+        check(st['mode'] == 1 and st['owner'] == 0, 'Gen 3 link, started over USB: %r' % st)
+        check(st['status'] == ST['AwaitMode'], 'the last word the mode sent: %r' % st)
+        check(st['frames'][0] >= 1 and st['frames'][1] == 0, 'one USB frame, none on CDC: %r' % st)
+        s.cmd(0x01)
+        eventually(lambda: s.state()['mode'] == -1, 3, 'Cancel ends the mode')
+        s._send('U', 0xFF)
+        eventually(lambda: not s.state()['configured'], 3, 'unplugged')
+    finally:
+        s.close()
+
+    s = Sim(serial=True)
+    try:
+        mark = len(s.status)
+        s.cmd(0x00, 0x01)
+        s.wait_status(ST['AwaitMode'], start=mark)
+        st = s.state()
+        check(st['mode'] == 1 and st['owner'] == 1, 'started over CDC: %r' % st)
+    finally:
+        s.close()
+
+
+@test
 def settings_persist_across_power_cycles():
     """launcher: 0x44 landing, 0x4B cable, 0x46 LED slot; all survive a reboot."""
     path = tempfile.mktemp()

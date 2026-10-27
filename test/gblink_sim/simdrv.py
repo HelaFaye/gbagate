@@ -16,6 +16,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 SIM = os.environ.get('GBLINK_SIM') or os.path.join(ROOT, 'build', 'gblink_sim', 'gblink_sim')
 
 EV_VCC, EV_LED, EV_REBOOT, EV_BOOTLOADER, EV_FLASH, EV_PHY, EV_WORD, EV_GB, EV_READY = range(1, 10)
+EV_STATE = 12
 
 ST = dict(AwaitMode=0xFF02, HandshakeReceived=0xFF03, LinkConnected=0xFF05,
           LinkReconnecting=0xFF06, LinkClosed=0xFF07, DeviceReady=0xFF08,
@@ -231,6 +232,17 @@ class Sim:
 
     def gba(self, *b):
         self._send('G', 0, bytes(b))
+
+    def state(self, timeout=3.0):
+        """gblink_state(), what the device's own Link: USB page shows."""
+        with self.cv:
+            mark = len(self.events)
+        self._send('I', 0)
+        b = self.wait_event(EV_STATE, timeout=timeout, start=mark)
+        conf, mode, owner, status, statuses = struct.unpack('<BbBHI', b[:9])
+        frames = struct.unpack('<4I', b[9:25])
+        return dict(configured=bool(conf), mode=mode, owner=owner, status=status,
+                    statuses=statuses, frames=frames)
 
     # -- waiting ---------------------------------------------------------
     def _wait(self, pred, timeout):

@@ -247,6 +247,96 @@ void ui_page_link_usb(ui_page_t *p, const char *title, const ui_keys_t *keys,
     }
 }
 
+const char *ui_gblink_mode_name(int mode) {
+    switch (mode) {
+    case 0x00: return "trade emulator";
+    case 0x01: return "GBA link";
+    case 0x02: return "Game Boy link";
+    case 0x03: return "Game Boy Printer";
+    case 0x04: return "Advance Wars";
+    case 0x05: return "e-Reader";
+    case 0x06: return "Battle Chip Gate";
+    case 0x07: return "Wireless Adapter";
+    default:   return mode >= 0x80 ? "gbagate mode" : "unknown mode";
+    }
+}
+
+const char *ui_gblink_status_name(uint16_t status) {
+    switch (status) {
+    case 0xFF00: return "GBA connected";
+    case 0xFF01: return "GBA unplugged";
+    case 0xFF02: return "waiting for game";
+    case 0xFF03: return "handshake";
+    case 0xFF04: return "handshake done";
+    case 0xFF05: return "linked";
+    case 0xFF06: return "reconnecting";
+    case 0xFF07: return "link closed";
+    case 0xFF08: return "ready";
+    case 0xFF09: return "trade finished";
+    case 0xFF0A: return "Game Boy mode on";
+    case 0xFF0B: return "printer ready";
+    case 0xFF0C: return "session over";
+    default:     return NULL;
+    }
+}
+
+/*
+ * The board as a GB-Link adapter: whether a PC has it, and what the PC's app
+ * is running. It used to show the word bridge, which nothing binds on
+ * hardware: the page claimed "PC found, pairing" with no PC attached.
+ */
+void ui_page_gblink(ui_page_t *p, const char *title, const ui_keys_t *keys,
+                    const ui_gblink_t *g) {
+    begin(p, title, keys, NULL);
+    if (!g) {
+        ui_page_add(p, COL_BAD, "not available");
+        ui_page_add(p, COL_TEXT_DIM, "this image has no");
+        ui_page_add(p, COL_TEXT_DIM, "USB link");
+        return;
+    }
+    if (!g->usb_is_gblink) {
+        ui_page_add(p, COL_WARN, "USB is the drive");
+        ui_page_add_wrapped(p, COL_TEXT_DIM,
+                            "set usb to GB-Link in Settings, then restart");
+        return;
+    }
+    if (g->mode >= 0 && g->owner == UI_HOST_LOCAL) {
+        /* the wireless link cable drives it; a PC is refused meanwhile */
+        ui_page_add(p, COL_WARN, "in use by Wireless");
+        ui_page_add(p, COL_TEXT_DIM, "%s", ui_gblink_mode_name(g->mode));
+        return;
+    }
+    if (g->mode < 0) {
+        if (!g->configured && g->owner != UI_HOST_BRIDGE) {
+            ui_page_add(p, COL_WARN, "waiting for the PC");
+            ui_page_add(p, COL_TEXT_DIM, "plug USB into a PC");
+            ui_page_add(p, COL_TEXT_DIM, "or phone, then open");
+            ui_page_add(p, COL_TEXT_DIM, "a GB-Link app");
+        } else if (!g->host_seen) {
+            ui_page_add(p, COL_GOOD, "connected to PC");
+            ui_page_add(p, COL_TEXT_DIM, "open a GB-Link app");
+        } else {
+            ui_page_add(p, COL_GOOD, "app connected");
+            ui_page_add(p, COL_TEXT_DIM, "no mode running");
+        }
+        return;
+    }
+    static const char *const via[] = { "via WebUSB", "via serial",
+                                       "via companion", "" };
+    ui_page_add(p, COL_GOOD, "%s", ui_gblink_mode_name(g->mode));
+    ui_page_add(p, COL_TEXT_DIM, "%s", g->owner < 3 ? via[g->owner] : "");
+    const char *st = ui_gblink_status_name(g->status);
+    if (st) {
+        uint16_t c = g->status == 0xFF05 ? COL_GOOD
+                   : (g->status == 0xFF01 || g->status == 0xFF06) ? COL_WARN
+                   : COL_TEXT;
+        ui_page_add(p, c, "%s", st);
+    }
+    if (!g->configured && g->owner == UI_HOST_USB) {
+        ui_page_add(p, COL_BAD, "USB unplugged");
+    }
+}
+
 /*
  * The wireless link cable: GB-Link's relay, run against another board over
  * ESP-NOW (src/gbl_peer.c). Retransmits climbing while frames still flow is a

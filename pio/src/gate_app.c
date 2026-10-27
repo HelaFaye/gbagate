@@ -79,6 +79,37 @@ __attribute__((weak)) bool     ir_send(uint16_t c)   { (void)c; return false; }
 extern link_bridge_t *tasks_bridge(void);
 
 #if !defined(GBAGATE_QEMU)
+#include "gblink_port.h"
+extern bool app_gblink_running(void);
+extern bool app_usb_is_gblink(void);
+
+_Static_assert((int)GBLINK_HOST_USB == (int)UI_HOST_USB &&
+               (int)GBLINK_HOST_SERIAL == (int)UI_HOST_SERIAL &&
+               (int)GBLINK_HOST_BRIDGE == (int)UI_HOST_BRIDGE &&
+               (int)GBLINK_HOST_LOCAL == (int)UI_HOST_LOCAL,
+               "ui_screens.h numbers the GB-Link hosts as gblink_port.h does");
+
+/* Link: USB's state, from GB-Link's firmware. False on an image without it. */
+static bool gblink_page_state(ui_gblink_t *g) {
+    if (!app_gblink_running()) {
+        return false;
+    }
+    gblink_state_t st;
+    gblink_state(&st);
+    *g = (ui_gblink_t){
+        .usb_is_gblink = app_usb_is_gblink(),
+        .configured    = st.usb_configured,
+        .mode          = st.mode,
+        .owner         = st.owner,
+        .status        = st.last_status,
+        .host_seen     = st.frames[GBLINK_HOST_USB] + st.frames[GBLINK_HOST_SERIAL] +
+                         st.frames[GBLINK_HOST_BRIDGE] != 0,
+    };
+    return true;
+}
+#endif
+
+#if !defined(GBAGATE_QEMU)
 #include "gbl_peer.h"
 /* The wireless link cable (port/esp32s3/peer_espnow_esp32s3.c,
  * port/gblink/peer_glue.cpp). */
@@ -738,12 +769,20 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
     }
 #endif
 
-    case APP_MODE_LINK_USB:
 #if defined(GBAGATE_QEMU)
+    case APP_MODE_LINK_USB:
     case APP_MODE_LINK_WIRELESS:   /* QEMU has no radio: the UART bridge */
-#endif
         ui_page_link_usb(&page, title, footer, tasks_bridge());
         break;
+#else
+    case APP_MODE_LINK_USB: {
+        /* The GB-Link adapter itself: what a PC's app is running on it. */
+        ui_gblink_t g;
+        bool have = gblink_page_state(&g);
+        ui_page_gblink(&page, title, footer, have ? &g : NULL);
+        break;
+    }
+#endif
 
     case APP_MODE_INFRARED: {
         ui_ir_t ir = {
@@ -1360,8 +1399,13 @@ static void mode_exit_selftest(void *ctx) {
 
 static bool mode_enter_link(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
+#if defined(GBAGATE_QEMU)
     /* The bridge is created by tasks.c; a build without it cannot link. */
     return tasks_bridge() != NULL;
+#else
+    /* The page says why when there is no adapter: more use than a refusal. */
+    return true;
+#endif
 }
 
 /*
@@ -1398,10 +1442,12 @@ static void mode_tick_link(void *ctx) {
      * else calls bridge_ping(), so without this tick rtt_us stays the zero it
      * initialised to and the screen cannot tell a usable link from a dead one.
      */
+#if defined(GBAGATE_QEMU)
     link_bridge_t *b = tasks_bridge();
     if (b) {
         bridge_ping(b, (uint32_t)esp_timer_get_time());
     }
+#endif
 }
 
 static bool mode_enter_settings(void *ctx, cg_game_t game, bool has_game) {

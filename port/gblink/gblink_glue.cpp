@@ -60,6 +60,23 @@ extern "C" __attribute__((weak)) bool gblink_bridge_write(const uint8_t*, size_t
     return false;
 }
 
+static_assert(static_cast<int>(Transport::Id::Usb) == GBLINK_HOST_USB &&
+              static_cast<int>(Transport::Id::Serial) == GBLINK_HOST_SERIAL &&
+              static_cast<int>(Transport::Id::BridgeUart) == GBLINK_HOST_BRIDGE &&
+              static_cast<int>(Transport::Id::Local) == GBLINK_HOST_LOCAL,
+              "gblink_port.h's GBLINK_HOST_* must number the hosts as Transport::Id does");
+
+extern "C" void gblink_state(gblink_state_t* out)
+{
+    out->usb_configured = UsbLayer::getInstance().configured();
+    out->mode = Transport::mode();
+    out->owner = static_cast<uint8_t>(Transport::owner());
+    out->last_status = Transport::lastStatus();
+    out->statuses = Transport::statusCount();
+    for (int i = 0; i < GBLINK_HOSTS; i++)
+        out->frames[i] = Transport::frames(static_cast<Transport::Id>(i));
+}
+
 static void control_thread(void*, void*, void*)
 {
     gblink_firmware_main();

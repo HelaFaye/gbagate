@@ -54,4 +54,15 @@ namespace Transport
     void setLocalSink(LocalSink sink, void* userData);
     void injectCommand(std::span<const uint8_t> data);
     void injectData(std::span<const uint8_t> data);
+
+    // gbagate (PATCHES.md P14). What the adapter is doing, for the device's
+    // own screen: the mode Control is running (-1 between modes), the last
+    // status word a mode reported and how many, and how many host frames each
+    // transport delivered. Written from the firmware's threads, read from the
+    // UI's; each value is one atomic word.
+    void noteMode(int mode);
+    int mode();
+    uint16_t lastStatus();
+    uint32_t statusCount();
+    uint32_t frames(Id id);
 }

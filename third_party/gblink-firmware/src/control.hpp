@@ -64,6 +64,7 @@ public:
         // must not clobber it below. The variant travels with the mode.
         const Mode mode = m_mode;
         const uint8_t modeVariant = m_modeVariant;
+        Transport::noteMode(static_cast<int>(mode));   // gbagate (PATCHES.md P14)
         sendLinkStatus(LinkStatus::DeviceReady);
 
         switch (mode)
@@ -213,6 +214,7 @@ public:
         }
 
         m_currentModule = nullptr;
+        Transport::noteMode(-1);   // gbagate (PATCHES.md P14)
         applyLedForSlot(LED_SLOT_IDLE); // green = connected, no active mode
     }
 

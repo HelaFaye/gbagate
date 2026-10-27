@@ -95,6 +95,30 @@ bool gblink_peer_radio_send(const uint8_t *dgram, size_t len);
  * the firmware's own threads; must not block. */
 void gblink_peer_observe_status(uint16_t status);
 
+/* ---- what the adapter is doing (PATCHES.md P14) ------------------------------- */
+
+/* The hosts that can drive it, as Transport::Id numbers them. */
+enum {
+    GBLINK_HOST_USB = 0,     /* WebUSB: the GB-Link web apps, the launcher  */
+    GBLINK_HOST_SERIAL,      /* the CDC-ACM port: WebSerial, Celio-Client   */
+    GBLINK_HOST_BRIDGE,      /* the bridge UART to a companion MCU          */
+    GBLINK_HOST_LOCAL,       /* in-firmware: the wireless link cable        */
+    GBLINK_HOSTS
+};
+
+typedef struct {
+    bool     usb_configured;   /* a PC has enumerated the adapter           */
+    int      mode;             /* the GB-Link mode running, -1 for none     */
+    uint8_t  owner;            /* GBLINK_HOST_*: whose SetMode started it   */
+    uint16_t last_status;      /* the last 0xFFxx status word; 0 for none   */
+    uint32_t statuses;         /* status words reported since boot          */
+    uint32_t frames[GBLINK_HOSTS]; /* host frames delivered, per host       */
+} gblink_state_t;
+
+/* A snapshot, from any task. Each field is read atomically on its own; a
+ * mode starting mid-call can pair a new mode with the last one's status. */
+void gblink_state(gblink_state_t *out);
+
 /* ---- lifecycle ---------------------------------------------------------------- */
 
 /* Start the GB-Link control thread: run SYS_INITs, start static threads, then

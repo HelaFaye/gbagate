@@ -1,5 +1,7 @@
 #include "transport.hpp"
 
+#include <atomic>
+
 #include "usbLayer.hpp"
 #include "serialLayer.hpp"
 
@@ -22,8 +24,22 @@ namespace Transport
         LocalSink g_localSink = nullptr;
         void* g_localUserData = nullptr;
 
+        // gbagate (PATCHES.md P14)
+        std::atomic<int> g_mode{-1};
+        std::atomic<uint16_t> g_lastStatus{0};
+        std::atomic<uint32_t> g_statuses{0};
+        std::atomic<uint32_t> g_frames[4] = {};
+
+        void noteStatus(std::span<const uint8_t, 2> data)
+        {
+            g_lastStatus.store(static_cast<uint16_t>(data[0] | (data[1] << 8)),
+                               std::memory_order_relaxed);
+            g_statuses.fetch_add(1, std::memory_order_relaxed);
+        }
+
         bool sendStatusTo(Id id, std::span<const uint8_t, 2> data)
         {
+            noteStatus(data);
             if (id == Id::Local)
             {
                 if (g_localSink) g_localSink(true, data, g_localUserData);
@@ -58,6 +74,7 @@ namespace Transport
     {
         if (g_localSink != nullptr && id != Id::Local) return false;
         g_active = id;
+        g_frames[static_cast<uint8_t>(id)].fetch_add(1, std::memory_order_relaxed);
         return true;
     }
 
@@ -92,12 +109,21 @@ namespace Transport
     void injectCommand(std::span<const uint8_t> data)
     {
         setActive(Id::Local);
+        g_frames[static_cast<uint8_t>(Id::Local)].fetch_add(1, std::memory_order_relaxed);
         if (g_cmdHandler) g_cmdHandler(data, g_cmdUserData);
     }
 
     void injectData(std::span<const uint8_t> data)
     {
         setActive(Id::Local);
+        g_frames[static_cast<uint8_t>(Id::Local)].fetch_add(1, std::memory_order_relaxed);
         if (g_dataHandler) g_dataHandler(data, g_dataUserData);
     }
+
+    // gbagate (PATCHES.md P14)
+    void noteMode(int m) { g_mode.store(m, std::memory_order_relaxed); }
+    int mode() { return g_mode.load(std::memory_order_relaxed); }
+    uint16_t lastStatus() { return g_lastStatus.load(std::memory_order_relaxed); }
+    uint32_t statusCount() { return g_statuses.load(std::memory_order_relaxed); }
+    uint32_t frames(Id id) { return g_frames[static_cast<uint8_t>(id)].load(std::memory_order_relaxed); }
 }

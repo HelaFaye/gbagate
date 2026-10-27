@@ -16,7 +16,7 @@
 # one at a time, several minutes apart.
 cd "$(dirname "$0")/.." || exit 1
 COMMON="-std=c11 -Wall -Wextra -Wshadow -Werror -fsyntax-only
-        -Iqemu/stubs -Isrc -Iport/esp32s3 -Ipio/src
+        -Iqemu/stubs -Isrc -Iport/esp32s3 -Ipio/src -Iport/gblink
         -DVARIANT=VARIANT_GATE -DGBAGATE_VARIANT_NAME=\"gate\"
         -DGBAGATE_HAS_CHIPDB=1"
 

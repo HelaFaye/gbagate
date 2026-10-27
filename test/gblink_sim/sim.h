@@ -20,7 +20,10 @@ enum {
                                 link mode clocks it; the printer's GB does) */
     SIM_EV_READY       = 9,  /* the firmware thread is running          */
     SIM_EV_PEER_STATUS = 10, /* [lo hi] status seen by the wireless cable */
-    SIM_EV_RFU         = 11  /* the librfu game: see rfu_game.c           */
+    SIM_EV_RFU         = 11, /* the librfu game: see rfu_game.c           */
+    SIM_EV_STATE       = 12  /* gblink_state(), on an 'I' record: [configured,
+                              * mode i8, owner, status lo hi, u32 statuses,
+                              * u32 frames x4]                              */
 };
 
 void sim_emit(char kind, uint8_t ep, const uint8_t *data, size_t len);

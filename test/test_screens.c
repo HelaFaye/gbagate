@@ -452,6 +452,56 @@ static void test_pages(void) {
     lead("usb-none", &p, "not available", COL_BAD);
     page("usb-none", &p);
 
+    /* Link: USB on hardware: GB-Link's own state, not the word bridge */
+    ui_gblink_t g = { .usb_is_gblink = true, .mode = -1 };
+    ui_page_gblink(&p, "Link: USB", foot, &g);
+    lead("gbl-unplugged", &p, "waiting for the PC", COL_WARN);
+    page("gbl-unplugged", &p);
+    g.configured = true;
+    ui_page_gblink(&p, "Link: USB", foot, &g);
+    lead("gbl-enumerated", &p, "connected to PC", COL_GOOD);
+    check("gbl: says what to open", strcmp(p.line[1], "open a GB-Link app"), 0);
+    page("gbl-enumerated", &p);
+    g.host_seen = true;
+    ui_page_gblink(&p, "Link: USB", foot, &g);
+    lead("gbl-idle", &p, "app connected", COL_GOOD);
+    g.mode = 0x01; g.owner = UI_HOST_USB; g.status = 0xFF02;
+    ui_page_gblink(&p, "Link: USB", foot, &g);
+    lead("gbl-mode", &p, "GBA link", COL_GOOD);
+    check("gbl: who drives it", strcmp(p.line[1], "via WebUSB"), 0);
+    check("gbl: its status", strcmp(p.line[2], "waiting for game"), 0);
+    g.status = 0xFF05;
+    ui_page_gblink(&p, "Link: USB", foot, &g);
+    check("gbl: linked, in green", p.colour[2], COL_GOOD);
+    page("gbl-linked", &p);
+    g.configured = false;
+    ui_page_gblink(&p, "Link: USB", foot, &g);
+    check("gbl: unplugged mid-mode", strcmp(p.line[3], "USB unplugged"), 0);
+    g.configured = true; g.mode = 0x07; g.owner = UI_HOST_SERIAL; g.status = 0xFF06;
+    ui_page_gblink(&p, "Link: USB", foot, &g);
+    check("gbl: adapter over serial", strcmp(p.line[0], "Wireless Adapter") ||
+                                      strcmp(p.line[1], "via serial"), 0);
+    check("gbl: reconnecting warns", p.colour[2], COL_WARN);
+    g.mode = 0x01; g.owner = UI_HOST_LOCAL;
+    ui_page_gblink(&p, "Link: USB", foot, &g);
+    lead("gbl-local", &p, "in use by Wireless", COL_WARN);
+    g.mode = -1; g.owner = UI_HOST_BRIDGE; g.configured = false; g.host_seen = true;
+    ui_page_gblink(&p, "Link: USB", foot, &g);
+    lead("gbl-bridge-idle", &p, "app connected", COL_GOOD);
+    g.usb_is_gblink = false;
+    ui_page_gblink(&p, "Link: USB", foot, &g);
+    lead("gbl-drive", &p, "USB is the drive", COL_WARN);
+    page("gbl-drive", &p);
+    ui_page_gblink(&p, "Link: USB", foot, NULL);
+    lead("gbl-none", &p, "not available", COL_BAD);
+    for (int m = -1; m < 0x100; m++) {
+        check("gbl: every mode has a name", ui_gblink_mode_name(m) != NULL, 1);
+    }
+    for (unsigned w = 0xFF00; w <= 0xFF0C; w++) {
+        check("gbl: every status has a name", ui_gblink_status_name((uint16_t)w) != NULL, 1);
+    }
+    check("gbl: debug word unnamed", ui_gblink_status_name(0xFFFF) == NULL, 1);
+
     gbl_peer_t peer;
     memset(&peer, 0, sizeof peer);
     ui_page_wireless(&p, "Link: Wireless", foot, &peer, NULL, "Gen 3 cable");

@@ -100,6 +100,29 @@ void ui_page_status(ui_page_t *p, const char *title, const ui_keys_t *keys,
 void ui_page_link_usb(ui_page_t *p, const char *title, const ui_keys_t *keys,
                       const link_bridge_t *b);
 
+/*
+ * Link: USB on hardware: the GB-Link adapter the board is to a PC
+ * (gblink_port.h's gblink_state()). The hosts are numbered as GBLINK_HOST_*.
+ */
+enum { UI_HOST_USB = 0, UI_HOST_SERIAL, UI_HOST_BRIDGE, UI_HOST_LOCAL };
+
+typedef struct {
+    bool     usb_is_gblink;  /* the USB setting is GB-Link, not the drive    */
+    bool     configured;     /* a PC has enumerated it                        */
+    int      mode;           /* GB-Link mode running, -1 for none             */
+    uint8_t  owner;          /* UI_HOST_*: who started it                     */
+    uint16_t status;         /* the last 0xFFxx status word, 0 for none       */
+    bool     host_seen;      /* a PC app has sent a command since boot        */
+} ui_gblink_t;
+
+/* g is NULL when the image has no GB-Link adapter. */
+void ui_page_gblink(ui_page_t *p, const char *title, const ui_keys_t *keys,
+                    const ui_gblink_t *g);
+
+/* GB-Link's names, short enough for a line: a mode byte, a status word. */
+const char *ui_gblink_mode_name(int mode);
+const char *ui_gblink_status_name(uint16_t status);
+
 /* Link: Wireless. mac is the locked peer, or NULL before one is chosen. */
 void ui_page_wireless(ui_page_t *p, const char *title, const ui_keys_t *keys,
                       const gbl_peer_t *peer, const uint8_t *mac,

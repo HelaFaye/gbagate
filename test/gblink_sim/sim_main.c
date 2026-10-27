@@ -86,6 +86,20 @@ int main(int argc, char **argv) {
                 gblink_peer_stop();
             }
             break;
+        case 'I': {
+            gblink_state_t st;
+            gblink_state(&st);
+            uint8_t b[5 + 4 + 4 * GBLINK_HOSTS];
+            b[0] = st.usb_configured;
+            b[1] = (uint8_t)(int8_t)st.mode;
+            b[2] = st.owner;
+            b[3] = (uint8_t)st.last_status;
+            b[4] = (uint8_t)(st.last_status >> 8);
+            memcpy(b + 5, &st.statuses, 4);
+            memcpy(b + 9, st.frames, sizeof st.frames);
+            sim_event(SIM_EV_STATE, b, sizeof b);
+            break;
+        }
         case 'Q': exit(0);
         default: break;
         }

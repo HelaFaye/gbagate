@@ -36,7 +36,6 @@ static const char *TAG = "tasks";
  */
 #define PRIO_LINK      (configMAX_PRIORITIES - 1)
 #define PRIO_UI        5
-#define PRIO_TRANSPORT 4
 #define PRIO_STORAGE   3
 
 /*
@@ -134,18 +133,6 @@ static void ui_task(void *arg) {
     }
 }
 
-#ifndef GBAGATE_QEMU
-static void transport_task(void *arg) {
-    (void)arg;
-    for (;;) {
-        /* bridge_tick can emit a packet, so it belongs here and not on core 1:
-         * core 1 must never touch a transport. */
-        bridge_tick(&s_bridge, (uint32_t)esp_timer_get_time());
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-}
-#endif
-
 /* ---- setup -------------------------------------------------------------- */
 
 void tasks_start(uint32_t features) {
@@ -157,8 +144,7 @@ void tasks_start(uint32_t features) {
      * Bring the emulated link up before the tasks that use it: open a default
      * database so the gate has an identity to announce (MMBN6 US = "bn6g"),
      * start the UART bridge, and route inbound words into link_source. The
-     * uart_rx task drives bridge_tick itself, so the transport_task below is
-     * not needed here.
+     * uart_rx task drives bridge_tick itself.
      */
     gate_open_database("bn6g");
     if (transport_uart_start(&s_bridge) == ESP_OK) {
@@ -178,12 +164,13 @@ void tasks_start(uint32_t features) {
                                 PRIO_UI, NULL, CORE_APP);
     }
 
-#ifndef GBAGATE_QEMU
-    if (features & (FEAT_ESPNOW | FEAT_USB_CDC)) {
-        xTaskCreatePinnedToCore(transport_task, "transport", 4096, NULL,
-                                PRIO_TRANSPORT, NULL, CORE_APP);
-    }
-#endif
+    /*
+     * No transport task on hardware. It ticked the word bridge, which nothing
+     * binds there (USB is GB-Link's and the radio is the wireless cable's):
+     * with no peer, each tick announced to nobody and the Link: USB page,
+     * which showed the bridge, read "PC found, pairing" with no PC attached.
+     * Under QEMU the UART task drives the bridge itself.
+     */
 
 #if !defined(GBAGATE_QEMU)
     /*
