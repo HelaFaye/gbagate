@@ -63,6 +63,12 @@ bool gblink_bridge_write(const uint8_t *data, size_t len) {
     return true;
 }
 
+/* The WiFi host's WebSocket stream (PATCHES.md P15): raw bytes, 'N'. */
+bool gblink_net_write(const uint8_t *data, size_t len) {
+    sim_emit('N', 0, data, len);
+    return true;
+}
+
 /* ---- hardware ------------------------------------------------------------- */
 
 static uint8_t s_led[4];

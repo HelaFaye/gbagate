@@ -46,6 +46,8 @@ bool gblink_cdc_write(const uint8_t *data, size_t len);
 /* The bridge UART to a companion MCU (upstream's gblink,bridge-uart: GP8/GP9
  * at 921600 on the RP2040 board). Weak default: no bridge, frames dropped. */
 bool gblink_bridge_write(const uint8_t *data, size_t len);
+/* The WiFi host's stream (P15). Weak default: no network, frames dropped. */
+bool gblink_net_write(const uint8_t *data, size_t len);
 
 /* Board hardware for the 0x4x commands. A board without the part makes the
  * call a no-op; see gblink_hw_caps(). */
@@ -70,6 +72,10 @@ void gblink_cdc_on_receive(const uint8_t *data, size_t len);
 /* Bytes from the bridge UART, any fragmentation, from task context -- not from
  * the UART interrupt: a command can enter a whole link mode. */
 void gblink_bridge_on_receive(const uint8_t *data, size_t len);
+/* A host on the board's WiFi (PATCHES.md P15): the CDC port's byte stream,
+ * framed the same way, carried in WebSocket binary messages. Any
+ * fragmentation, from task context. */
+void gblink_net_on_receive(const uint8_t *data, size_t len);
 
 /* ---- wireless link cable (port/gblink/peer_glue.cpp, src/gbl_peer.c) --------- */
 
@@ -95,6 +101,39 @@ bool gblink_peer_radio_send(const uint8_t *dgram, size_t len);
  * the firmware's own threads; must not block. */
 void gblink_peer_observe_status(uint16_t status);
 
+/* ---- online play through Celio (port/gblink/celio_glue.cpp, src/celio.c) ----- */
+
+/* Join a Celio session (session id), or create one (NULL or ""), and drive
+ * the adapter for it as the local host, like the wireless cable. Both are
+ * carried out on the client's own thread and return once it has. */
+void gblink_celio_start(const char *session);
+void gblink_celio_stop(void);
+
+/* Supplied by the port's network layer. connect(true): open a WebSocket to
+ * <celio>/socket.io/?EIO=4&transport=websocket, and keep reopening it after a
+ * drop until connect(false). send: one text frame; false if not connected.
+ * Weak defaults: no network. */
+void gblink_celio_ws_connect(bool on);
+bool gblink_celio_ws_send(const char *text, size_t len);
+/* 32 random bits, for the uuids Celio's packets carry. */
+uint32_t gblink_celio_random(void);
+
+/* Called by the network layer, from its own task. */
+void gblink_celio_ws_open(void);
+void gblink_celio_ws_closed(void);
+void gblink_celio_ws_text(const char *text, size_t len);
+
+typedef struct {
+    int      state;              /* celio_state_t                           */
+    char     session[33];        /* the session id, to give the partner     */
+    char     error[40];          /* why it failed                           */
+    uint16_t link_status;        /* the adapter's last status word          */
+    uint32_t up, down, lost, reconnects;
+} gblink_celio_view_t;
+
+/* For the UI, from any task. */
+void gblink_celio_view(gblink_celio_view_t *out);
+
 /* ---- what the adapter is doing (PATCHES.md P14) ------------------------------- */
 
 /* The hosts that can drive it, as Transport::Id numbers them. */
@@ -102,7 +141,8 @@ enum {
     GBLINK_HOST_USB = 0,     /* WebUSB: the GB-Link web apps, the launcher  */
     GBLINK_HOST_SERIAL,      /* the CDC-ACM port: WebSerial, Celio-Client   */
     GBLINK_HOST_BRIDGE,      /* the bridge UART to a companion MCU          */
-    GBLINK_HOST_LOCAL,       /* in-firmware: the wireless link cable        */
+    GBLINK_HOST_LOCAL,       /* in-firmware: the wireless cable, Celio      */
+    GBLINK_HOST_NET,         /* a WebSocket on the board's WiFi             */
     GBLINK_HOSTS
 };
 

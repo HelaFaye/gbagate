@@ -38,6 +38,8 @@ public:
     static SerialLayer& getInstance();
     // The bridge UART to a companion MCU (gblink_bridge_write).
     static SerialLayer& getBridgeInstance();
+    // gbagate (PATCHES.md P15): the WebSocket host on the board's WiFi.
+    static SerialLayer& getNetInstance();
 
     // Upstream counts its UART receive-ring overflows here. Bytes are handed
     // over synchronously in this port, so there is no ring and this stays 0.

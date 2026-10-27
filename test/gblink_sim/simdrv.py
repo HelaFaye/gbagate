@@ -98,7 +98,7 @@ def run_tests(name, tests, argv):
 
 
 class Sim:
-    def __init__(self, flash=None, serial=False):
+    def __init__(self, flash=None, serial=False, net=False):
         args = [SIM] + ([flash] if flash else [])
         self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         self.cv = threading.Condition()
@@ -110,6 +110,9 @@ class Sim:
         self.bridge = bytearray()   # raw bytes on the bridge UART
         self.bridge_frames = []     # (channel, payload) parsed from them
         self.serial = serial
+        self.net = net         # host frames over the WiFi WebSocket ('N')
+        self.netbuf = bytearray()
+        self.net_bytes = 0     # bytes the board sent that way
         self.on_radio = None   # callable(bytes): datagrams the peer engine sends
         self.on_bridge = None  # callable(bytes): raw bridge UART bytes, as they come
         self.t = threading.Thread(target=self._reader, daemon=True)
@@ -139,6 +142,10 @@ class Sim:
                 elif kind == ord('C'):
                     self.cdc += body
                     self._parse_cdc()
+                elif kind == ord('N'):
+                    self.net_bytes += len(body)
+                    self.netbuf += body
+                    self._parse_stream(self.netbuf)
                 elif kind == ord('B'):
                     if self.on_bridge:
                         self.on_bridge(body)
@@ -152,16 +159,19 @@ class Sim:
                 self.cv.notify_all()
 
     def _parse_cdc(self):
+        self._parse_stream(self.cdc)
+
+    def _parse_stream(self, buf):
         while True:
-            i = self.cdc.find(b'GB')
-            if i < 0 or len(self.cdc) < i + 5:
+            i = buf.find(b'GB')
+            if i < 0 or len(buf) < i + 5:
                 return
-            ch = self.cdc[i + 2]
-            n = self.cdc[i + 3] | (self.cdc[i + 4] << 8)
-            if len(self.cdc) < i + 5 + n:
+            ch = buf[i + 2]
+            n = buf[i + 3] | (buf[i + 4] << 8)
+            if len(buf) < i + 5 + n:
                 return
-            body = bytes(self.cdc[i + 5:i + 5 + n])
-            del self.cdc[:i + 5 + n]
+            body = bytes(buf[i + 5:i + 5 + n])
+            del buf[:i + 5 + n]
             if ch == 2:
                 self.status.append(body[0] | (body[1] << 8))
             elif ch == 1:
@@ -209,14 +219,18 @@ class Sim:
     # -- host side -------------------------------------------------------
     def cmd(self, *b):
         body = bytes(b[0]) if len(b) == 1 and not isinstance(b[0], int) else bytes(b)
-        if self.serial:
+        if self.net:
+            self._send('N', 0, b'GB\x00' + struct.pack('<H', len(body)) + body)
+        elif self.serial:
             self._send('C', 0, b'GB\x00' + struct.pack('<H', len(body)) + body)
         else:
             self._send('U', 0x01, body)
 
     def write_data(self, body):
         body = bytes(body)
-        if self.serial:
+        if self.net:
+            self._send('N', 0, b'GB\x01' + struct.pack('<H', len(body)) + body)
+        elif self.serial:
             self._send('C', 0, b'GB\x01' + struct.pack('<H', len(body)) + body)
         else:
             self._send('U', 0x02, body)
@@ -240,7 +254,7 @@ class Sim:
         self._send('I', 0)
         b = self.wait_event(EV_STATE, timeout=timeout, start=mark)
         conf, mode, owner, status, statuses = struct.unpack('<BbBHI', b[:9])
-        frames = struct.unpack('<4I', b[9:25])
+        frames = struct.unpack('<5I', b[9:29])
         return dict(configured=bool(conf), mode=mode, owner=owner, status=status,
                     statuses=statuses, frames=frames)
 

@@ -112,6 +112,30 @@ def state_follows_the_mode_and_its_host():
 
 
 @test
+def wifi_host_runs_a_link_mode():
+    """PATCHES.md P15: a host on the board's WiFi speaks the CDC framing over a
+    WebSocket and gets the same adapter: SetMode starts the relay, its status
+    and data come back on that host and no other."""
+    s = Sim(net=True)
+    try:
+        s.cmd(0x0F)
+        d = s.wait_data(lambda d: d[0] == 0x0F)
+        check(tuple(d[1:4]) == (2, 2, 7), 'firmware info over WiFi: %s' % d.hex())
+        mark = len(s.status)
+        s.cmd(0x00, 0x01)
+        s.wait_status(ST['AwaitMode'], start=mark)
+        st = s.state()
+        check(st['owner'] == 4 and st['mode'] == 1, 'the WiFi host owns the mode: %r' % st)
+        check(st['frames'][4] >= 2 and st['frames'][0] == 0, 'frames counted per host: %r' % st)
+        check(not s.cdc, 'nothing on the CDC port')
+        check(s.net_bytes > 0, 'replies on the WebSocket')
+        s.cmd(0x01)
+        eventually(lambda: s.state()['mode'] == -1, 3, 'Cancel over WiFi ends it')
+    finally:
+        s.close()
+
+
+@test
 def settings_persist_across_power_cycles():
     """launcher: 0x44 landing, 0x4B cable, 0x46 LED slot; all survive a reboot."""
     path = tempfile.mktemp()

@@ -32,6 +32,7 @@ export class SimDevice extends EventEmitter {
       const ep = this.buf[1];
       const body = Buffer.from(this.buf.subarray(4, 4 + n));
       this.buf = this.buf.subarray(4 + n);
+      this.emit('record', kind, ep, body);
       if (kind === 'U') this.emit('usb', ep, body);
       else if (kind === 'E') {
         if (ep === 9) this.emit('ready');

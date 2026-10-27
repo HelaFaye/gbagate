@@ -21,9 +21,12 @@ enum {
     SIM_EV_READY       = 9,  /* the firmware thread is running          */
     SIM_EV_PEER_STATUS = 10, /* [lo hi] status seen by the wireless cable */
     SIM_EV_RFU         = 11, /* the librfu game: see rfu_game.c           */
-    SIM_EV_STATE       = 12  /* gblink_state(), on an 'I' record: [configured,
+    SIM_EV_STATE       = 12, /* gblink_state(), on an 'I' record: [configured,
                               * mode i8, owner, status lo hi, u32 statuses,
                               * u32 frames x4]                              */
+    SIM_EV_CELIO       = 13  /* gblink_celio_view(), on a 'K' record: [state,
+                              * status lo hi, u32 up down lost reconnects,
+                              * session NUL, error NUL]                     */
 };
 
 void sim_emit(char kind, uint8_t ep, const uint8_t *data, size_t len);

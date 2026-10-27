@@ -301,13 +301,13 @@ void ui_page_gblink(ui_page_t *p, const char *title, const ui_keys_t *keys,
         return;
     }
     if (g->mode >= 0 && g->owner == UI_HOST_LOCAL) {
-        /* the wireless link cable drives it; a PC is refused meanwhile */
-        ui_page_add(p, COL_WARN, "in use by Wireless");
+        /* the wireless cable or online play drives it; a PC is refused */
+        ui_page_add(p, COL_WARN, "in use by a link");
         ui_page_add(p, COL_TEXT_DIM, "%s", ui_gblink_mode_name(g->mode));
         return;
     }
     if (g->mode < 0) {
-        if (!g->configured && g->owner != UI_HOST_BRIDGE) {
+        if (!g->configured && g->owner != UI_HOST_BRIDGE && g->owner != UI_HOST_NET) {
             ui_page_add(p, COL_WARN, "waiting for the PC");
             ui_page_add(p, COL_TEXT_DIM, "plug USB into a PC");
             ui_page_add(p, COL_TEXT_DIM, "or phone, then open");
@@ -322,9 +322,10 @@ void ui_page_gblink(ui_page_t *p, const char *title, const ui_keys_t *keys,
         return;
     }
     static const char *const via[] = { "via WebUSB", "via serial",
-                                       "via companion", "" };
+                                       "via companion", "", "via WiFi" };
     ui_page_add(p, COL_GOOD, "%s", ui_gblink_mode_name(g->mode));
-    ui_page_add(p, COL_TEXT_DIM, "%s", g->owner < 3 ? via[g->owner] : "");
+    ui_page_add(p, COL_TEXT_DIM, "%s",
+                g->owner < sizeof via / sizeof via[0] ? via[g->owner] : "");
     const char *st = ui_gblink_status_name(g->status);
     if (st) {
         uint16_t c = g->status == 0xFF05 ? COL_GOOD

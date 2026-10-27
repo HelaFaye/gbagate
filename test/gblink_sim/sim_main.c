@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <string.h>
 
@@ -34,6 +35,31 @@ static bool read_full(uint8_t *buf, size_t n) {
 bool gblink_peer_radio_send(const uint8_t *d, size_t n) {
     sim_emit('P', 0, d, n);
     return true;
+}
+
+/* The Celio client's WebSocket: frames go out as 'W' records (ep 0 text,
+ * ep 1 [on] for connect/disconnect), and come in the same way (ep 0 text,
+ * ep 1 opened, ep 2 closed), so a test can carry them to a real server. */
+bool gblink_celio_ws_send(const char *t, size_t n) {
+    sim_emit('W', 0, (const uint8_t *)t, n);
+    return true;
+}
+
+void gblink_celio_ws_connect(bool on) {
+    uint8_t b = on;
+    sim_emit('W', 1, &b, 1);
+}
+
+/* Seeded per process: two simulators sharing rand()'s default sequence
+ * would share a Celio clientId, and the server would take the second for a
+ * reconnect of the first. The board uses its hardware RNG. */
+uint32_t gblink_celio_random(void) {
+    static bool seeded;
+    if (!seeded) {
+        srand((unsigned)getpid() ^ (unsigned)time(NULL));
+        seeded = true;
+    }
+    return (uint32_t)rand() << 16 ^ (uint32_t)rand();
 }
 
 void gblink_peer_observe_status(uint16_t s) {
@@ -74,6 +100,7 @@ int main(int argc, char **argv) {
             break;
         case 'C': gblink_cdc_on_receive(buf, len); break;
         case 'B': gblink_bridge_on_receive(buf, len); break;
+        case 'N': gblink_net_on_receive(buf, len); break;
         case 'G': sim_gba_control(buf, len); break;
         case 'P': gblink_peer_radio_rx(buf, len); break;
         case 'S':
@@ -86,6 +113,41 @@ int main(int argc, char **argv) {
                 gblink_peer_stop();
             }
             break;
+        case 'W':
+            if (hdr[1] == 0) gblink_celio_ws_text((const char *)buf, len);
+            else if (hdr[1] == 1) gblink_celio_ws_open();
+            else gblink_celio_ws_closed();
+            break;
+        case 'c':
+            /* start the Celio client: the body is the session to join, or
+             * empty to create one; ep 1 stops it */
+            if (hdr[1] == 1) {
+                gblink_celio_stop();
+            } else {
+                char sid[40] = "";
+                if (len < sizeof sid) { memcpy(sid, buf, len); sid[len] = '\0'; }
+                gblink_celio_start(sid);
+            }
+            break;
+        case 'K': {
+            gblink_celio_view_t v;
+            gblink_celio_view(&v);
+            uint8_t b[3 + 16 + sizeof v.session + sizeof v.error];
+            size_t o = 0;
+            b[o++] = (uint8_t)v.state;
+            b[o++] = (uint8_t)v.link_status;
+            b[o++] = (uint8_t)(v.link_status >> 8);
+            memcpy(b + o, &v.up, 4); o += 4;
+            memcpy(b + o, &v.down, 4); o += 4;
+            memcpy(b + o, &v.lost, 4); o += 4;
+            memcpy(b + o, &v.reconnects, 4); o += 4;
+            size_t sl = strnlen(v.session, sizeof v.session - 1);
+            memcpy(b + o, v.session, sl); o += sl; b[o++] = 0;
+            size_t el = strnlen(v.error, sizeof v.error - 1);
+            memcpy(b + o, v.error, el); o += el; b[o++] = 0;
+            sim_event(SIM_EV_CELIO, b, o);
+            break;
+        }
         case 'I': {
             gblink_state_t st;
             gblink_state(&st);

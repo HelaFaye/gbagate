@@ -54,6 +54,17 @@ extern "C" void gblink_bridge_on_receive(const uint8_t* data, size_t len)
     SerialLayer::getBridgeInstance().receiveBytes(std::span<const uint8_t>(data, len));
 }
 
+extern "C" void gblink_net_on_receive(const uint8_t* data, size_t len)
+{
+    SerialLayer::getNetInstance().receiveBytes(std::span<const uint8_t>(data, len));
+}
+
+// No network unless the board has one up.
+extern "C" __attribute__((weak)) bool gblink_net_write(const uint8_t*, size_t)
+{
+    return false;
+}
+
 // No companion MCU unless the board wires one up.
 extern "C" __attribute__((weak)) bool gblink_bridge_write(const uint8_t*, size_t)
 {
@@ -63,7 +74,8 @@ extern "C" __attribute__((weak)) bool gblink_bridge_write(const uint8_t*, size_t
 static_assert(static_cast<int>(Transport::Id::Usb) == GBLINK_HOST_USB &&
               static_cast<int>(Transport::Id::Serial) == GBLINK_HOST_SERIAL &&
               static_cast<int>(Transport::Id::BridgeUart) == GBLINK_HOST_BRIDGE &&
-              static_cast<int>(Transport::Id::Local) == GBLINK_HOST_LOCAL,
+              static_cast<int>(Transport::Id::Local) == GBLINK_HOST_LOCAL &&
+              static_cast<int>(Transport::Id::Net) == GBLINK_HOST_NET,
               "gblink_port.h's GBLINK_HOST_* must number the hosts as Transport::Id does");
 
 extern "C" void gblink_state(gblink_state_t* out)
@@ -89,6 +101,8 @@ extern "C" void gblink_start(void)
     // receive racing the very first construction is still a receive dropped.
     (void)UsbLayer::getInstance();
     (void)SerialLayer::getInstance();
+    (void)SerialLayer::getBridgeInstance();
+    (void)SerialLayer::getNetInstance();
     (void)Hardware::getInstance();
 
     zshim_run_inits();

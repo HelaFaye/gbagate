@@ -104,7 +104,7 @@ void ui_page_link_usb(ui_page_t *p, const char *title, const ui_keys_t *keys,
  * Link: USB on hardware: the GB-Link adapter the board is to a PC
  * (gblink_port.h's gblink_state()). The hosts are numbered as GBLINK_HOST_*.
  */
-enum { UI_HOST_USB = 0, UI_HOST_SERIAL, UI_HOST_BRIDGE, UI_HOST_LOCAL };
+enum { UI_HOST_USB = 0, UI_HOST_SERIAL, UI_HOST_BRIDGE, UI_HOST_LOCAL, UI_HOST_NET };
 
 typedef struct {
     bool     usb_is_gblink;  /* the USB setting is GB-Link, not the drive    */

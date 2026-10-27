@@ -23,8 +23,9 @@ VSRC_CPP := $(V)/layers/packetLayer.cpp $(V)/layers/transport.cpp \
             $(wildcard $(V)/sections/*.cpp) $(wildcard $(V)/module/*.cpp) \
             $(V)/persist.cpp
 VSRC_C   := $(wildcard $(V)/payloads/*.c) $(V)/linkWrongPinWatchdog.c
-PSRC_CPP := $(P)/serial_layer.cpp $(P)/hardware_port.cpp $(P)/gblink_glue.cpp $(P)/gbagate_ext.cpp $(P)/peer_glue.cpp
-PSRC_C   := $(P)/zshim_common.c $(P)/link_layer_core.c $(P)/rfu_link_core.c $(ROOT)/src/gblink_frame.c $(ROOT)/src/chipgate.c $(ROOT)/src/gbl_peer.c
+PSRC_CPP := $(P)/serial_layer.cpp $(P)/hardware_port.cpp $(P)/gblink_glue.cpp $(P)/gbagate_ext.cpp $(P)/peer_glue.cpp $(P)/celio_glue.cpp
+PSRC_C   := $(P)/zshim_common.c $(P)/link_layer_core.c $(P)/rfu_link_core.c $(ROOT)/src/gblink_frame.c $(ROOT)/src/chipgate.c $(ROOT)/src/gbl_peer.c \
+            $(ROOT)/src/celio.c $(ROOT)/src/json_lite.c
 SSRC_C   := zshim_posix.c sim_port.c sim_gba.c sim_rfu.c sim_main.c
 SSRC_CPP := rfu_game.cpp
 

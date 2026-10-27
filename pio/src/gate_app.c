@@ -86,7 +86,8 @@ extern bool app_usb_is_gblink(void);
 _Static_assert((int)GBLINK_HOST_USB == (int)UI_HOST_USB &&
                (int)GBLINK_HOST_SERIAL == (int)UI_HOST_SERIAL &&
                (int)GBLINK_HOST_BRIDGE == (int)UI_HOST_BRIDGE &&
-               (int)GBLINK_HOST_LOCAL == (int)UI_HOST_LOCAL,
+               (int)GBLINK_HOST_LOCAL == (int)UI_HOST_LOCAL &&
+               (int)GBLINK_HOST_NET == (int)UI_HOST_NET,
                "ui_screens.h numbers the GB-Link hosts as gblink_port.h does");
 
 /* Link: USB's state, from GB-Link's firmware. False on an image without it. */
@@ -103,7 +104,7 @@ static bool gblink_page_state(ui_gblink_t *g) {
         .owner         = st.owner,
         .status        = st.last_status,
         .host_seen     = st.frames[GBLINK_HOST_USB] + st.frames[GBLINK_HOST_SERIAL] +
-                         st.frames[GBLINK_HOST_BRIDGE] != 0,
+                         st.frames[GBLINK_HOST_BRIDGE] + st.frames[GBLINK_HOST_NET] != 0,
     };
     return true;
 }

@@ -12,7 +12,9 @@ namespace Transport
     // gbagate (PATCHES.md P8): Local is an in-firmware host -- the wireless
     // link cable (src/gbl_peer.c) drives the adapter through it exactly as a
     // PC would through USB.
-    enum class Id : uint8_t { Usb, Serial, BridgeUart, Local };
+    // gbagate (PATCHES.md P15): Net is a host on the board's WiFi, speaking
+    // the CDC port's framing over a WebSocket (port/gblink/gblink_port.h).
+    enum class Id : uint8_t { Usb, Serial, BridgeUart, Local, Net };
 
     using ReceiveHandler = void(*)(std::span<const uint8_t>, void*);
 

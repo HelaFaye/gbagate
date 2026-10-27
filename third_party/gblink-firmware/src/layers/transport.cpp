@@ -28,7 +28,7 @@ namespace Transport
         std::atomic<int> g_mode{-1};
         std::atomic<uint16_t> g_lastStatus{0};
         std::atomic<uint32_t> g_statuses{0};
-        std::atomic<uint32_t> g_frames[4] = {};
+        std::atomic<uint32_t> g_frames[5] = {};
 
         void noteStatus(std::span<const uint8_t, 2> data)
         {
@@ -47,6 +47,7 @@ namespace Transport
             }
             if (id == Id::Serial) return SerialLayer::getInstance().sendStatus(data);
             if (id == Id::BridgeUart) return SerialLayer::getBridgeInstance().sendStatus(data);
+            if (id == Id::Net) return SerialLayer::getNetInstance().sendStatus(data);   // P15
             return UsbLayer::getInstance().sendStatus(data);
         }
 
@@ -59,6 +60,7 @@ namespace Transport
             }
             if (id == Id::Serial) return SerialLayer::getInstance().sendData(data);
             if (id == Id::BridgeUart) return SerialLayer::getBridgeInstance().sendData(data);
+            if (id == Id::Net) return SerialLayer::getNetInstance().sendData(data);   // P15
             return UsbLayer::getInstance().sendData(data);
         }
     }
@@ -85,6 +87,7 @@ namespace Transport
         UsbLayer::getInstance().setReceiveCommandHandler(handler, userData);
         SerialLayer::getInstance().setReceiveCommandHandler(handler, userData);
         SerialLayer::getBridgeInstance().setReceiveCommandHandler(handler, userData);
+        SerialLayer::getNetInstance().setReceiveCommandHandler(handler, userData);   // P15
     }
 
     void registerDataHandler(ReceiveHandler handler, void* userData)
@@ -94,6 +97,7 @@ namespace Transport
         UsbLayer::getInstance().setReceiveDataHandler(handler, userData);
         SerialLayer::getInstance().setReceiveDataHandler(handler, userData);
         SerialLayer::getBridgeInstance().setReceiveDataHandler(handler, userData);
+        SerialLayer::getNetInstance().setReceiveDataHandler(handler, userData);   // P15
     }
 
     bool sendStatus(std::span<const uint8_t, 2> data) { return sendStatusTo(g_owner, data); }

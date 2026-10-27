@@ -482,9 +482,12 @@ static void test_pages(void) {
     check("gbl: adapter over serial", strcmp(p.line[0], "Wireless Adapter") ||
                                       strcmp(p.line[1], "via serial"), 0);
     check("gbl: reconnecting warns", p.colour[2], COL_WARN);
+    g.owner = UI_HOST_NET;
+    ui_page_gblink(&p, "Link: USB", foot, &g);
+    check("gbl: a WiFi host", strcmp(p.line[1], "via WiFi"), 0);
     g.mode = 0x01; g.owner = UI_HOST_LOCAL;
     ui_page_gblink(&p, "Link: USB", foot, &g);
-    lead("gbl-local", &p, "in use by Wireless", COL_WARN);
+    lead("gbl-local", &p, "in use by a link", COL_WARN);
     g.mode = -1; g.owner = UI_HOST_BRIDGE; g.configured = false; g.host_seen = true;
     ui_page_gblink(&p, "Link: USB", foot, &g);
     lead("gbl-bridge-idle", &p, "app connected", COL_GOOD);
