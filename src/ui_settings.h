@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include "settings.h"
+#include "ui_text.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,6 +44,7 @@ typedef struct {
     uint8_t     cursor;
     bool        editing;    /* turning changes the value, not the selection */
     char        scratch[40];
+    char        footer[40];
 } ui_settings_t;
 
 void uiset_init(ui_settings_t *v, settings_t *s);
@@ -69,7 +71,7 @@ void uiset_clear_dirty(ui_settings_t *v);
 /* Which settings need the display reprogrammed to take effect. */
 bool uiset_display_affected(const ui_settings_t *v);
 
-const char *uiset_footer(const ui_settings_t *v);
+const char *uiset_footer(ui_settings_t *v, const ui_keys_t *keys);
 
 #ifdef __cplusplus
 }

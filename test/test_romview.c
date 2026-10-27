@@ -84,10 +84,11 @@ static void test_listing(void) {
 
     check("size shown for a good rom", has(romview_label(&v, 0), "2K"), 1);
     check("256K shown as K", has(romview_label(&v, 4), "256K"), 1);
-    check("8 MB shown as M or refused", has(romview_label(&v, 1), "wrong size"), 1);
-    check("bad header explains itself",
-          has(romview_label(&v, 2), "not a GBA image"), 1);
-    check("bad logo explains itself", has(romview_label(&v, 3), "logo"), 1);
+    /* The row has a word for what is wrong; the footer says it in full
+     * when the row is selected (test_selectability). */
+    check("8 MB refused on its row", has(romview_label(&v, 1), "size!"), 1);
+    check("bad header marked", has(romview_label(&v, 2), "not GBA"), 1);
+    check("bad logo marked", has(romview_label(&v, 3), "logo!"), 1);
     check("past the end is NULL", romview_label(&v, 5) == NULL, 1);
 }
 
@@ -108,9 +109,31 @@ static void test_selectability(void) {
 
     /* The footer must say why the button will do nothing, rather than the
      * button silently doing nothing. */
-    check_str("hint on a good rom", romview_hint(&v), "enter: send");
+    ui_keys_t enc = ui_keys_for(0), ab = ui_keys_for(2);
+    check_str("hint on a good rom", romview_hint(&v, &enc), "click send\thold back");
+    check_str("with buttons", romview_hint(&v, &ab), "A send\tB back");
+    check_str("no keys: nothing claimed", romview_hint(&v, NULL), "");
     romview_move(&v, 1);
-    check_str("hint on a bad one", romview_hint(&v), "cannot send this");
+    check_str("a bad one says why", romview_hint(&v, &enc), "over 256K or tiny");
+    romview_move(&v, 1);
+    check_str("not a program", romview_hint(&v, &enc), "not a GBA program");
+    romview_move(&v, 1);
+    check_str("bad logo", romview_hint(&v, &enc), "logo bad: fix on PC");
+
+    /* Rows: the size or the fault kept whole on the right, the name cut. */
+    romview_move(&v, -3);
+    const char *row = romview_label(&v, 0);
+    check("row is the menu's width", (long)strlen(row), UI_MENU_COLS);
+    check("ends in the size", strstr(row, "K") == row + strlen(row) - 1, 1);
+    row = romview_label(&v, 1);
+    check("a bad row ends in its fault", strstr(row, "size!") != NULL, 1);
+    check("hints fit the footer", strlen(romview_hint(&v, &enc)) <= 21, 1);
+
+    /* An empty or missing selection hints nothing rather than crash. */
+    romview_t e;
+    romview_init(&e);
+    romview_set(&e, NULL, ROMVIEW_NO_STORAGE);
+    check_str("no selection, no hint", romview_hint(&e, &enc), "");
 }
 
 static void test_cursor(void) {
@@ -151,19 +174,20 @@ static void test_empty_states(void) {
      */
     romview_set(&v, NULL, ROMVIEW_HOST_OWNS);
     check("nothing listed", romview_count(&v), 0);
-    check_str("says who has it", romview_empty_text(&v), "connected to PC");
+    check("says who has it", strstr(romview_empty_text(&v), "the PC has the drive") != NULL, 1);
+    check("and how to get it back", strstr(romview_empty_text(&v), "USB Storage") != NULL, 1);
 
     /* A mounted but empty drive is actionable, and the words should say so. */
     rom_catalog_t empty;
     memset(&empty, 0, sizeof empty);
     romview_set(&v, &empty, ROMVIEW_OK);
     check("empty catalogue becomes the empty state", v.state, ROMVIEW_EMPTY);
-    check_str("tells the user what to do",
-              romview_empty_text(&v), "drop .mb files on");
+    check("tells the user what to do",
+          strstr(romview_empty_text(&v), "copy .mb files on") != NULL, 1);
 
     /* A partition that would not mount is a real fault, and different again. */
     romview_set(&v, NULL, ROMVIEW_NO_STORAGE);
-    check_str("distinct from the others", romview_empty_text(&v), "no storage");
+    check_str("distinct from the others", romview_empty_text(&v), "no drive found");
 
     /* All three are unselectable and safe to move around in. */
     check("nothing selectable", romview_selectable(&v, 0), 0);
@@ -181,9 +205,9 @@ static void test_empty_states(void) {
 static void test_long_names(void) {
     printf("long names\n");
 
-    /* FAT long names reach 40 characters here, and the longest status is
-     * "bad logo - repair on PC". The label must hold both without cutting a
-     * status mid-word. */
+    /* FAT long names reach 40 characters here. The row keeps the fault whole
+     * and cuts the name, marking the cut, so the part that decides whether to
+     * send it is never the part lost. */
     rom_catalog_t cat;
     memset(&cat, 0, sizeof cat);
     memset(cat.entries[0].name, 'a', ROM_NAME_MAX - 1);
@@ -197,7 +221,10 @@ static void test_long_names(void) {
 
     const char *l = romview_label(&v, 0);
     check("label produced", l != NULL, 1);
-    check("status survives intact", has(l, "repair on PC"), 1);
+    check("fault survives intact", has(l, "logo!"), 1);
+    check("at the end", strcmp(l + strlen(l) - 5, "logo!"), 0);
+    check("the name is cut, and says so", has(l, "aaaa. "), 1);
+    check("the row is the menu's width", (long)strlen(l), UI_MENU_COLS);
 }
 
 int main(void) {

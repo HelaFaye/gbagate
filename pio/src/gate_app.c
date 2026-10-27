@@ -715,11 +715,12 @@ static void render_settings(const ui_event_t *e, bool have_event)
         return;
     }
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
+    ui_keys_t keys = page_keys();
     ui_render_menu(&canvas, "Settings", uiset_label, &s_setedit,
                    uiset_count(), s_setedit.cursor,
                    /* The editor's own hint says whether turning changes the
                     * value or the selection, which no binding table knows. */
-                   uiset_footer(&s_setedit));
+                   uiset_footer(&s_setedit, &keys));
     st7735_mark_all_dirty();
     st7735_flush();
 }
@@ -867,11 +868,12 @@ static void render_rom_browser(void)
         return;
     }
 
+    ui_keys_t keys = page_keys();
     ui_render_menu(&canvas, "Send Program", romview_label, &s_roms,
                    romview_count(&s_roms), (uint8_t)s_roms.cursor,
                    /* romview's hint explains why a rom cannot be sent, which
                     * is about the file rather than the buttons. */
-                   romview_hint(&s_roms));
+                   romview_hint(&s_roms, &keys));
     st7735_mark_all_dirty();
     st7735_flush();
 }
@@ -906,16 +908,22 @@ static void render_shell(void)
      * did nothing -- and "the gate never appears" with no explanation is the
      * bug report nobody can act on.
      */
-    const char *foot;
+    (void)screen_controls(CTRLS_LIST);
+    ui_keys_t keys = ui_keys_for((int)s_settings.input_mode);
+    char open[24], back[24], foot[48];
+    ui_key_verb(open, sizeof open, keys.confirm,
+                s_shell.screen == SHELL_SCREEN_MODES ? "open" : "pick");
     if (s_last_refusal != APP_DISPATCH_OK) {
-        foot = app_dispatch_status_name(s_last_refusal);
+        /* Why the mode just chosen did not start; the mode's page says more. */
+        ui_footer_join(foot, sizeof foot, app_dispatch_status_name(s_last_refusal), NULL);
     } else if (s_shell.screen != SHELL_SCREEN_MODES) {
-        foot = "back: hold";
+        ui_key_verb(back, sizeof back, keys.back, "back");
+        ui_footer_join(foot, sizeof foot, open, back);
     } else {
-        foot = GBAGATE_VARIANT_NAME;
+        /* The top: nothing to go back to, so the image's name instead. */
+        ui_footer_join(foot, sizeof foot, open, GBAGATE_VARIANT_NAME);
     }
 
-    (void)screen_controls(CTRLS_LIST);
     ui_render_menu(&canvas, title, shell_label, NULL,
                    shell_item_count(&s_shell), shell_cursor(&s_shell), foot);
     st7735_mark_all_dirty();
@@ -1165,8 +1173,10 @@ void ui_service(const ui_event_t *e, bool have_event) {
             if (ui_list_selected(&s_list, &pos)) {
                 uint16_t slot = chipview_slot_at(&s_view, s_list.cursor);
                 chip_record_t rec;
-                if (chipdb_get(&s_db, slot, &rec)) {
-                    gate_send_chip(rec.index);
+                if (chipdb_get(&s_db, slot, &rec) && gate_send_chip(rec.index)) {
+                    /* The name, not the wire ID: it is what was chosen. */
+                    snprintf(s_status, sizeof s_status, "SENT %s",
+                             chipdb_name(&s_db, slot));
                 }
             }
             break;

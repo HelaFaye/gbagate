@@ -42,6 +42,34 @@ static void human_size(uint32_t bytes, char *out, size_t cap) {
     }
 }
 
+/* A row's right column: a word, not the reason. */
+static const char *short_fault(rom_status_t s) {
+    switch (s) {
+    case ROM_BAD_SIZE:     return "size!";
+    case ROM_BAD_HEADER:   return "not GBA";
+    case ROM_BAD_CHECKSUM: return "header!";
+    case ROM_BAD_LOGO:     return "logo!";
+    case ROM_UNREADABLE:   return "unread";
+    default:               return "?";
+    }
+}
+
+/*
+ * The reason in full, for the footer. Twenty glyphs: the footer's width.
+ * "wrong size" tells someone their 8 MB retail dump will never work; a
+ * greyed row tells them nothing and they try again.
+ */
+static const char *fault_advice(rom_status_t s) {
+    switch (s) {
+    case ROM_BAD_SIZE:     return "over 256K or tiny";
+    case ROM_BAD_HEADER:   return "not a GBA program";
+    case ROM_BAD_CHECKSUM: return "header checksum bad";
+    case ROM_BAD_LOGO:     return "logo bad: fix on PC";
+    case ROM_UNREADABLE:   return "can't read the file";
+    default:               return "can't send this";
+    }
+}
+
 const char *romview_label(void *ctx, uint8_t index) {
     romview_t *v = ctx;
     if (index >= romview_count(v)) {
@@ -52,17 +80,14 @@ const char *romview_label(void *ctx, uint8_t index) {
     char size[8];
     human_size(e->size, size, sizeof size);
 
-    if (e->status == ROM_OK) {
-        snprintf(v->label, sizeof v->label, "%s  %s", e->name, size);
-    } else {
-        /*
-         * The reason, not just a mark. "wrong size" tells someone their 8 MB
-         * retail dump will never work; a greyed row tells them nothing and
-         * they try again.
-         */
-        snprintf(v->label, sizeof v->label, "%s  %s", e->name,
-                 rom_status_name(e->status));
-    }
+    /*
+     * The name, then the size or what is wrong with it, in two columns: the
+     * right one is kept whole and the name shortened, since the size or the
+     * fault is what decides whether to send it. The fault in full is the
+     * footer's, when the row is selected.
+     */
+    ui_two_col(v->label, sizeof v->label, e->name,
+               e->status == ROM_OK ? size : short_fault(e->status), UI_MENU_COLS);
     return v->label;
 }
 
@@ -100,22 +125,27 @@ const char *romview_empty_text(const romview_t *v) {
     case ROMVIEW_HOST_OWNS:
         /* Not a fault. The volume has one owner at a time and the PC has it;
          * saying "no programs" here would send someone hunting a bug. */
-        return "connected to PC";
+        return "the PC has the drive. claim it in USB Storage";
     case ROMVIEW_NO_STORAGE:
-        return "no storage";
+        return "no drive found";
     case ROMVIEW_EMPTY:
     default:
-        return "drop .mb files on";
+        return "no programs yet. lend the drive to a PC and copy .mb files on";
     }
 }
 
-const char *romview_hint(const romview_t *v) {
+const char *romview_hint(romview_t *v, const ui_keys_t *keys) {
     const rom_entry_t *e = romview_current(v);
     if (!e) {
-        return romview_empty_text(v);
+        return "";
     }
     if (e->status != ROM_OK) {
-        return "cannot send this";
+        return fault_advice(e->status);
     }
-    return "enter: send";
+    char send[24];
+    ui_key_verb(send, sizeof send, keys ? keys->confirm : NULL, "send");
+    char back[24];
+    ui_key_verb(back, sizeof back, keys ? keys->back : NULL, "back");
+    ui_footer_join(v->hint, sizeof v->hint, send, back);
+    return v->hint;
 }

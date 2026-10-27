@@ -69,14 +69,6 @@ bool ui_page_line_fits(const ui_page_t *p, uint8_t i) {
 
 /* ---- keys and footers -------------------------------------------------- */
 
-ui_keys_t ui_keys_for(int input_mode) {
-    /* ui_input.h: INPUT_ENCODER is 0; every other mode has A and B. */
-    if (input_mode == 0) {
-        return (ui_keys_t){ "click", "hold" };
-    }
-    return (ui_keys_t){ "A", "B" };
-}
-
 void ui_page_keys(ui_page_t *p, const ui_keys_t *keys, const char *verb) {
     p->footer[0] = p->footer_right[0] = '\0';
     if (!keys) {
@@ -464,7 +456,14 @@ void ui_render_progress(const ui_canvas_t *c, const char *title,
 
 void ui_render_notice(const ui_canvas_t *c, const char *title, const char *text) {
     frame(c, title, NULL, NULL);
-    ui_text_clipped(c, TEXT_X, UI_LIST_Y + 20, TEXT_W, text ? text : "", COL_TEXT);
+    /* Wrapped, so a notice can say what to do as well as what is wrong. */
+    ui_page_t p;
+    ui_page_init(&p, NULL, NULL);
+    ui_page_add_wrapped(&p, COL_TEXT, text ? text : "");
+    for (uint8_t i = 0; i < p.count; i++) {
+        ui_text_clipped(c, TEXT_X, UI_LIST_Y + 20 + i * LINE_PITCH, TEXT_W,
+                        p.line[i], i ? COL_TEXT_DIM : COL_TEXT);
+    }
 }
 
 /*

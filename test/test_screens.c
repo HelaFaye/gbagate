@@ -132,29 +132,40 @@ static void write_gallery(void) {
 /* ---- text that does not fit --------------------------------------------- */
 
 /*
- * Titles, footers and menu labels clipped on the panel. Listed rather than
- * failed while the screens are being reworked: the page lines above already
- * fail, and this list is what the rework works through. g_clipped is what the
- * summary line reports.
+ * Titles, footers and menu rows clipped on the panel. A failure: the rework
+ * took the list from 23 to none, and a new screen or string must not add one.
  */
-static int g_clipped;
-
 static void fits(const char *screen, const char *what, const char *text, int w) {
     if (text && ui_font_fit(text, (uint16_t)w) < strlen(text)) {
-        printf("  clipped %s %s: \"%s\"\n", screen, what, text);
-        g_clipped++;
+        printf("  FAIL clipped %s %s: \"%s\"\n", screen, what, text);
+        g_fail++;
     }
 }
 
 #define FOOTER_W (UI_SCREEN_W - 4)
 #define LABEL_W  (UI_SCREEN_W - 16)   /* ui_render_menu: x 12, 4px right */
 
+/* A "left\tright" footer fits when both halves and the gap do. */
+static void footer_fits(const char *screen, const char *footer) {
+    if (!footer) return;
+    const char *tab = strchr(footer, '\t');
+    char left[64];
+    size_t n = tab ? (size_t)(tab - footer) : strlen(footer);
+    memcpy(left, footer, n);
+    left[n] = '\0';
+    int w = ui_font_width(left) + (tab && tab[1] ? ui_font_width(tab + 1) + 6 : 0);
+    if (w > FOOTER_W) {
+        printf("  FAIL clipped %s footer: \"%s\"\n", screen, footer);
+        g_fail++;
+    }
+}
+
 static void menu_fits(const char *screen, ui_label_fn label, void *ctx,
                       uint8_t count, const char *footer) {
     for (uint8_t i = 0; i < count; i++) {
         fits(screen, "row", label(ctx, i), LABEL_W);
     }
-    fits(screen, "footer", footer, FOOTER_W);
+    footer_fits(screen, footer);
 }
 
 /* ---- what every screen must get right ---------------------------------- */
@@ -257,23 +268,25 @@ static void test_shell(void) {
 
 static void test_settings(void) {
     printf("settings\n");
+    ui_keys_t k = ui_keys_for(0);
     settings_t st;
     settings_defaults(&st);
     ui_settings_t v;
     uiset_init(&v, &st);
     ui_render_menu(&g_canvas, "Settings", uiset_label, &v, uiset_count(),
-                   v.cursor, uiset_footer(&v));
-    menu_fits("settings", uiset_label, &v, uiset_count(), uiset_footer(&v));
+                   v.cursor, uiset_footer(&v, &k));
+    menu_fits("settings", uiset_label, &v, uiset_count(), uiset_footer(&v, &k));
     check_frame("settings", true);
     shot("settings");
     uiset_toggle_edit(&v);
     ui_render_menu(&g_canvas, "Settings", uiset_label, &v, uiset_count(),
-                   v.cursor, uiset_footer(&v));
+                   v.cursor, uiset_footer(&v, &k));
     shot("settings-edit");
 }
 
 static void test_send_program(void) {
     printf("send program\n");
+    ui_keys_t k = ui_keys_for(0);
     static rom_catalog_t cat;
     memset(&cat, 0, sizeof cat);
     const struct { const char *n; rom_status_t s; } roms[] = {
@@ -292,13 +305,13 @@ static void test_send_program(void) {
     romview_init(&v);
     romview_set(&v, &cat, ROMVIEW_OK);
     ui_render_menu(&g_canvas, "Send Program", romview_label, &v,
-                   romview_count(&v), (uint8_t)v.cursor, romview_hint(&v));
-    menu_fits("send-list", romview_label, &v, romview_count(&v), romview_hint(&v));
+                   romview_count(&v), (uint8_t)v.cursor, romview_hint(&v, &k));
+    menu_fits("send-list", romview_label, &v, romview_count(&v), romview_hint(&v, &k));
     check_frame("send", true);
     shot("send-list");
     romview_move(&v, 3);
     ui_render_menu(&g_canvas, "Send Program", romview_label, &v,
-                   romview_count(&v), (uint8_t)v.cursor, romview_hint(&v));
+                   romview_count(&v), (uint8_t)v.cursor, romview_hint(&v, &k));
     shot("send-list-bad");
 
     const romview_state_t empty[] = { ROMVIEW_HOST_OWNS, ROMVIEW_NO_STORAGE, ROMVIEW_EMPTY };
@@ -307,7 +320,14 @@ static void test_send_program(void) {
         romview_init(&v);
         romview_set(&v, NULL, empty[i]);
         ui_render_notice(&g_canvas, "Send Program", romview_empty_text(&v));
-        fits(names[i], "text", romview_empty_text(&v), UI_SCREEN_W - 4);
+        /* Wrapped onto the panel: every line fits, and there are few. */
+        ui_page_t w;
+        ui_page_init(&w, NULL, NULL);
+        ui_page_add_wrapped(&w, COL_TEXT, romview_empty_text(&v));
+        check(names[i], w.count >= 1 && w.count <= 4, 1);
+        for (uint8_t l = 0; l < w.count; l++) {
+            check(names[i], ui_page_line_fits(&w, l), 1);
+        }
         check_frame(names[i], false);
         check(names[i], has_colour(2, UI_LIST_Y + 20, UI_SCREEN_W - 4, UI_FONT_H,
                                    COL_TEXT), 1);
@@ -691,6 +711,56 @@ static void test_theme_screens(void) {
     ui_theme_set(UI_THEME_CLASSIC);
 }
 
+/* ---- the shared text rules (ui_text.h) ---------------------------------- */
+
+static void test_text_rules(void) {
+    printf("text rules\n");
+    char out[64];
+    ui_two_col(out, sizeof out, "theme", "Classic", 18);
+    check("two columns: padded to 18", strcmp(out, "theme      Classic"), 0);
+    ui_two_col(out, sizeof out, "pokemon-link.mb", "32K", 18);
+    /* 14 glyphs of room: 13 of the name and the '.' that marks the cut. */
+    check("a long left is cut and marked", strcmp(out, "pokemon-link.. 32K"), 0);
+    check("the right is whole", strcmp(out + strlen(out) - 3, "32K"), 0);
+    check("and the row exact", (long)strlen(out), 18);
+    ui_two_col(out, sizeof out, "x", "a-very-long-value-indeed", 18);
+    check("a right longer than the row is kept", strstr(out, "a-very-long-value-indeed") != NULL, 1);
+    ui_two_col(out, sizeof out, NULL, "v", 4);
+    check("no left", strcmp(out, "   v"), 0);
+    ui_two_col(out, sizeof out, "name", NULL, 6);
+    check("no right", strncmp(out, "name", 4), 0);
+
+    ui_footer_join(out, sizeof out, "click send", "hold back");
+    check("join", strcmp(out, "click send\thold back"), 0);
+    ui_footer_join(out, sizeof out, "only", NULL);
+    check("join, no right: no tab", strcmp(out, "only"), 0);
+    ui_footer_join(out, sizeof out, NULL, "right");
+    check("join, no left", strcmp(out, "\tright"), 0);
+    ui_key_verb(out, sizeof out, "A", NULL);
+    check("no verb, nothing", out[0], 0);
+
+    /* The menu footer draws the right half right-aligned and dim. */
+    ui_shell_t s;
+    shell_init(&s, HW_CAP_DISPLAY);
+    ui_render_menu(&g_canvas, "gbagate", shell_label, &s, shell_item_count(&s), 0,
+                   "click open\tgate");
+    int fy = UI_SCREEN_H - UI_FOOTER_H + (UI_FOOTER_H - UI_FONT_H) / 2;
+    check("left half in text", has_colour(2, fy, 59, UI_FONT_H, COL_TEXT), 1);
+    check("right half at the right, dim",
+          has_colour(UI_SCREEN_W - 2 - 23, fy, 23, UI_FONT_H, COL_TEXT_DIM), 1);
+    check("nothing between", has_colour(64, fy, 30, UI_FONT_H, COL_TEXT) ||
+          has_colour(64, fy, 30, UI_FONT_H, COL_TEXT_DIM), 0);
+
+    /* The chip screen's status, coloured by what it means. */
+    check("SENT is good", ui_status_colour("SENT Cannon"), COL_GOOD);
+    check("LINKED is good", ui_status_colour("LINKED"), COL_GOOD);
+    check("BUSY warns", ui_status_colour("BUSY"), COL_WARN);
+    check("WAITING warns", ui_status_colour("WAITING"), COL_WARN);
+    check("a stalled link is bad", ui_status_colour("LINK STALLED"), COL_BAD);
+    check("anything else is text", ui_status_colour("SELF TEST"), COL_TEXT);
+    check("NULL is text", ui_status_colour(NULL), COL_TEXT);
+}
+
 /* ---- the page model itself --------------------------------------------- */
 
 static void test_page_model(void) {
@@ -727,6 +797,7 @@ int main(int argc, char **argv) {
     g_out = argc > 2 ? argv[2] : NULL;
 
     test_page_model();
+    test_text_rules();
     test_shell();
     test_settings();
     test_send_program();
@@ -740,6 +811,6 @@ int main(int argc, char **argv) {
         printf("%d FAILURES\n", g_fail);
         return 1;
     }
-    printf("all checks passed (%d screens, %d clipped strings)\n", g_nshots, g_clipped);
+    printf("all checks passed (%d screens)\n", g_nshots);
     return 0;
 }

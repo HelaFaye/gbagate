@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include "rom_catalog.h"
+#include "ui_text.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,6 +44,7 @@ typedef struct {
      * status mid-word and make it unreadable rather than merely short.
      */
     char                 label[72];
+    char                 hint[48];     /* scratch for romview_hint()      */
 } romview_t;
 
 void romview_init(romview_t *v);
@@ -70,7 +72,7 @@ void romview_move(romview_t *v, int32_t delta);
 const char *romview_empty_text(const romview_t *v);
 
 /* Footer: what the button will do here. */
-const char *romview_hint(const romview_t *v);
+const char *romview_hint(romview_t *v, const ui_keys_t *keys);
 
 #ifdef __cplusplus
 }

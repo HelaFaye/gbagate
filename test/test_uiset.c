@@ -97,10 +97,21 @@ static void test_which_mode_is_visible(void) {
     check("other rows unbracketed",
           has(uiset_label(&v, SETFIELD_ACCEL), "[") ? 0 : 1, 1);
 
+    ui_keys_t enc = ui_keys_for(0), ab = ui_keys_for(1);
     check("footer says what turning does",
-          strcmp(uiset_footer(&v), "turn to change"), 0);
+          strcmp(uiset_footer(&v, &enc), "turn: set\tclick done"), 0);
+    check("and on buttons", strcmp(uiset_footer(&v, &ab), "up/dn: set\tA done"), 0);
     uiset_toggle_edit(&v);
-    check("and says it changed", strcmp(uiset_footer(&v), "enter to edit"), 0);
+    check("and says it changed", strcmp(uiset_footer(&v, &enc), "click edit\thold back"), 0);
+    check("NULL keys: the encoder's", strcmp(uiset_footer(&v, NULL), "click edit\thold back"), 0);
+
+    /* Every row at the menu's width, its value whole at the right. */
+    for (uint8_t i = 0; i < uiset_count(); i++) {
+        const char *row = uiset_label(&v, i);
+        check("row is 18 glyphs", (long)strlen(row), UI_MENU_COLS);
+    }
+    check("game value short", has(uiset_label(&v, SETFIELD_GAME), "BN6"), 1);
+    check("air link value short", has(uiset_label(&v, SETFIELD_AIR), "Gen 3"), 1);
 }
 
 static void test_clamping_and_wrapping(void) {

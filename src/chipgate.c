@@ -22,7 +22,7 @@ typedef struct {
  * in CG_LINK_SYNCED and you will see the real value immediately.
  */
 static const cg_identity_t k_identity[CG_GAME_COUNT] = {
-    [CG_GAME_BN4]    = { CG_ID_BATTLECHIP,    CG_ID_BATTLECHIP,    "BN4 / EXE4 / EXE4.5" },
+    [CG_GAME_BN4]    = { CG_ID_BATTLECHIP,    CG_ID_BATTLECHIP,    "BN4 / EXE4 / 4.5"   },
     [CG_GAME_BN5]    = { CG_ID_PROGRESS,      CG_ID_PROGRESS,      "BN5 / EXE5"          },
     [CG_GAME_BN6_JP] = { CG_ID_BEAST_LINK,    CG_ID_BEAST_LINK,    "EXE6 (JP)"           },
     [CG_GAME_BN6_US] = { CG_ID_BEAST_LINK_US, CG_ID_BEAST_LINK_US, "MMBN6 (US/EU)"       },

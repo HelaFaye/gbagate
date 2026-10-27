@@ -22,6 +22,7 @@
 #include "gbl_peer.h"
 #include "link_bridge.h"
 #include "ui_render.h"
+#include "ui_text.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,20 +45,8 @@ typedef struct {
     char     footer_right[UI_PAGE_TEXT];  /* right-aligned: Back       */
 } ui_page_t;
 
-/*
- * The short names of this board's two keys, for footers: "click" and "hold"
- * on an encoder, "A" and "B" on buttons. A page names what each does here --
- * "click lend", "hold back" -- so no footer claims an action the page does
- * not have.
- */
-typedef struct {
-    const char *confirm;
-    const char *back;
-} ui_keys_t;
-
-/* The keys for an input mode, as ui_input.h numbers them. */
-ui_keys_t ui_keys_for(int input_mode);
-
+/* ui_keys_t and ui_keys_for(): the short names of this board's keys, so a
+ * page can say what each does here -- "click lend", "hold back". */
 /* Footer: "<confirm> <verb>" on the left (none when verb is NULL), and
  * "<back> back" on the right. */
 void ui_page_keys(ui_page_t *p, const ui_keys_t *keys, const char *verb);

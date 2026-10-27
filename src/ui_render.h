@@ -85,6 +85,10 @@ bool ui_render_row(const ui_canvas_t *c, const chipview_t *v, const chipdb_t *db
 /* Header tabs. Unavailable tabs are drawn dim rather than omitted. */
 void ui_render_header(const ui_canvas_t *c, const chipview_t *v);
 
+/* The colour the chip screen shows a gate status in: good for SENT and
+ * LINKED, warn for BUSY, WAITING and CANCELLED, bad for LINK STALLED. */
+uint16_t ui_status_colour(const char *status);
+
 /* Footer: mode, and the chip most recently sent. */
 void ui_render_footer(const ui_canvas_t *c, const chipview_t *v,
                       const char *status);

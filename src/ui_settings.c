@@ -45,9 +45,15 @@ static void field_value(const settings_t *s, setfield_t f, char *out, size_t cap
     case SETFIELD_COLSTART: snprintf(out, cap, "%u", s->colstart); break;
     case SETFIELD_ROWSTART: snprintf(out, cap, "%u", s->rowstart); break;
     case SETFIELD_COLOUR:   snprintf(out, cap, "%s", s->bgr ? "BGR" : "RGB"); break;
-    case SETFIELD_GAME:
-        snprintf(out, cap, "%s", chipgate_game_name((cg_game_t)s->game));
+    case SETFIELD_GAME: {
+        /* Short: the menu's game list has the full names. */
+        static const char *const k_short[CG_GAME_COUNT] = {
+            [CG_GAME_BN4] = "BN4", [CG_GAME_BN5] = "BN5",
+            [CG_GAME_BN6_JP] = "EXE6 JP", [CG_GAME_BN6_US] = "BN6",
+        };
+        snprintf(out, cap, "%s", s->game < CG_GAME_COUNT ? k_short[s->game] : "?");
         break;
+    }
     case SETFIELD_ACCEL:    snprintf(out, cap, "%u", s->accel); break;
     case SETFIELD_WRAP:     snprintf(out, cap, "%s", s->wrap ? "on" : "off"); break;
     case SETFIELD_INPUT:
@@ -56,9 +62,14 @@ static void field_value(const settings_t *s, setfield_t f, char *out, size_t cap
     case SETFIELD_USB:
         snprintf(out, cap, "%s", usb_mode_name((usb_mode_t)s->usb_mode));
         break;
-    case SETFIELD_AIR:
-        snprintf(out, cap, "%s", air_link_name((air_link_t)s->air_link));
+    case SETFIELD_AIR: {
+        static const char *const k_short[AIR_LINK_COUNT] = {
+            [AIR_GEN3] = "Gen 3", [AIR_ADAPTER] = "Adapter",
+            [AIR_AW1] = "AW1", [AIR_AW2] = "AW2",
+        };
+        snprintf(out, cap, "%s", s->air_link < AIR_LINK_COUNT ? k_short[s->air_link] : "?");
         break;
+    }
     default:                snprintf(out, cap, "?"); break;
     }
 }
@@ -78,8 +89,11 @@ const char *uiset_label(void *ctx, uint8_t index) {
      * state.
      */
     bool active = v->editing && index == v->cursor;
-    snprintf(v->scratch, sizeof v->scratch, active ? "%-11s[%s]" : "%-11s %s",
-             field_name((setfield_t)index), val);
+    char shown[28];
+    snprintf(shown, sizeof shown, active ? "[%s]" : "%s", val);
+    /* The value right-aligned and kept whole; the name gives way. */
+    ui_two_col(v->scratch, sizeof v->scratch, field_name((setfield_t)index), shown,
+               UI_MENU_COLS);
     return v->scratch;
 }
 
@@ -186,6 +200,16 @@ bool uiset_display_affected(const ui_settings_t *v) {
     return s_display_dirty;
 }
 
-const char *uiset_footer(const ui_settings_t *v) {
-    return v->editing ? "turn to change" : "enter to edit";
+const char *uiset_footer(ui_settings_t *v, const ui_keys_t *keys) {
+    ui_keys_t k = keys ? *keys : ui_keys_for(0);
+    char left[24], right[24];
+    if (v->editing) {
+        snprintf(left, sizeof left, "%s: set", k.move);
+        ui_key_verb(right, sizeof right, k.confirm, "done");
+    } else {
+        ui_key_verb(left, sizeof left, k.confirm, "edit");
+        ui_key_verb(right, sizeof right, k.back, "back");
+    }
+    ui_footer_join(v->footer, sizeof v->footer, left, right);
+    return v->footer;
 }
