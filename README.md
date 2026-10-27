@@ -565,9 +565,13 @@ chip's wire ID (`chipdb_id_for_slot`). The built-in mode it replaces sent
 the table index, which names a different chip for 203 of BN4's 285 sendable
 chips.
 
-**Link** opens a choice of interface, `USB - PC or mGBA` or `Wireless -
-gbagate`, showing only what the board has. A board with only one goes
-straight to it. Back from a running link returns to that choice.
+**Link** opens a choice of interface: `USB - PC or mGBA`, `Wireless -
+gbagate` or `Online - Celio`. It shows only what the board has, and a board
+with only one goes straight to it. Back from a running link returns to that
+choice. Online plays a partner anywhere through a Celio server with no PC:
+the board joins your WiFi (set it up from its hotspot page or a `wifi.txt`
+on the USB drive) and is its own Celio client. On the same WiFi it is also a
+GB-Link adapter at `ws://<board>/gblink`. See `doc/ONLINE.md`.
 
 **Applets** are modes added without touching the core: one C file in
 `applets/` and a line in `applets/applets.def`. Battle Chip, Test

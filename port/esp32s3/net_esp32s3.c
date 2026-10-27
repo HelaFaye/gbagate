@@ -453,7 +453,11 @@ static void ws_session(const char *url) {
         if (p < 0) break;
         if (p == 0) continue;
         xSemaphoreTake(s_ws_lock, portMAX_DELAY);
-        int r = esp_transport_read(ws, frame + have, (int)(sizeof frame - 1 - have), 0);
+        /* Data is waiting, so this returns at once -- unless a frame's
+         * header is split across segments; a zero timeout could then leave
+         * half a header read and the stream out of step, so give it a
+         * second. A send waits that long only in that case. */
+        int r = esp_transport_read(ws, frame + have, (int)(sizeof frame - 1 - have), 1000);
         int op = esp_transport_ws_get_read_opcode(ws);
         int total = esp_transport_ws_get_read_payload_len(ws);
         xSemaphoreGive(s_ws_lock);
