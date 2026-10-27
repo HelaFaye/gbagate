@@ -78,6 +78,16 @@ void wifi_cfg_parse_form(wifi_cfg_t *c, const char *body, size_t len, wifi_parse
  * spaces? */
 bool wifi_cfg_url_ok(const char *url);
 
+/*
+ * Split a Celio URL into what a socket needs: TLS or not, host, port
+ * (default 80 / 443), and the path for Socket.IO's WebSocket endpoint --
+ * the URL's own path with "/socket.io/?EIO=4&transport=websocket" after it,
+ * as socket.io-client builds it. False if the URL is not wifi_cfg_url_ok()
+ * or a part does not fit.
+ */
+bool wifi_url_split(const char *url, bool *tls, char *host, size_t host_cap,
+                    uint16_t *port, char *path, size_t path_cap);
+
 /* A WPA2 passphrase: empty (open), 8-63 printable characters, or 64 hex. */
 bool wifi_cfg_pass_ok(const char *pass);
 
@@ -93,6 +103,23 @@ bool   wifi_cfg_unpack(wifi_cfg_t *c, const uint8_t *buf, size_t len);
  * and truncated whole-entity, never mid-escape.
  */
 size_t wifi_html_escape(char *out, size_t cap, const char *s);
+
+/* ---- the setup page ------------------------------------------------------- */
+
+typedef struct {
+    const char *status;    /* one line: "on Home Network at 192.168.1.7"     */
+    const char *notice;    /* after a save: what happened, or NULL           */
+    const char *session;   /* the Celio session the board is in, or NULL     */
+} wifi_page_t;
+
+/*
+ * The whole page, GET / and the reply to POST /save: what the board is doing,
+ * and a form for the network, the server and a session to join. Passwords
+ * are never written into it (the boxes say "unchanged if empty"). Every
+ * string is HTML-escaped. Returns the length, or 0 if cap is too small.
+ */
+#define WIFI_PAGE_MAX 4096
+size_t wifi_setup_html(char *out, size_t cap, const wifi_cfg_t *c, const wifi_page_t *pg);
 
 #ifdef __cplusplus
 }

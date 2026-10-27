@@ -16,6 +16,13 @@ static const menu_entry_t k_modes[APP_MODE_COUNT] = {
       HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB, "plug in USB" },
     { APP_MODE_LINK_WIRELESS, "Link: Wireless",
       HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_WIFI, "WiFi unavailable" },
+    /*
+     * The board is its own Celio client: the GBA plays a partner anywhere,
+     * through a Celio server, with no PC (src/celio.c). It needs the radio
+     * for WiFi, as Wireless does.
+     */
+    { APP_MODE_LINK_ONLINE, "Link: Online",
+      HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_WIFI, "WiFi unavailable" },
     { APP_MODE_MULTIBOOT, "Send Program",
       HW_CAP_DISPLAY | HW_CAP_LINK_PORT, "connect the link cable" },
     /*
@@ -113,7 +120,8 @@ void shell_init(ui_shell_t *s, uint32_t caps) {
     s->caps   = caps;
     s->screen = SHELL_SCREEN_MODES;
 
-    const app_mode_t links[] = { APP_MODE_LINK_USB, APP_MODE_LINK_WIRELESS };
+    const app_mode_t links[] = { APP_MODE_LINK_USB, APP_MODE_LINK_WIRELESS,
+                                 APP_MODE_LINK_ONLINE };
     for (size_t i = 0; i < sizeof links / sizeof links[0]; i++) {
         if (hw_menu_missing(&k_modes[links[i]], caps) == 0) {
             s->links[s->link_count++] = links[i];
@@ -159,7 +167,11 @@ static const menu_entry_t *extra_for(const ui_shell_t *s, app_mode_t mode,
 
 /* The link choice: the interface, then what it connects to. */
 static const char *link_label(app_mode_t m) {
-    return m == APP_MODE_LINK_USB ? "USB - PC or mGBA" : "Wireless - gbagate";
+    switch (m) {
+    case APP_MODE_LINK_USB:      return "USB - PC or mGBA";
+    case APP_MODE_LINK_WIRELESS: return "Wireless - gbagate";
+    default:                     return "Online - Celio";
+    }
 }
 
 static uint8_t *cursor_of(ui_shell_t *s) {
@@ -280,7 +292,8 @@ bool shell_select(ui_shell_t *s) {
 }
 
 static bool is_link(app_mode_t m) {
-    return m == APP_MODE_LINK_USB || m == APP_MODE_LINK_WIRELESS;
+    return m == APP_MODE_LINK_USB || m == APP_MODE_LINK_WIRELESS ||
+           m == APP_MODE_LINK_ONLINE;
 }
 
 bool shell_back(ui_shell_t *s) {

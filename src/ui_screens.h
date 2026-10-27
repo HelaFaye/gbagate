@@ -123,6 +123,32 @@ void ui_page_gblink(ui_page_t *p, const char *title, const ui_keys_t *keys,
 const char *ui_gblink_mode_name(int mode);
 const char *ui_gblink_status_name(uint16_t status);
 
+/*
+ * Link: Online: the board's WiFi, then its Celio session (src/celio.h).
+ * The strings may be NULL where they do not apply.
+ */
+typedef enum {
+    UI_NET_NONE = 0,     /* no radio on this image                       */
+    UI_NET_SETUP,        /* no network set: the setup hotspot is up      */
+    UI_NET_JOINING,      /* joining ssid                                 */
+    UI_NET_UP,           /* on ssid, at ip                               */
+    UI_NET_FAILED,       /* ssid would not have it; the hotspot is up    */
+} ui_net_t;
+
+typedef struct {
+    ui_net_t    net;
+    const char *ssid;
+    const char *ip;          /* this board's address on ssid             */
+    const char *hotspot;     /* the setup hotspot's name, when it is up  */
+    int         celio;       /* celio_state_t                            */
+    const char *session;     /* the session id: what the partner enters  */
+    const char *error;       /* why Celio failed                         */
+    uint16_t    link_status; /* the adapter's last word                  */
+} ui_online_t;
+
+void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
+                    const ui_online_t *o);
+
 /* Link: Wireless. mac is the locked peer, or NULL before one is chosen. */
 void ui_page_wireless(ui_page_t *p, const char *title, const ui_keys_t *keys,
                       const gbl_peer_t *peer, const uint8_t *mac,

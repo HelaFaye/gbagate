@@ -338,6 +338,93 @@ void ui_page_gblink(ui_page_t *p, const char *title, const ui_keys_t *keys,
     }
 }
 
+/* The setup page's address: ESP-IDF's SoftAP default. */
+#define UI_SETUP_URL "192.168.4.1"
+
+static void setup_lines(ui_page_t *p, const char *hotspot) {
+    ui_page_add(p, COL_TEXT_DIM, "join the hotspot");
+    ui_page_add(p, COL_TEXT, "%s", hotspot ? hotspot : "gbagate");
+    ui_page_add(p, COL_TEXT_DIM, "open " UI_SETUP_URL);
+}
+
+/*
+ * Online play: WiFi first, then Celio. Each state says what to do next,
+ * because the person holding the board is the one who has to do it --
+ * join a hotspot, read a code out to a friend.
+ */
+void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
+                    const ui_online_t *o) {
+    /* celio_state_t, without including celio.h in every screen's build */
+    enum { C_IDLE, C_CONNECTING, C_ENTERING, C_WAITING, C_STARTING, C_LINKED, C_CLOSED, C_FAILED };
+    bool again = o && o->net == UI_NET_UP && (o->celio == C_FAILED || o->celio == C_CLOSED);
+    begin(p, title, keys, again ? "retry" : NULL);
+    if (!o || o->net == UI_NET_NONE) {
+        ui_page_add(p, COL_BAD, "not available");
+        ui_page_add(p, COL_TEXT_DIM, "this image has no");
+        ui_page_add(p, COL_TEXT_DIM, "WiFi");
+        return;
+    }
+    switch (o->net) {
+    case UI_NET_SETUP:
+        ui_page_add(p, COL_WARN, "set up WiFi");
+        setup_lines(p, o->hotspot);
+        ui_page_add(p, COL_TEXT_DIM, "or put wifi.txt on");
+        ui_page_add(p, COL_TEXT_DIM, "the USB drive");
+        return;
+    case UI_NET_JOINING:
+        ui_page_add(p, COL_WARN, "joining WiFi");
+        ui_page_add(p, COL_TEXT, "%s", o->ssid ? o->ssid : "");
+        return;
+    case UI_NET_FAILED:
+        ui_page_add(p, COL_BAD, "can't join WiFi");
+        ui_page_add(p, COL_TEXT, "%s", o->ssid ? o->ssid : "");
+        setup_lines(p, o->hotspot);
+        return;
+    default:
+        break;
+    }
+    switch (o->celio) {
+    case C_IDLE:
+    case C_CONNECTING:
+    case C_ENTERING:
+        ui_page_add(p, COL_WARN, "finding Celio...");
+        break;
+    case C_WAITING:
+        ui_page_add(p, COL_WARN, "waiting for partner");
+        ui_page_add(p, COL_TEXT_DIM, "their code to join:");
+        if (o->session) {
+            /* Celio's ids are 21 characters, one more than a line: split
+             * them where a reader can keep their place */
+            size_t n = strlen(o->session), half = (n + 1) / 2;
+            ui_page_add(p, COL_TEXT, "%.*s", (int)half, o->session);
+            ui_page_add(p, COL_TEXT, "%s", o->session + half);
+        }
+        break;
+    case C_STARTING:
+        ui_page_add(p, COL_GOOD, "partner joined");
+        ui_page_add(p, COL_TEXT_DIM, "starting the link");
+        break;
+    case C_LINKED: {
+        ui_page_add(p, COL_GOOD, "playing online");
+        const char *st = ui_gblink_status_name(o->link_status);
+        if (st) {
+            ui_page_add(p, o->link_status == 0xFF06 ? COL_WARN : COL_TEXT, "%s", st);
+        }
+        break;
+    }
+    case C_CLOSED:
+        ui_page_add(p, COL_TEXT, "session over");
+        break;
+    default:
+        ui_page_add(p, COL_BAD, "online failed");
+        ui_page_add_wrapped(p, COL_TEXT_DIM, o->error && *o->error ? o->error : "no reason given");
+        break;
+    }
+    if (o->ip) {
+        ui_page_add(p, COL_TEXT_DIM, "IP %s", o->ip);
+    }
+}
+
 /*
  * The wireless link cable: GB-Link's relay, run against another board over
  * ESP-NOW (src/gbl_peer.c). Retransmits climbing while frames still flow is a

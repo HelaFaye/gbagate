@@ -65,8 +65,8 @@ static void test_every_mode_is_reachable(void) {
     /* A fully equipped board must show all of them, self test included. */
     shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB |
                          HW_CAP_WIFI | HW_CAP_CHIP_READER);
-    /* Every mode, with the two link modes behind one Link entry. */
-    check("all modes offered", shell_item_count(&g_shell), APP_MODE_COUNT - 1);
+    /* Every mode, with the three link modes behind one Link entry. */
+    check("all modes offered", shell_item_count(&g_shell), APP_MODE_COUNT - 2);
 
     /* USB Storage must be there on a board with USB: without a way to hand the
      * volume over, the only way to get files onto it is to guess what the host
@@ -139,14 +139,19 @@ static void test_realistic_caps(void) {
     (void)gate;
     check("self test offered", selftest, 1);
     check("link offered", wireless, 1);
-    /* WiFi but no USB: Link is the wireless cable, with no choice to make. */
+    /* WiFi but no USB: the wireless cable or online play, a choice of two. */
     for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
         if (!strcmp(shell_label_at(&g_shell, i), "Link")) {
             g_shell.mode_cursor = i;
         }
     }
-    check("one interface: straight in", shell_select(&g_shell), 1);
+    check("WiFi only: a choice", shell_select(&g_shell), 0);
+    check("of two", shell_item_count(&g_shell), 2);
+    check("wireless first", strncmp(shell_label_at(&g_shell, 0), "Wireless", 8), 0);
+    check("then online", strncmp(shell_label_at(&g_shell, 1), "Online", 6), 0);
+    check("choosing it", shell_select(&g_shell), 1);
     check("and it is wireless", g_shell.chosen_mode, APP_MODE_LINK_WIRELESS);
+    shell_back(&g_shell);
     shell_back(&g_shell);
     check("diagnostics offered", diag, 1);
 
@@ -305,20 +310,28 @@ static void test_link_chooser(void) {
     check("Link is first", link, 0);
 
     g_shell.mode_cursor = (uint8_t)link;
-    check("two interfaces: a choice", shell_select(&g_shell), 0);
+    check("three interfaces: a choice", shell_select(&g_shell), 0);
     check("on the link screen", g_shell.screen, SHELL_SCREEN_LINK);
     check("titled", strcmp(shell_screen_title(&g_shell), "Link over"), 0);
-    check("two offered", shell_item_count(&g_shell), 2);
+    check("three offered", shell_item_count(&g_shell), 3);
     check("USB first", strncmp(shell_label_at(&g_shell, 0), "USB", 3), 0);
     check("then wireless", strncmp(shell_label_at(&g_shell, 1), "Wireless", 8), 0);
-    check("past the end", shell_label_at(&g_shell, 2) == NULL, 1);
+    check("then online", strcmp(shell_label_at(&g_shell, 2), "Online - Celio"), 0);
+    check("past the end", shell_label_at(&g_shell, 3) == NULL, 1);
 
     shell_move(&g_shell, 1);
     check("cursor moves", shell_cursor(&g_shell), 1);
-    shell_move(&g_shell, 1);
+    shell_move(&g_shell, 2);
     check("and wraps", shell_cursor(&g_shell), 0);
     shell_move(&g_shell, -1);
-    check("both ways", shell_cursor(&g_shell), 1);
+    check("both ways", shell_cursor(&g_shell), 2);
+    check("online chosen", shell_select(&g_shell), 1);
+    check("... as Link: Online", g_shell.chosen_mode, APP_MODE_LINK_ONLINE);
+    check("named for its title", strcmp(shell_chosen_name(&g_shell), "Link: Online"), 0);
+    shell_back(&g_shell);
+    check("back on the choice", g_shell.screen, SHELL_SCREEN_LINK);
+    shell_move(&g_shell, -1);
+    check("to wireless", shell_cursor(&g_shell), 1);
     check("choosing starts it", shell_select(&g_shell), 1);
     check("wireless chosen", g_shell.chosen_mode, APP_MODE_LINK_WIRELESS);
     check("named for its title", strcmp(shell_chosen_name(&g_shell), "Link: Wireless"), 0);

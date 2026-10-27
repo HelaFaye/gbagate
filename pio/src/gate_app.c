@@ -110,6 +110,14 @@ static bool gblink_page_state(ui_gblink_t *g) {
 }
 #endif
 
+/* Link: Online, below with its handlers. */
+#if !defined(GBAGATE_QEMU)
+#include "celio.h"
+#include "net_esp32s3.h"
+#endif
+static void online_gather(ui_online_t *o);
+static void online_retry(void);
+
 #if !defined(GBAGATE_QEMU)
 #include "gbl_peer.h"
 /* The wireless link cable (port/esp32s3/peer_espnow_esp32s3.c,
@@ -770,6 +778,16 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
     }
 #endif
 
+    case APP_MODE_LINK_ONLINE: {
+        ui_online_t on;
+        online_gather(&on);
+        if (have_event && e && e->type == UI_EVENT_CHIP_SENT) {
+            online_retry();
+        }
+        ui_page_online(&page, title, footer, &on);
+        break;
+    }
+
 #if defined(GBAGATE_QEMU)
     case APP_MODE_LINK_USB:
     case APP_MODE_LINK_WIRELESS:   /* QEMU has no radio: the UART bridge */
@@ -1398,6 +1416,98 @@ static void mode_exit_selftest(void *ctx) {
     s_selftest = false;   /* stop the automatic chip sends */
 }
 
+/* ---- Link: Online ------------------------------------------------------------ */
+
+static bool s_online;          /* the mode is up                       */
+static bool s_celio_started;   /* ... and the client has been started  */
+
+static void online_gather(ui_online_t *o) {
+    memset(o, 0, sizeof *o);
+#if defined(GBAGATE_QEMU)
+    o->net = UI_NET_NONE;      /* the emulated board has no radio */
+#else
+    static net_view_t nv;
+    static gblink_celio_view_t cv;
+    if (!(s_shell.caps & HW_CAP_WIFI)) {
+        return;
+    }
+    net_view(&nv);
+    gblink_celio_view(&cv);
+    static const ui_net_t map[] = {
+        [NET_OFF] = UI_NET_JOINING, [NET_SETUP] = UI_NET_SETUP, [NET_JOINING] = UI_NET_JOINING,
+        [NET_UP] = UI_NET_UP, [NET_FAILED] = UI_NET_FAILED,
+    };
+    o->net         = map[nv.state];
+    o->ssid        = nv.ssid;
+    o->ip          = nv.ip[0] ? nv.ip : NULL;
+    o->hotspot     = nv.hotspot[0] ? nv.hotspot : NULL;
+    o->celio       = s_celio_started ? cv.state : CELIO_CONNECTING;
+    o->session     = cv.session[0] ? cv.session : NULL;
+    o->error       = cv.error;
+    o->link_status = cv.link_status;
+#endif
+}
+
+#if !defined(GBAGATE_QEMU)
+static void online_begin(void) {
+    char session[40];
+    net_session(session, sizeof session);
+    gblink_celio_start(session);
+    s_celio_started = true;
+}
+#endif
+
+/* Confirm on a failed or finished session: start a new one. */
+static void online_retry(void) {
+#if !defined(GBAGATE_QEMU)
+    gblink_celio_view_t cv;
+    gblink_celio_view(&cv);
+    if (s_celio_started && (cv.state == CELIO_FAILED || cv.state == CELIO_CLOSED)) {
+        gblink_celio_stop();
+        online_begin();
+    }
+#endif
+}
+
+static bool mode_enter_online(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    s_online = true;
+    s_celio_started = false;
+#if !defined(GBAGATE_QEMU)
+    if (s_shell.caps & HW_CAP_WIFI) {
+        net_start(false);   /* the hotspot too, when no network is stored */
+    }
+#endif
+    return true;           /* the page says what is missing */
+}
+
+static void mode_exit_online(void *ctx) {
+    (void)ctx;
+    s_online = false;
+#if !defined(GBAGATE_QEMU)
+    if (s_celio_started) {
+        gblink_celio_stop();   /* sessionLeft, and the adapter cancelled */
+    }
+#endif
+    s_celio_started = false;
+}
+
+static void mode_tick_online(void *ctx) {
+    (void)ctx;
+#if !defined(GBAGATE_QEMU)
+    net_view_t nv;
+    net_view(&nv);
+    if (!s_celio_started && nv.state == NET_UP) {
+        online_begin();   /* WiFi first, then Celio */
+    }
+    gblink_celio_view_t cv;
+    gblink_celio_view(&cv);
+    if (cv.state == CELIO_LINKED) {
+        net_clear_session();   /* a code joins once */
+    }
+#endif
+}
+
 static bool mode_enter_link(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
 #if defined(GBAGATE_QEMU)
@@ -1480,6 +1590,7 @@ static bool mode_enter_diagnostics(void *ctx, cg_game_t game, bool has_game) {
 static const app_mode_handler_t k_handlers[] = {
     { .mode = APP_MODE_LINK_USB, .enter = mode_enter_link, .exit = NULL, .tick = mode_tick_link },
     { .mode = APP_MODE_LINK_WIRELESS, .enter = mode_enter_wireless, .exit = mode_exit_wireless, .tick = mode_tick_link },
+    { .mode = APP_MODE_LINK_ONLINE, .enter = mode_enter_online, .exit = mode_exit_online, .tick = mode_tick_online },
     { .mode = APP_MODE_MULTIBOOT, .enter = mode_enter_multiboot, .exit = mode_exit_multiboot, .tick = NULL },
     { .mode = APP_MODE_USB_STORAGE, .enter = mode_enter_usb_storage, .exit = mode_exit_usb_storage, .tick = NULL },
     { .mode = APP_MODE_INFRARED, .enter = mode_enter_infrared, .exit = NULL, .tick = NULL },

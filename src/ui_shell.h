@@ -30,6 +30,7 @@ typedef enum {
     /* Battle Chip and Read Chip are one applet now (applets/battle_chip.c). */
     APP_MODE_LINK_USB = 0,  /* link partner for mGBA over USB            */
     APP_MODE_LINK_WIRELESS, /* link partner for another board, ESP-NOW   */
+    APP_MODE_LINK_ONLINE,   /* online play through Celio, over WiFi      */
     APP_MODE_MULTIBOOT,     /* serve a .mb program to a stock GBA        */
     APP_MODE_USB_STORAGE,   /* hand the drive to a PC, and take it back  */
     APP_MODE_INFRARED,      /* Cyber Drive Zoids IR, via the link port   */
@@ -61,7 +62,7 @@ typedef enum {
     SHELL_SCREEN_MODES = 0, /* pick a mode                    */
     SHELL_SCREEN_GAMES,     /* pick a game                    */
     SHELL_SCREEN_RUNNING,   /* handed off to the mode         */
-    SHELL_SCREEN_LINK       /* pick the link: USB or Wireless */
+    SHELL_SCREEN_LINK       /* pick the link: USB, Wireless or Online */
 } shell_screen_t;
 
 #define SHELL_ITEMS_MAX (APP_MODE_COUNT + SHELL_EXTRA_MAX)
@@ -86,7 +87,7 @@ typedef struct {
     uint8_t   game_cursor;
 
     /* link interfaces this board has: APP_MODE_LINK_USB, _WIRELESS */
-    app_mode_t links[2];
+    app_mode_t links[3];
     uint8_t    link_count;
     uint8_t    link_cursor;
 

@@ -21,7 +21,9 @@
  *
  * The previous ESP-NOW transport (transport_esp32s3.c) called esp_now_init()
  * without starting WiFi, which fails, and had no caller. This brings WiFi up
- * in station mode on a fixed channel, which is all ESP-NOW needs.
+ * in station mode (radio_init(), shared with the board's network) on a fixed
+ * channel, which is all ESP-NOW needs -- or on the network's, when the board
+ * has joined one.
  *
  * NOT YET RUN ON HARDWARE.
  */
@@ -39,6 +41,7 @@
 
 #include "gbl_peer.h"
 #include "gblink_port.h"
+#include "net_esp32s3.h"
 
 static const char *TAG = "peer_now";
 
@@ -55,7 +58,7 @@ static void add_peer(const uint8_t *mac) {
     if (esp_now_is_peer_exist(mac)) return;
     esp_now_peer_info_t p = { 0 };
     memcpy(p.peer_addr, mac, ESP_NOW_ETH_ALEN);
-    p.channel = PEER_CHANNEL;
+    p.channel = 0;   /* whatever channel the radio is on: 1, or the network's */
     p.ifidx = WIFI_IF_STA;
     p.encrypt = false;
     esp_now_add_peer(&p);
@@ -92,16 +95,19 @@ bool gblink_peer_radio_send(const uint8_t *d, size_t n) {
 
 esp_err_t peer_espnow_start(void) {
     if (!s_up) {
-        esp_err_t e = esp_netif_init();
-        if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
-        e = esp_event_loop_create_default();
-        if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
-        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-        ESP_RETURN_ON_ERROR(esp_wifi_init(&cfg), TAG, "esp_wifi_init");
-        ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "esp_wifi_set_storage");
-        ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "esp_wifi_set_mode");
-        ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "esp_wifi_start");
-        ESP_RETURN_ON_ERROR(esp_wifi_set_channel(PEER_CHANNEL, WIFI_SECOND_CHAN_NONE), TAG, "esp_wifi_set_channel");
+        /* One bring-up for the radio, shared with the network (net_esp32s3.c). */
+        ESP_RETURN_ON_ERROR(radio_init(), TAG, "radio_init");
+        /*
+         * On a network, the channel is the access point's and cannot be set;
+         * both boards on the same WiFi share it anyway. Otherwise channel 1,
+         * which every regulatory domain has.
+         */
+        if (!radio_sta_connected()) {
+            ESP_RETURN_ON_ERROR(esp_wifi_set_channel(PEER_CHANNEL, WIFI_SECOND_CHAN_NONE), TAG,
+                                "esp_wifi_set_channel");
+        } else {
+            ESP_LOGI(TAG, "on WiFi: the cable uses the network's channel");
+        }
         ESP_RETURN_ON_ERROR(esp_now_init(), TAG, "esp_now_init");
         ESP_RETURN_ON_ERROR(esp_now_register_recv_cb(rx_cb), TAG, "esp_now_register_recv_cb");
         add_peer(BCAST);

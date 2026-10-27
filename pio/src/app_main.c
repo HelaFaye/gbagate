@@ -150,6 +150,13 @@ void app_main(void) {
 #endif
     if (v.resolved & FEAT_ESPNOW) {
         caps |= HW_CAP_WIFI;
+#ifndef GBAGATE_QEMU
+        /* A stored network: join it now, so /gblink is there for a PC on the
+         * same WiFi and Link: Online starts at once. Nothing stored: the
+         * radio stays off until Link: Online asks for the setup hotspot. */
+        extern void net_boot(void);
+        net_boot();
+#endif
     }
 
     /*

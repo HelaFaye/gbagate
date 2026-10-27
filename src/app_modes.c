@@ -166,6 +166,7 @@ app_route_t app_mode_route(app_mode_t mode) {
     case APP_MODE_SETTINGS:      return APP_ROUTE_SETTINGS;
     case APP_MODE_LINK_USB:
     case APP_MODE_LINK_WIRELESS:
+    case APP_MODE_LINK_ONLINE:
     case APP_MODE_USB_STORAGE:
     case APP_MODE_INFRARED:
     case APP_MODE_SELFTEST:
@@ -207,6 +208,16 @@ static bool link_wireless_enter(void *ctx, cg_game_t game, bool has_game) {
 static void link_wireless_exit(void *ctx) { (void)ctx; }
 
 static void link_wireless_tick(void *ctx) { (void)ctx; }
+
+static bool link_online_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx;
+    (void)game; (void)has_game;
+    return true;
+}
+
+static void link_online_exit(void *ctx) { (void)ctx; }
+
+static void link_online_tick(void *ctx) { (void)ctx; }
 
 static bool multiboot_enter(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx;
@@ -276,6 +287,7 @@ static void diagnostics_tick(void *ctx) { (void)ctx; }
 static const app_mode_handler_t k_handlers[] = {
     { .mode = APP_MODE_LINK_USB, .enter = link_usb_enter, .exit = link_usb_exit, .tick = link_usb_tick },
     { .mode = APP_MODE_LINK_WIRELESS, .enter = link_wireless_enter, .exit = link_wireless_exit, .tick = link_wireless_tick },
+    { .mode = APP_MODE_LINK_ONLINE, .enter = link_online_enter, .exit = link_online_exit, .tick = link_online_tick },
     { .mode = APP_MODE_MULTIBOOT, .enter = multiboot_enter, .exit = multiboot_exit, .tick = multiboot_tick },
     { .mode = APP_MODE_USB_STORAGE, .enter = usb_storage_enter, .exit = usb_storage_exit, .tick = usb_storage_tick },
     { .mode = APP_MODE_INFRARED, .enter = ir_enter, .exit = ir_exit, .tick = ir_tick },

@@ -129,6 +129,33 @@ static void test_urls(void) {
     check("a space", wifi_cfg_url_ok("ws://a b"), 0);
 }
 
+static void test_url_split(void) {
+    bool tls;
+    char host[64], path[96];
+    uint16_t port;
+    check("Celio's own", wifi_url_split(WIFI_CELIO_DEFAULT, &tls, host, sizeof host, &port, path, sizeof path), 1);
+    check("... TLS", tls, 1);
+    check_str("... host", host, "celio-server.up.railway.app");
+    check("... port 443", port, 443);
+    check_str("... Socket.IO's path", path, "/socket.io/?EIO=4&transport=websocket");
+    check("plain, no port", wifi_url_split("ws://10.0.0.2", &tls, host, sizeof host, &port, path, sizeof path) &&
+                            !tls && port == 80, 1);
+    check("a path prefix, trailing slash dropped",
+          wifi_url_split("ws://h:8080/celio/", &tls, host, sizeof host, &port, path, sizeof path) &&
+          port == 8080 && strcmp(path, "/celio/socket.io/?EIO=4&transport=websocket") == 0, 1);
+    check("a query is not the path",
+          wifi_url_split("wss://h/x?y=1", &tls, host, sizeof host, &port, path, sizeof path) &&
+          strcmp(path, "/x/socket.io/?EIO=4&transport=websocket") == 0, 1);
+    check("port 0", wifi_url_split("ws://h:0", &tls, host, sizeof host, &port, path, sizeof path), 0);
+    check("port too big", wifi_url_split("ws://h:65536", &tls, host, sizeof host, &port, path, sizeof path), 0);
+    check("port not a number", wifi_url_split("ws://h:44a", &tls, host, sizeof host, &port, path, sizeof path), 0);
+    check("an empty port", wifi_url_split("ws://h:/", &tls, host, sizeof host, &port, path, sizeof path), 0);
+    check("IPv6", wifi_url_split("ws://[::1]:80", &tls, host, sizeof host, &port, path, sizeof path), 0);
+    check("host too long", wifi_url_split("ws://abcdefgh", &tls, host, 8, &port, path, sizeof path), 0);
+    check("path too long", wifi_url_split("ws://h/abc", &tls, host, sizeof host, &port, path, 40), 0);
+    check("not a ws URL", wifi_url_split("https://h", &tls, host, sizeof host, &port, path, sizeof path), 0);
+}
+
 static void test_form(void) {
     wifi_cfg_t c;
     wifi_parse_t r;
@@ -209,12 +236,53 @@ static void test_escape(void) {
     check_str("... even when it does not fit", out, "ab");
 }
 
+static void test_page(void) {
+    static char html[WIFI_PAGE_MAX];
+    wifi_cfg_t c;
+    wifi_cfg_defaults(&c);
+    strcpy(c.ssid, "<script>alert(1)</script>");
+    strcpy(c.pass, "hunter22secret");
+    strcpy(c.session, "abc");
+    wifi_page_t pg = { "on \"Home\" at 192.168.1.7", "Saved. Joining now.", "V1StGXR8_Z5jdHi6B-myT" };
+    size_t n = wifi_setup_html(html, sizeof html, &c, &pg);
+    check("the page fits WIFI_PAGE_MAX", n > 0, 1);
+    check("... is a whole document", strstr(html, "</html>") != NULL, 1);
+    check("the SSID is escaped", strstr(html, "<script>") == NULL, 1);
+    check("... and shown", strstr(html, "&lt;script&gt;alert(1)&lt;/script&gt;") != NULL, 1);
+    check("the password never appears", strstr(html, "hunter22secret") == NULL, 1);
+    check("... the box says it is kept", strstr(html, "empty keeps it") != NULL, 1);
+    check("... and offers to forget it", strstr(html, "clear_password") != NULL, 1);
+    check("the status is escaped", strstr(html, "on &quot;Home&quot;") != NULL, 1);
+    check("the session code is shown", strstr(html, "V1StGXR8_Z5jdHi6B-myT") != NULL, 1);
+    check("every key the parser takes is a field",
+          strstr(html, "name=\"ssid\"") && strstr(html, "name=\"password\"") &&
+          strstr(html, "name=\"celio\"") && strstr(html, "name=\"session\"") &&
+          strstr(html, "name=\"hotspot_password\""), 1);
+    check("posts to /save", strstr(html, "action=\"/save\"") != NULL, 1);
+    check("a short buffer gives 0", wifi_setup_html(html, 200, &c, &pg), 0);
+    c.pass[0] = '\0';
+    wifi_setup_html(html, sizeof html, &c, NULL);
+    check("no saved password, no forget box", strstr(html, "clear_password") == NULL, 1);
+
+    /* the longest config, every field full of characters that escape 5x */
+    memset(c.ssid, '"', WIFI_SSID_MAX); c.ssid[WIFI_SSID_MAX] = '\0';
+    strcpy(c.celio, "wss://");
+    memset(c.celio + 6, '&', WIFI_URL_MAX - 6); c.celio[WIFI_URL_MAX] = '\0';
+    memset(c.session, '<', WIFI_SESSION_MAX); c.session[WIFI_SESSION_MAX] = '\0';
+    memset(c.pass, 'x', 20); c.pass[20] = '\0';
+    strcpy(c.ap_pass, "12345678");
+    wifi_page_t big = { c.celio, c.celio, c.session };
+    check("the worst case still fits", wifi_setup_html(html, sizeof html, &c, &big) > 0, 1);
+}
+
 int main(void) {
+    test_page();
     test_defaults();
     test_text_file();
     test_text_mistakes();
     test_passwords();
     test_urls();
+    test_url_split();
     test_form();
     test_blob();
     test_escape();

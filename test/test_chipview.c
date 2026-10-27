@@ -259,12 +259,12 @@ static void test_shell(void) {
     /* Full board. */
     shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB |
                    HW_CAP_WIFI | HW_CAP_CHIP_READER);
-    /* The two link modes share one Link entry. */
-    check("everything offered", shell_item_count(&s), APP_MODE_COUNT - 1);
+    /* The three link modes share one Link entry. */
+    check("everything offered", shell_item_count(&s), APP_MODE_COUNT - 2);
 
     /* Wrapping, for a rotary encoder. */
     shell_move(&s, -1);
-    check("wraps backwards", shell_cursor(&s), APP_MODE_COUNT - 2);
+    check("wraps backwards", shell_cursor(&s), APP_MODE_COUNT - 3);
     shell_move(&s, 1);
     check("wraps forwards", shell_cursor(&s), 0);
 

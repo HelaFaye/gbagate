@@ -505,6 +505,54 @@ static void test_pages(void) {
     }
     check("gbl: debug word unnamed", ui_gblink_status_name(0xFFFF) == NULL, 1);
 
+    /* Link: Online: WiFi, then Celio */
+    ui_online_t on = { .net = UI_NET_SETUP, .hotspot = "gbagate-1A2B" };
+    ui_page_online(&p, "Link: Online", foot, &on);
+    lead("online-setup", &p, "set up WiFi", COL_WARN);
+    check("online: names the hotspot", strcmp(p.line[2], "gbagate-1A2B"), 0);
+    check("online: and the page", strcmp(p.line[3], "open 192.168.4.1"), 0);
+    page("online-setup", &p);
+    on.net = UI_NET_JOINING; on.ssid = "Home Network 5G";
+    ui_page_online(&p, "Link: Online", foot, &on);
+    lead("online-joining", &p, "joining WiFi", COL_WARN);
+    on.net = UI_NET_FAILED;
+    ui_page_online(&p, "Link: Online", foot, &on);
+    lead("online-wifi-failed", &p, "can't join WiFi", COL_BAD);
+    page("online-wifi-failed", &p);
+    on.net = UI_NET_UP; on.ip = "192.168.100.200"; on.celio = 1;
+    ui_page_online(&p, "Link: Online", foot, &on);
+    lead("online-connecting", &p, "finding Celio...", COL_WARN);
+    on.celio = 3; on.session = "V1StGXR8_Z5jdHi6B-myT";
+    ui_page_online(&p, "Link: Online", foot, &on);
+    lead("online-waiting", &p, "waiting for partner", COL_WARN);
+    check("online: the code, in two halves", strcmp(p.line[2], "V1StGXR8_Z5") ||
+                                             strcmp(p.line[3], "jdHi6B-myT"), 0);
+    check("online: and the address", strcmp(p.line[4], "IP 192.168.100.200"), 0);
+    check("online: nothing to confirm", p.footer[0] == '\0' || strstr(p.footer, "retry") == NULL, 1);
+    page("online-waiting", &p);
+    on.celio = 4;
+    ui_page_online(&p, "Link: Online", foot, &on);
+    lead("online-starting", &p, "partner joined", COL_GOOD);
+    on.celio = 5; on.link_status = 0xFF05;
+    ui_page_online(&p, "Link: Online", foot, &on);
+    lead("online-linked", &p, "playing online", COL_GOOD);
+    check("online: the link's status", strcmp(p.line[1], "linked"), 0);
+    page("online-linked", &p);
+    on.celio = 6;
+    ui_page_online(&p, "Link: Online", foot, &on);
+    lead("online-closed", &p, "session over", COL_TEXT);
+    check("online: retry offered", strstr(p.footer, "retry") != NULL, 1);
+    on.celio = 7; on.error = "Session not found";
+    ui_page_online(&p, "Link: Online", foot, &on);
+    lead("online-failed", &p, "online failed", COL_BAD);
+    check("online: says why", strcmp(p.line[1], "Session not found"), 0);
+    page("online-failed", &p);
+    on.net = UI_NET_NONE;
+    ui_page_online(&p, "Link: Online", foot, &on);
+    lead("online-none", &p, "not available", COL_BAD);
+    ui_page_online(&p, "Link: Online", foot, NULL);
+    lead("online-null", &p, "not available", COL_BAD);
+
     gbl_peer_t peer;
     memset(&peer, 0, sizeof peer);
     ui_page_wireless(&p, "Link: Wireless", foot, &peer, NULL, "Gen 3 cable");

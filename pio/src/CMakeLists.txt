@@ -122,6 +122,8 @@ else()
         ../../port/gblink/gblink_glue.cpp
         ../../port/gblink/gbagate_ext.cpp
         ../../port/gblink/peer_glue.cpp
+        ../../port/gblink/celio_glue.cpp
+        ../../port/esp32s3/net_esp32s3.c
         ../../port/esp32s3/peer_espnow_esp32s3.c
         ../../port/esp32s3/usb_gblink_esp32s3.c
         ../../port/esp32s3/gblink_hw_esp32s3.c
@@ -183,6 +185,9 @@ if(NOT GBAGATE_QEMU)
     # transport_esp32s3.c's ESP-NOW backend. Missing from the list since the
     # file was written, so it had never compiled.
     list(APPEND REQS esp_wifi esp_netif esp_event)
+    # net_esp32s3.c: the setup page and /gblink (esp_http_server), and the
+    # Celio socket (tcp_transport's WebSocket, TLS with mbedtls' bundle).
+    list(APPEND REQS esp_http_server tcp_transport esp-tls mbedtls nvs_flash)
 endif()
 
 # The chip reader's expander sits on I2C, and IDF 6.0 split that out too.
