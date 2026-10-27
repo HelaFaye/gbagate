@@ -42,11 +42,31 @@ static inline ui_keys_t ui_keys_for(int input_mode) {
     return (ui_keys_t){ "A", "B", "up/dn" };
 }
 
-/* "left\tright", either half optional. */
+/* Append s at *n, cutting at cap; out stays terminated. */
+static inline void ui_append(char *out, size_t cap, size_t *n, const char *s) {
+    while (s && *s && *n + 1 < cap) {
+        out[(*n)++] = *s++;
+    }
+    if (cap) {
+        out[*n < cap ? *n : cap - 1] = '\0';
+    }
+}
+
+/*
+ * "left\tright", either half optional. Cut to cap on purpose: an overlong
+ * footer is caught by its test and clipped at render time. (Not snprintf:
+ * GCC's -Wformat-truncation, an error in the firmware's -Os build, cannot
+ * tell a deliberate cut from an accident.)
+ */
 static inline void ui_footer_join(char *out, size_t cap, const char *left,
                                   const char *right) {
-    snprintf(out, cap, "%s%s%s", left ? left : "", right && right[0] ? "\t" : "",
-             right ? right : "");
+    size_t n = 0;
+    if (cap) out[0] = '\0';
+    ui_append(out, cap, &n, left);
+    if (right && right[0]) {
+        ui_append(out, cap, &n, "\t");
+        ui_append(out, cap, &n, right);
+    }
 }
 
 /* "<key> <verb>", or "" without a verb. */
@@ -79,7 +99,14 @@ static inline void ui_two_col(char *out, size_t cap, const char *left,
         l = strlen(cut);
     }
     size_t pad = cols > l + r ? cols - l - r : 1;
-    snprintf(out, cap, "%s%*s%s", left ? left : "", (int)pad, "", right ? right : "");
+    size_t n = 0;
+    if (cap) out[0] = '\0';
+    ui_append(out, cap, &n, left);
+    for (size_t i = 0; i < pad && n + 1 < cap; i++) {
+        out[n++] = ' ';
+    }
+    if (cap) out[n] = '\0';
+    ui_append(out, cap, &n, right);   /* cut to cap, as ui_footer_join */
 }
 
 #ifdef __cplusplus

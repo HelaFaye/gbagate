@@ -17,6 +17,9 @@ export class SimDevice extends EventEmitter {
   constructor({ flash } = {}) {
     super();
     this.proc = spawn(SIM, flash ? [flash] : [], { stdio: ['pipe', 'pipe', 'inherit'] });
+    // A write after the simulator exits fails asynchronously (EPIPE), which a
+    // try/catch around write() cannot see; without a listener it kills node.
+    this.proc.stdin.on('error', () => {});
     this.buf = Buffer.alloc(0);
     this.words = [];
     this.proc.stdout.on('data', (d) => this.onData(d));

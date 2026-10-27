@@ -139,4 +139,18 @@ else
     fail=1
 fi
 
+# The firmware builds at -Os with warnings as errors, and some warnings exist
+# only at -Os: -Wformat-truncation needs the inlining it does. Every hardware
+# image failed on two in ui_text.h while every host suite passed, at -O2.
+os_out=$(for f in src/*.c applets/*.c; do
+    ${CC:-cc} -std=gnu17 -Os -Wall -Wextra -Werror -Isrc -Iapplets -c "$f" -o /dev/null 2>&1
+done)
+if [ -z "$os_out" ]; then
+    printf '%-39s ok\n' "src/ at the firmware's -Os"
+else
+    printf '%-39s FAIL\n' "src/ at the firmware's -Os"
+    printf '%s\n' "$os_out" | grep -E 'error|warning' | head -20 | sed 's/^/    /'
+    fail=1
+fi
+
 exit $fail
