@@ -26,6 +26,7 @@ static void check(const char *what, long got, long want) {
     }
 }
 
+extern const applet_t applet_gba_memory;
 extern const applet_t applet_hello, applet_test_pattern, applet_chip_dice,
                       applet_battle_chip;
 extern uint16_t battle_chip_row_slot(uint16_t row);
@@ -94,14 +95,14 @@ static uint32_t counting_random(void) { return g_seq++ * 2654435761u; }
 
 static void test_registry(void) {
     printf("registry\n");
-    /* applets/applets.def: test_pattern, chip_dice; hello commented out. */
-    /* applets/applets.def: battle_chip, test_pattern, chip_dice; hello is
-     * commented out. */
-    check("three listed", applet_count(), 3);
+    /* applets/applets.def: battle_chip, test_pattern, chip_dice,
+     * gba_memory; hello is commented out. */
+    check("four listed", applet_count(), 4);
     check("Battle Chip first", applet_at(0) == &applet_battle_chip, 1);
     check("then Test Pattern", applet_at(1) == &applet_test_pattern, 1);
     check("then Chip Dice", applet_at(2) == &applet_chip_dice, 1);
-    check("past the end", applet_at(3) == NULL, 1);
+    check("then GBA Memory", applet_at(3) == &applet_gba_memory, 1);
+    check("past the end", applet_at(4) == NULL, 1);
     check("Battle Chip is valid", applet_valid(&applet_battle_chip), 1);
 
     check("examples are valid", applet_valid(&applet_hello) &&
@@ -148,7 +149,7 @@ static void test_env(void) {
 static void test_handlers(void) {
     printf("handlers\n");
     app_mode_handler_t h[APPLET_MAX + 2];
-    check("one per applet", applet_handlers(h, APPLET_MAX + 2), 3);
+    check("one per applet", applet_handlers(h, APPLET_MAX + 2), 4);
     check("modes from APP_MODE_APPLET_FIRST", h[0].mode, APP_MODE_APPLET_FIRST);
     check("in order", h[2].mode, APP_MODE_APPLET_FIRST + 2);
     check("ctx is the applet", h[2].ctx == &applet_chip_dice, 1);
@@ -207,16 +208,18 @@ static void test_menu_placement(void) {
     printf("menu placement\n");
     host_t t;
     host_init(&t, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB);
-    int tp = -1, dice = -1, settings = -1;
+    int tp = -1, dice = -1, mem = -1, settings = -1;
     for (uint8_t i = 0; i < shell_item_count(&t.shell); i++) {
         const char *l = shell_label_at(&t.shell, i);
         if (!strcmp(l, "Test Pattern")) tp = i;
         if (!strcmp(l, "Chip Dice"))    dice = i;
+        if (!strcmp(l, "GBA Memory"))   mem = i;
         if (!strcmp(l, "Settings"))     settings = i;
     }
     check("Test Pattern listed", tp >= 0, 1);
     check("before Chip Dice", dice, tp + 1);
-    check("both before Settings", settings, dice + 1);
+    check("then GBA Memory", mem, dice + 1);
+    check("all before Settings", settings, mem + 1);
     int bc = -1;
     for (uint8_t i = 0; i < shell_item_count(&t.shell); i++) {
         if (!strcmp(shell_label_at(&t.shell, i), "Battle Chip")) bc = i;
@@ -592,6 +595,86 @@ static void test_battle_chip_reader(void) {
 }
 
 /* Hello: the walkthrough's page applet, not in the menu. */
+#include "fake_agent.h"
+
+/* The page as the host builds it (applet_render): title, Back on the right,
+ * then the applet's lines. */
+static void applet_render_page(const applet_t *a, const applet_env_t *env, ui_page_t *p) {
+    ui_page_init(p, a->name, NULL);
+    snprintf(p->footer_right, sizeof p->footer_right, "%s", env->hint ? env->hint : "");
+    a->page(env, p);
+}
+
+static uint32_t test_random(void) { return 0x12345678u; }
+
+/* GBA Memory: the agent services, through the real client and core. */
+static void test_gba_memory(void) {
+    printf("gba memory\n");
+    const applet_t *a = &applet_gba_memory;
+    applet_env_t bare = { .hint = "hold back", .confirm = "A" };
+    check("without the agent services it does not start", a->enter(&bare), 0);
+
+    applet_env_t env = { .hint = "hold back", .confirm = "A", .random = test_random,
+                         .agent_start = fake_agent_start, .agent = fake_agent,
+                         .agent_stop = fake_agent_stop };
+    applet_bind_env(&env);
+    ui_page_t p;
+    fa_starts = fa_stops = 0;
+    fa_fail = "put a program on the drive";
+    check("enters", a->enter(&env), 1);
+    applet_render_page(a, &env, &p);
+    check("asks for a GBA at its boot screen", strstr(p.line[1], "no cartridge") != NULL, 1);
+    check("footer: A send", strcmp(p.footer, "A send"), 0);
+    a->input(&env, APPLET_IN_CONFIRM, 0);
+    applet_render_page(a, &env, &p);
+    check("says it is sending, before it does", strcmp(p.line[0], "sending the agent..."), 0);
+    check("... and has not yet", fa_starts, 0);
+    a->tick(&env);
+    check("then sends, from tick()", fa_starts, 1);
+    applet_render_page(a, &env, &p);
+    check("a failure says why", strcmp(p.line[0], "put a program on the drive"), 0);
+    check("... in red", p.colour[0], COL_BAD);
+
+    fa_fail = NULL;
+    a->input(&env, APPLET_IN_CONFIRM, 0);
+    a->tick(&env);
+    applet_render_page(a, &env, &p);
+    check("running", strcmp(p.line[0], "agent v1 running"), 0);
+    check("where free memory starts", strcmp(p.line[1], "free from 02000800"), 0);
+    check("Ping first, under the cursor", strcmp(p.line[2], "> Ping"), 0);
+    a->input(&env, APPLET_IN_CONFIRM, 0);
+    applet_render_page(a, &env, &p);
+    check("ping", strcmp(p.line[5], "the agent answers"), 0);
+
+    a->input(&env, APPLET_IN_MOVE, 1);
+    a->input(&env, APPLET_IN_CONFIRM, 0);
+    uint16_t bd;
+    memcpy(&bd, fa_pal, 2);
+    check("Colour writes the backdrop: green", bd, 0x03E0);
+    applet_render_page(a, &env, &p);
+    check("... and says so", strcmp(p.line[5], "backdrop: green"), 0);
+    a->input(&env, APPLET_IN_CONFIRM, 0);
+    memcpy(&bd, fa_pal, 2);
+    check("again: blue", bd, 0x7C00);
+
+    a->input(&env, APPLET_IN_MOVE, 1);
+    a->input(&env, APPLET_IN_CONFIRM, 0);
+    applet_render_page(a, &env, &p);
+    check("Test 4 KB passes", strcmp(p.line[5], "4 KB ok (1)"), 0);
+    check("... above the agent", fa_load32(0x02001000) != 0 && fa_load32(0x02000800) == 0, 1);
+    a->input(&env, APPLET_IN_MOVE, 1);
+    applet_render_page(a, &env, &p);
+    check("the cursor wraps", strcmp(p.line[2], "> Ping"), 0);
+    for (uint8_t i = 0; i < p.count; i++) {
+        check("every line fits", ui_page_line_fits(&p, i), 1);
+    }
+    check("the footer fits", ui_page_footer_fits(&p), 1);
+    check("Back is not the applet's", a->input(&env, APPLET_IN_BACK, 0), 0);
+    a->exit();
+    check("exit gives the link port back", fa_stops, 1);
+    applet_bind_env(NULL);
+}
+
 static void test_hello(void) {
     printf("hello\n");
     applet_env_t env = { .hint = "hold back" };
@@ -645,6 +728,7 @@ int main(int argc, char **argv) {
     test_battle_chip();
     test_battle_chip_reader();
     test_hello();
+    test_gba_memory();
     if (g_fail) {
         printf("%d FAILURES\n", g_fail);
         return 1;

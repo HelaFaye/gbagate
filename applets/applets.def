@@ -12,6 +12,7 @@
 APPLET(battle_chip)
 APPLET(test_pattern)
 APPLET(chip_dice)
+APPLET(gba_memory)
 
 /* The walkthrough's example: uncomment to see it in the menu.
 APPLET(hello)

@@ -689,6 +689,8 @@ static bool fake_gate_start(cg_game_t g) { (void)g; return true; }
 static bool fake_gate_send(uint16_t id) { (void)id; return true; }
 static bool fake_gate_linked(void) { return true; }
 
+#include "fake_agent.h"
+
 static void test_applet_screens(const char *db_path) {
     printf("applets\n");
     FILE *f = db_path ? fopen(db_path, "rb") : NULL;
@@ -703,13 +705,16 @@ static void test_applet_screens(const char *db_path) {
     applet_env_t env = { .caps = 0xFFFFFFFFu, .has_game = true,
                          .game = CG_GAME_BN6_US, .hint = "hold back",
                          .open_db = open_db, .gate_start = fake_gate_start,
-                         .gate_send = fake_gate_send, .gate_linked = fake_gate_linked };
+                         .gate_send = fake_gate_send, .gate_linked = fake_gate_linked,
+                         .confirm = "click", .agent_start = fake_agent_start,
+                         .agent = fake_agent, .agent_stop = fake_agent_stop };
     applet_bind_env(&env);
 
     for (uint8_t i = 0; i < applet_count(); i++) {
         const applet_t *a = applet_at(i);
         check(a->name, a->enter ? a->enter(&env) : 1, 1);
-        int frames = a == applet_for_mode((app_mode_t)APP_MODE_APPLET_FIRST) ? 4 : 2;
+        int frames = a == applet_for_mode((app_mode_t)APP_MODE_APPLET_FIRST) ||
+                     !strcmp(a->name, "GBA Memory") ? 4 : 2;
         for (int k = 0; k < frames; k++) {
             ui_fill(&g_canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, 0);
             applet_render(a, &env, &g_canvas);
@@ -718,6 +723,7 @@ static void test_applet_screens(const char *db_path) {
             for (char *c = name; *c; c++) if (*c == ' ') *c = '-';
             shot(name);
             a->input(&env, APPLET_IN_CONFIRM, 0);
+            if (a->tick) a->tick(&env);
         }
         if (a->exit) a->exit();
     }

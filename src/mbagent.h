@@ -40,7 +40,7 @@ typedef enum {
     MBA_ERR_REFUSED,    /* the agent said no: see mba_client_t.last_status    */
 } mba_result_t;
 
-typedef struct {
+typedef struct mba_client {
     mb_xfer_fn xfer;
     /* Wait this long: to let the agent time out a broken command, or a
      * FILL or a CALL run. NULL on a host that does not need to wait. */

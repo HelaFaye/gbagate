@@ -85,7 +85,7 @@ static uint32_t default_random(void) {
     return x;
 }
 
-static applet_env_t  s_default = { .random = default_random };
+static applet_env_t  s_default = { .random = default_random, .confirm = "A" };
 static applet_env_t *s_env = &s_default;
 
 void applet_bind_env(applet_env_t *env) {

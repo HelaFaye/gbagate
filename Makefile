@@ -58,13 +58,14 @@ DEPS_celio     = celio.c json_lite.c
 DEPS_mbagent   = mbagent.c
 DEPS_applets   = applet.c app_modes.c ui_shell.c hw_caps.c chipgate.c chipdb.c \
                  ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c \
-                 ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c
+                 ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c mbagent.c
 # The example applets live outside src/, like any applet would.
 EXTRA_applets  = -Iapplets $(wildcard applets/*.c)
 DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c \
                  ui_shell.c hw_caps.c chipgate.c ir_cdz.c gbl_peer.c link_bridge.c \
                  link_proto.c link_session.c ui_settings.c settings.c ui_input.c \
-                 controls.c ui_romview.c rom_catalog.c gba_multiboot.c applet.c app_modes.c
+                 controls.c ui_romview.c rom_catalog.c gba_multiboot.c applet.c app_modes.c \
+                 mbagent.c
 EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \

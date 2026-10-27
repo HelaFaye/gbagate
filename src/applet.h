@@ -38,6 +38,7 @@
 #include "chipgate.h"
 #include "controls.h"
 #include "hw_caps.h"
+#include "mbagent.h"
 #include "ui_screens.h"
 
 #ifdef __cplusplus
@@ -61,6 +62,8 @@ typedef struct {
     cg_game_t   game;       /* meaningful only when has_game                */
     bool        has_game;
     const char *hint;       /* how to leave, "hold back": a footer's right  */
+    const char *confirm;    /* this board's confirm key, "click" or "A", for
+                             * a footer's left: "click send". Never NULL.  */
 
     /* Open the chip database for a game into *db. NULL when the image has
      * none. The blob lives in flash: the chipdb_t can be kept. */
@@ -92,6 +95,20 @@ typedef struct {
     uint8_t *favorites;
     size_t   favorites_len;
     void   (*favorites_changed)(void);
+
+    /*
+     * The memory agent (rom/agent.c) on the link port, to read and write a
+     * GBA's memory. NULL on an image without a link port or Send Program.
+     *   agent_start  send the agent to a GBA at its boot screen (no
+     *                cartridge) and connect to it. NULL when it answers,
+     *                else why not, in a player's words. Slow: a second or
+     *                so, so call it from tick(), not on the frame that asked.
+     *   agent        the connected client (src/mbagent.h), NULL before
+     *   agent_stop   let the link port go; exit() should call it
+     */
+    const char *(*agent_start)(void);
+    mba_client_t *(*agent)(void);
+    void (*agent_stop)(void);
 } applet_env_t;
 
 typedef struct applet {

@@ -575,8 +575,14 @@ GB-Link adapter at `ws://<board>/gblink`. See `doc/ONLINE.md`.
 
 **Applets** are modes added without touching the core: one C file in
 `applets/` and a line in `applets/applets.def`. Battle Chip, Test
-Pattern (panel calibration) and Chip Dice ship as examples;
+Pattern (panel calibration), Chip Dice and GBA Memory ship as examples;
 `doc/APPLETS.md` is the walkthrough.
+
+**GBA Memory** sends the memory agent (`rom/agent.c`) to a GBA at its boot
+screen, and the board can then read, write, fill and call anything in the
+GBA's memory over the link cable. Try it with Colour: the GBA's screen
+changes. This is the first step of the multiboot preloader. See
+`doc/AGENT.md`.
 
 **Themes**: Settings' first row picks one of five palettes (Classic, Navi,
 DMG, Contrast, Daylight). It applies at once and is saved. `test_screens`

@@ -5,7 +5,7 @@
  * The logo area is blank: the board fills it from a program on its drive
  * before sending (rom_borrow_logo), so none of Nintendo's bytes ship.
  *
- * sources: 68fef6caae85ac8e
+ * sources: 01f4b1ccb5b89a47
  * image:   cac503be9f3d57c3, 1940 bytes
  */
 #include "gbagent_image.h"

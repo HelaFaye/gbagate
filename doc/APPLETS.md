@@ -168,12 +168,14 @@ const applet_t applet_chip_dice = {
   | `caps` | which hardware this board has (`HW_CAP_*`) |
   | `game`, `has_game` | the chosen game, for an applet with `needs_game` |
   | `hint` | how to leave (`hold back`, `B back`), the right half of a page's footer |
+  | `confirm` | this board's confirm key (`click`, `A`), for the left half: `click send`. Never NULL |
   | `open_db(game, &db)` | opens a game's chip database. **NULL** on an image without databases |
   | `random()` | 32 random bits (the ESP32's hardware generator). Never NULL |
   | `gate_start(game)`, `gate_stop()` | be that game's Battle Chip Gate on the link port. NULL without a link port |
   | `gate_send(wire_id)`, `gate_cancel()`, `gate_linked()` | send a chip by wire ID (`chipdb_id_for_slot`, never the record's index); drop one still going out; is the game clocking us |
   | `read_chip()` | the wire ID of a chip in the reader board, or `CG_CHIP_NONE`. NULL without a reader. Read it a few times a second, not every frame |
   | `favorites`, `favorites_len`, `favorites_changed()` | a bit per chip record, kept across power cycles; call `favorites_changed()` after changing it |
+  | `agent_start()`, `agent()`, `agent_stop()` | the memory agent (doc/AGENT.md): send it to a GBA at its boot screen (slow, so call it from `tick()`; NULL on success, else why), the connected `mba_client_t` for `mba_read`/`mba_write`/`mba_poke16`..., and give the link port back (from `exit()`). NULL without a link port. `applets/gba_memory.c` is the example |
 
   Treat every service as optional except `random()`.
 - **Refuse in `enter()`** when the applet can't run. The menu then says "mode

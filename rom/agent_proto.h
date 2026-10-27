@@ -81,8 +81,16 @@ static inline uint32_t ag_sum(uint32_t sum, uint32_t w) {
     return (sum ^ w) * 0x01000193u;
 }
 
-/* ---- the agent's side: compiled where AG_LOAD32 and friends are defined -- */
-#ifdef AG_LOAD32
+#endif /* AGENT_PROTO_H */
+
+/*
+ * ---- the agent's side ----------------------------------------------------
+ * Compiled where AG_LOAD32 and friends are defined, and guarded on its own:
+ * a file may see the constants first (through src/mbagent.h) and define the
+ * memory macros afterwards.
+ */
+#if defined(AG_LOAD32) && !defined(AGENT_PROTO_CORE)
+#define AGENT_PROTO_CORE
 
 #define AG_RANGES 3
 
@@ -300,6 +308,4 @@ static inline uint32_t ag_step(ag_core_t *c, uint32_t in) {
     }
 }
 
-#endif /* AG_LOAD32 */
-
-#endif /* AGENT_PROTO_H */
+#endif /* AG_LOAD32 && !AGENT_PROTO_CORE */

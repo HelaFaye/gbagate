@@ -19,6 +19,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"   /* vTaskDelay */
+#include "esp_rom_sys.h"     /* esp_rom_delay_us, for the memory agent */
 
 #include "chipdb.h"
 #include "chipgate.h"
@@ -1068,6 +1069,98 @@ static uint16_t svc_read_chip(void) {
 
 static void svc_favorites_changed(void) { settings_touch(); }
 
+/* ---- the memory agent (rom/agent.c, src/mbagent.h) ----------------------
+ *
+ * Sent like any program, but carried in the firmware: its logo is borrowed
+ * from the first playable program on the drive (rom_borrow_logo), since
+ * Nintendo's bytes cannot ship. The link port is held from the send until
+ * agent_stop(), so the agent's words are never mistaken for a game's.
+ */
+#include "gbagent_image.h"
+
+static mba_client_t s_agent;
+static bool         s_agent_up;     /* the agent answered PING  */
+static bool         s_agent_port;   /* the SPI is ours          */
+
+static void agent_wait(void *ctx, uint32_t us) {
+    (void)ctx;
+    if (us >= 2000) {
+        vTaskDelay(pdMS_TO_TICKS((us + 999) / 1000));
+    } else if (us) {
+        esp_rom_delay_us(us);
+    }
+}
+
+static void svc_agent_stop(void) {
+    if (s_agent_port) {
+        mb_spi_release();
+    }
+    s_agent_port = false;
+    s_agent_up = false;
+}
+
+static const char *svc_agent_start(void) {
+    static uint8_t image[4096];
+    mb_xfer_fn xfer_fn = mb_spi_transfer();
+    if (!xfer_fn) {
+        return "this board can't send";
+    }
+    if (gbagent_image_len > sizeof image) {
+        return "agent image too large";
+    }
+    memcpy(image, gbagent_image, gbagent_image_len);
+
+    /* A logo, from a program the user owns. */
+    const rom_io_t *io = msc_io();
+    if (io && s_cat.count == 0) {
+        msc_rescan(&s_cat, 0);
+    }
+    bool logo = false;
+    for (uint16_t i = 0; io && i < s_cat.count && !logo; i++) {
+        uint8_t head[0xC0];
+        if (s_cat.entries[i].status == ROM_OK &&
+            io->read_head(NULL, s_cat.entries[i].name, head, sizeof head)) {
+            logo = rom_borrow_logo(image, gbagent_image_len, head, sizeof head);
+        }
+    }
+    if (!logo) {
+        return "put a program on the drive";   /* its logo is needed */
+    }
+
+    svc_agent_stop();
+    if (mb_spi_acquire() != ESP_OK) {
+        return "link port busy";
+    }
+    s_agent_port = true;
+    mb_session_t mb;
+    mb_init(&mb, xfer_fn, NULL);
+    mb_result_t r = mb_send(&mb, image, gbagent_image_len);
+    if (r != MB_OK) {
+        const char *advice;
+        const char *why = ui_send_result_text((int)r, &advice);
+        svc_agent_stop();
+        return why;
+    }
+    /* The agent copies its loop to IWRAM and arms the link within a few
+     * milliseconds of starting; give it half a second. */
+    mba_init(&s_agent, xfer_fn, agent_wait, NULL);
+    for (int tries = 0; tries < 20 && !s_agent_up; tries++) {
+        s_agent_up = mba_ping(&s_agent) == MBA_OK;
+        if (!s_agent_up) vTaskDelay(pdMS_TO_TICKS(25));
+    }
+    if (!s_agent_up) {
+        svc_agent_stop();
+        return "the agent did not answer";
+    }
+    ESP_LOGI(TAG, "memory agent v%lu, free from 0x%08lx", (unsigned long)s_agent.version,
+             (unsigned long)s_agent.free_start);
+    return NULL;
+}
+
+static mba_client_t *svc_agent(void) {
+    return s_agent_up ? &s_agent : NULL;
+}
+
 static void render_applet(const ui_event_t *e, bool have_event)
 {
     s_applet_env.now_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -1078,7 +1171,8 @@ static void render_applet(const ui_event_t *e, bool have_event)
     (void)screen_controls(a && a->controls ? a->controls : CTRLS_PAGE);
     ui_keys_t keys = ui_keys_for((int)s_settings.input_mode);
     ui_keys_hint(hint, sizeof hint, &keys, NULL);
-    s_applet_env.hint   = hint;
+    s_applet_env.hint    = hint;
+    s_applet_env.confirm = keys.confirm;
 
     if (have_event && e) {
         app_mode_t m = s_shell.chosen_mode;
@@ -1628,6 +1722,9 @@ void gate_shell_start(uint32_t caps) {
         s_applet_env.gate_send   = svc_gate_send;
         s_applet_env.gate_cancel = svc_gate_cancel;
         s_applet_env.gate_linked = svc_gate_linked;
+        s_applet_env.agent_start = svc_agent_start;
+        s_applet_env.agent       = svc_agent;
+        s_applet_env.agent_stop  = svc_agent_stop;
     }
     if (caps & HW_CAP_CHIP_READER) {
         s_applet_env.read_chip = svc_read_chip;
