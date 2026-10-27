@@ -109,6 +109,19 @@ else
     fail=1
 fi
 
+# Normal mode is one wiring, whoever drives it: the Wireless Adapter
+# (rfu_link) and Send Program (mb_spi) must transmit on the same pin. Send
+# Program used SD, which the GBA does not read in Normal mode.
+rfu_tx=$(sed -n 's/^#define PIN_TX[[:space:]]*\(PIN_LINK_[A-Z_]*\).*/\1/p' port/esp32s3/rfu_link_esp32s3.c)
+mb_tx=$(sed -n 's/^#define PIN_MOSI[[:space:]]*\(PIN_LINK_[A-Z_]*\).*/\1/p' port/esp32s3/mb_spi_esp32s3.c)
+if [ -n "$rfu_tx" ] && [ "$rfu_tx" = "$mb_tx" ]; then
+    printf '%-39s %s\n' "Normal-mode transmit pin" "ok ($mb_tx)"
+else
+    printf '%-39s FAIL\n' "Normal-mode transmit pin"
+    printf '    rfu_link sends on %s, mb_spi on %s\n' "${rfu_tx:-?}" "${mb_tx:-?}"
+    fail=1
+fi
+
 if python3 qemu/bsscheck.py > /tmp/bss.out 2>&1; then
     printf '%-39s %s\n' "DRAM budget" "$(tail -1 /tmp/bss.out | sed 's/^ *//')"
 else

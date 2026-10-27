@@ -23,17 +23,18 @@
 static const char *TAG = "mb_spi";
 
 /*
- * Link port, Normal 32-bit mode:
- *   pin 2 SO -> our MISO   (GBA drives, we read)
- *   pin 3 SI -> our MOSI   (we drive, GBA reads)
- *   pin 5 SC -> our SCLK   (we drive)
- *   pin 4 SD               unused in Normal mode
- *   pin 6 GND
- * Pin 1 VCC stays disconnected; the board has its own supply.
+ * Link port, Normal 32-bit mode -- the same pins rfu_link_esp32s3.c uses
+ * for the Wireless Adapter, which is this mode with the roles reversed:
+ *   the GBA's SO arrives on PIN_LINK_SI   (our MISO: GBA drives, we read)
+ *   our PIN_LINK_SO goes to the GBA's SI  (our MOSI: we drive, GBA reads)
+ *   PIN_LINK_SC                           (our SCLK: we drive)
+ *   SD is unused in Normal mode.
+ * MOSI used to be PIN_LINK_SD, a line the GBA does not read in this mode, so
+ * the program could never have arrived.
  */
-#define PIN_MISO PIN_LINK_SI   /* GBA SO */
-#define PIN_MOSI PIN_LINK_SD   /* GBA SI */
-#define PIN_SCLK PIN_LINK_SC   /* GBA SC */
+#define PIN_MISO PIN_LINK_SI   /* the GBA's SO */
+#define PIN_MOSI PIN_LINK_SO   /* to the GBA's SI */
+#define PIN_SCLK PIN_LINK_SC
 
 #define MB_HOST SPI3_HOST
 
@@ -47,6 +48,7 @@ static const char *TAG = "mb_spi";
 #define MB_CLOCK_HZ 115200
 
 static spi_device_handle_t s_spi;
+static bool                s_bus_up;   /* the bus, separately from the device */
 
 /*
  * SPI mode 3: clock idles high, data changes on the falling edge, sampled on
@@ -98,6 +100,7 @@ esp_err_t mb_spi_init(void) {
     };
     ESP_RETURN_ON_ERROR(spi_bus_initialize(MB_HOST, &bus, SPI_DMA_DISABLED),
                         TAG, "bus init");
+    s_bus_up = true;
 
     spi_device_interface_config_t dev = {
         .clock_speed_hz = MB_CLOCK_HZ,
@@ -112,15 +115,51 @@ esp_err_t mb_spi_init(void) {
     return ESP_OK;
 }
 
+/* Safe after a partial init: a bus whose device failed to attach is freed
+ * too, or every later send would fail with the bus already taken. */
 void mb_spi_deinit(void) {
     if (s_spi) {
         spi_bus_remove_device(s_spi);
         s_spi = NULL;
+    }
+    if (s_bus_up) {
         spi_bus_free(MB_HOST);
+        s_bus_up = false;
     }
 }
 
-/* Hand this to mb_init(). */
+/* Hand this to mb_init(), between mb_spi_acquire() and mb_spi_release(). */
 mb_xfer_fn mb_spi_transfer(void) {
     return mb_spi_xfer;
+}
+
+/*
+ * Take the link port for a send, and give it back.
+ *
+ * Nothing called mb_spi_init(), so a send ran SPI transactions on a device
+ * that did not exist and every one failed: "no GBA answered", always. And the
+ * pins are the Multi-Play engine's (gba_link_esp32s3.c), which has them
+ * configured and an interrupt on SC; it yields them, as it does to the
+ * Wireless Adapter driver, and takes them back on its next use.
+ */
+extern void gba_link_yield(bool yield);
+
+esp_err_t mb_spi_acquire(void) {
+    gba_link_yield(true);
+    esp_err_t err = mb_spi_init();
+    if (err != ESP_OK) {
+        mb_spi_deinit();
+        gba_link_yield(false);
+    }
+    return err;
+}
+
+void mb_spi_release(void) {
+    mb_spi_deinit();
+    /* Leave the pins as plain inputs: the engine reconfigures them when it
+     * next owns them, and nothing is driven in between. */
+    gpio_reset_pin(PIN_MOSI);
+    gpio_reset_pin(PIN_MISO);
+    gpio_reset_pin(PIN_SCLK);
+    gba_link_yield(false);
 }

@@ -48,6 +48,12 @@ static mb_xfer_fn mb_spi_transfer(void) { return NULL; }
 mb_xfer_fn mb_spi_transfer(void);
 __attribute__((weak)) mb_xfer_fn mb_spi_transfer(void) { return NULL; }
 #endif
+/* The port for the length of a send: mb_spi_esp32s3.c borrows the pins from
+ * the link engine and sets the SPI up. Weak, for images without it. */
+esp_err_t mb_spi_acquire(void);
+void      mb_spi_release(void);
+__attribute__((weak)) esp_err_t mb_spi_acquire(void) { return ESP_OK; }
+__attribute__((weak)) void      mb_spi_release(void) {}
 #include "ui_shell.h"
 #include "app_modes.h"
 #include "applet.h"
@@ -604,11 +610,19 @@ static void send_program(void)
     s_send_advice = "turn it on, no cart";
     s_send_pct = 0;
 
+    if (mb_spi_acquire() != ESP_OK) {
+        snprintf(s_send_status, sizeof s_send_status, "link port busy");
+        s_send_advice = "restart gbagate";
+        heap_caps_free(staging);
+        return;
+    }
+
     mb_session_t mb;
     mb_init(&mb, xfer_fn, NULL);
     mb.progress = send_progress;
 
     mb_result_t r = mb_send(&mb, staging, len);
+    mb_spi_release();
     snprintf(s_send_status, sizeof s_send_status, "%s",
              ui_send_result_text((int)r, &s_send_advice));
     if (r == MB_OK) {
