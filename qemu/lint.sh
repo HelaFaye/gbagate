@@ -153,4 +153,14 @@ else
     fail=1
 fi
 
+# The firmware embeds the memory agent as a C array (it has no ARM
+# toolchain); the array must be the image its current sources build.
+if emb=$(python3 tools/mb_embed.py --check rom/agent.mb src/gbagent_image.c 2>&1); then
+    printf '%-39s ok\n' "embedded memory agent current"
+else
+    printf '%-39s FAIL\n' "embedded memory agent current"
+    printf '    %s\n' "$emb"
+    fail=1
+fi
+
 exit $fail

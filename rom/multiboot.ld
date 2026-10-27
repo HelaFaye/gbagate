@@ -61,6 +61,20 @@ SECTIONS {
     __data_lma__ = LOADADDR(.data);
 
     /*
+     * Code that must be fast: it runs from IWRAM (32-bit, no wait states)
+     * but travels in the image, after .data. The program copies it up
+     * before use (rom/agent.c); the tester has none, so it is empty there.
+     */
+    .iwram : {
+        . = ALIGN(4);
+        __iwram_start__ = .;
+        *(.iwram .iwram.*)
+        . = ALIGN(4);
+        __iwram_end__ = .;
+    } > iwram AT > ewram
+    __iwram_lma__ = LOADADDR(.iwram);
+
+    /*
      * The last loadable bytes in the image, and never zero. See crt0_mb.s:
      * rom_effective_size() in src/rom_catalog.c strips trailing 0x00/0xFF
      * before transferring, so an image that happened to end in alignment
@@ -81,7 +95,9 @@ SECTIONS {
         __bss_end__ = .;
     } > ewram
 
-    /DISCARD/ : { *(.comment) *(.note.*) *(.ARM.attributes) }
+    /* Unwind tables: nothing here unwinds, and clang places them after
+     * .mbfoot, so the image would end in them instead of "GBMB". */
+    /DISCARD/ : { *(.comment) *(.note.*) *(.ARM.attributes) *(.ARM.exidx*) *(.ARM.extab*) }
 }
 
 ASSERT(__data_lma__ == __data_start__,

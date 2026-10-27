@@ -18,6 +18,13 @@
 CROSS   ?= arm-none-eabi-
 CC      := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy
+# TOOLCHAIN=clang: clang and lld instead, for a machine with LLVM and no
+# arm-none-eabi-gcc. Same flags, same linker scripts.
+ifeq ($(TOOLCHAIN),clang)
+CC      := clang --target=armv4t-none-eabi
+OBJCOPY := llvm-objcopy
+LDX     := -fuse-ld=lld
+endif
 
 ROOT    := ..
 FIXHDR  := $(ROOT)/tools/fix_header.py
@@ -42,9 +49,10 @@ MBLDFLAGS := $(ARCH) -nostdlib -nostartfiles -T multiboot.ld \
 OBJS    := crt0.o tester.o
 MB_OBJS := crt0_mb.o tester.o
 
-.PHONY: all mb clean fixheader fixheader-mb
+.PHONY: all mb agent clean fixheader fixheader-mb
 all: tester.gba
 mb: tester.mb
+agent: $(AGENT)
 
 crt0.o: crt0.s
 	$(CC) $(ARCH) -c -o $@ $<
@@ -89,6 +97,28 @@ tester.mb: tester_mb.elf
 	@$(MAKE) --no-print-directory fixheader-mb
 	@python3 $(ROOT)/tools/check_multiboot.py $@ || true
 
+# ---- the memory agent ----------------------------------------------------
+# agent.c: the multiboot program the board reads and writes GBA memory
+# through (agent_proto.h). Same startup and link as tester.mb. Its header is
+# finished here except for the logo, which the board borrows at send time
+# from a program on its drive (rom_borrow_logo), so none ships. After a
+# change: make agent-image at the top, which regenerates src/gbagent_image.c.
+agent.o: agent.c agent_proto.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+agent.elf: crt0_mb.o agent.o multiboot.ld
+	$(CC) $(ARCH) $(LDX) -nostdlib -nostartfiles -T multiboot.ld -Wl,--gc-sections \
+	    -Wl,-Map,agent.map -o $@ crt0_mb.o agent.o
+
+# AGENT=path builds the image elsewhere: CI builds it with GCC beside the
+# committed (clang-built) one and runs both on the emulator.
+AGENT ?= agent.mb
+$(AGENT): agent.elf
+	$(OBJCOPY) -O binary $< $@
+	@python3 $(FIXHDR) --in-place $@ >/dev/null || true
+	@python3 $(ROOT)/tools/check_multiboot.py $@ | grep -v 'logo area is blank' || true
+	@rm -f $@.bak
+
 # Fix the header complement (always) and the logo (if a donor is available).
 fixheader: tester.gba
 	@if [ -n "$(DONOR)" ] && [ -f "$(DONOR)" ]; then \
@@ -126,5 +156,6 @@ fixheader-mb: tester.mb
 	@python3 $(FIXHDR) --check tester.mb || true
 
 clean:
+	rm -f agent.o agent.elf agent.map
 	rm -f $(OBJS) crt0_mb.o tester.elf tester_mb.elf tester.gba tester.mb \
 	      tester.gba.bak tester.mb.bak tester.map tester_mb.map

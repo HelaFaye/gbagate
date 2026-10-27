@@ -34,7 +34,15 @@ jobs:
       # mbe2e loads the real tester ROM, built from rom/ with a bare ARM toolchain
       - run: sudo apt-get update -q && sudo apt-get install -y -q gcc-arm-none-eabi
       - run: make rom
+      # agent-emu runs the memory agent on an emulated ARM7
+      - run: pip install unicorn==2.1.1
       - run: make
+        env:
+          REQUIRE_EMU: '1'
+      # ... and the agent built here with GCC, not only the committed image
+      - run: make -C rom agent AGENT=../build/agent-gcc.mb && make agent-emu AGENT_IMAGE=build/agent-gcc.mb
+        env:
+          REQUIRE_EMU: '1'
       - run: make strict
       - run: make gblink-asan
 

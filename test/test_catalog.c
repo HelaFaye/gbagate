@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "rom_catalog.h"
+#include "gbagent_image.h"
 
 static int g_fail = 0;
 
@@ -518,7 +519,36 @@ static void test_stage_then_send(void) {
            len, mb_padded_size(len));
 }
 
+/* The memory agent ships with a blank logo; the board borrows one. */
+static void test_borrow_logo(void) {
+    printf("the agent borrows a logo\n");
+    static uint8_t img[4096];
+    check("the embedded agent fits", gbagent_image_len <= sizeof img && gbagent_image_len >= MB_MIN_SIZE, 1);
+    memcpy(img, gbagent_image, gbagent_image_len);
+    check("it ships with no logo", rom_logo_fingerprint(img) == rom_logo_fingerprint((const uint8_t[0xC0]){0}), 1);
+    check("... and a valid header otherwise", rom_validate(img, 0xC0, gbagent_image_len), ROM_OK);
+
+    uint8_t donor[0xC0];
+    memset(donor, 0, sizeof donor);
+    for (int i = ROM_LOGO_START; i < ROM_LOGO_START + ROM_LOGO_LEN; i++) donor[i] = (uint8_t)(i * 37 + 11);
+    check("borrowed", rom_borrow_logo(img, gbagent_image_len, donor, sizeof donor), 1);
+    check("the donor's logo, byte for byte", memcmp(img + ROM_LOGO_START, donor + ROM_LOGO_START, ROM_LOGO_LEN), 0);
+    check("the same fingerprint", rom_logo_fingerprint(img) == rom_logo_fingerprint(donor), 1);
+    check("the complement recomputed: the header still validates", rom_validate(img, 0xC0, gbagent_image_len), ROM_OK);
+    check("the title kept", memcmp(img + 0xA0, gbagent_image + 0xA0, 0x1D), 0);
+    check("the program untouched", memcmp(img + 0xC0, gbagent_image + 0xC0, gbagent_image_len - 0xC0), 0);
+
+    uint8_t blank[0xC0];
+    memset(blank, 0xFF, sizeof blank);
+    memcpy(img, gbagent_image, gbagent_image_len);
+    check("a blank donor is refused", rom_borrow_logo(img, gbagent_image_len, blank, sizeof blank), 0);
+    check("... and the image left alone", memcmp(img, gbagent_image, gbagent_image_len), 0);
+    check("a short donor is refused", rom_borrow_logo(img, gbagent_image_len, donor, 0x9F), 0);
+    check("a short image is refused", rom_borrow_logo(img, 0xBF, donor, sizeof donor), 0);
+}
+
 int main(void) {
+    test_borrow_logo();
     test_names();
     test_validate();
     test_padding_strip();

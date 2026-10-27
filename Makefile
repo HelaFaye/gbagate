@@ -27,7 +27,7 @@ DEPS_slot      = chip_slot.c chip_reader.c
 DEPS_chipview  = ui_chipview.c ui_shell.c chipdb.c hw_caps.c chipgate.c
 DEPS_render    = ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c
 DEPS_multiboot = gba_multiboot.c
-DEPS_catalog   = rom_catalog.c gba_multiboot.c
+DEPS_catalog   = rom_catalog.c gba_multiboot.c gbagent_image.c
 DEPS_variant   = variant.c
 DEPS_ir        = ir_cdz.c
 # The pin map lives in port/esp32s3/board.h and the two boards are checked in
@@ -55,6 +55,7 @@ DEPS_events    = input_events.c controls.c ui_input.c
 DEPS_wificfg   = wifi_cfg.c settings.c chipgate.c ui_input.c
 DEPS_json      = json_lite.c
 DEPS_celio     = celio.c json_lite.c
+DEPS_mbagent   = mbagent.c
 DEPS_applets   = applet.c app_modes.c ui_shell.c hw_caps.c chipgate.c chipdb.c \
                  ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c \
                  ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c
@@ -67,11 +68,27 @@ DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_
 EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent
 
-.PHONY: all strict lint clean chipdb gblink gblink-asan compat screens
-all: $(addprefix run-,$(SUITES)) gblink
+.PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image
+all: $(addprefix run-,$(SUITES)) gblink agent-emu
 	@./qemu/lint.sh
+
+# The memory agent's compiled image (rom/agent.mb, what the board sends) on
+# an emulated ARM7, driven by the board's own client through ctypes. Needs
+# the unicorn module; without it the test skips, unless REQUIRE_EMU is set
+# (CI sets it). AGENT_IMAGE= tests another build of it.
+AGENT_IMAGE ?= rom/agent.mb
+agent-emu: | $(BUILD)
+	@$(CC) -std=c11 -O1 -shared -fPIC -Isrc src/mbagent.c test/agent_emu/shim.c -o $(BUILD)/libmbagent_shim.so
+	@python3 -I test/agent_emu/agent_emu.py $(BUILD)/libmbagent_shim.so $(AGENT_IMAGE); st=$$?; \
+	 if [ $$st -eq 77 ] && [ -z "$$REQUIRE_EMU" ]; then exit 0; fi; exit $$st
+
+# After a change to rom/agent.c or agent_proto.h: rebuild the image and the
+# C array the firmware embeds (lint checks the two are current).
+agent-image:
+	@$(MAKE) -s -C rom agent $(if $(TOOLCHAIN),TOOLCHAIN=$(TOOLCHAIN))
+	@python3 tools/mb_embed.py rom/agent.mb src/gbagent_image.c
 
 # The GB-Link personality: GB-Link's own firmware (third_party/) on the
 # gbagate shim, driven end to end the way the GB-Link host apps drive it.
