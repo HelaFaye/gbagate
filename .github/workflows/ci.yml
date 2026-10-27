@@ -32,7 +32,18 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       # mbe2e loads the real tester ROM, built from rom/ with a bare ARM toolchain
-      - run: sudo apt-get update -q && sudo apt-get install -y -q gcc-arm-none-eabi
+      # Bounded and retried: twice an update hung on a stalled mirror for the
+      # whole job, before any of this repository's code ran.
+      - name: install gcc-arm-none-eabi
+        timeout-minutes: 12
+        run: |
+          A='-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30'
+          for i in 1 2 3; do
+            sudo timeout 180 apt-get $A update -q &&
+              sudo timeout 240 apt-get $A install -y -q gcc-arm-none-eabi && exit 0
+            echo "apt attempt $i failed; retrying"; sleep 10
+          done
+          exit 1
       - run: make rom
       # agent-emu runs the memory agent on an emulated ARM7
       - run: pip install unicorn==2.1.1
