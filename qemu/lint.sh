@@ -48,6 +48,7 @@ HW_FILES="pio/src/gate_app.c
           port/esp32s3/buttons_esp32s3.c
           port/esp32s3/sd_esp32s3.c
           port/esp32s3/buttons_mcp.c
+          port/esp32s3/input_esp32s3.c
           port/esp32s3/transport_esp32s3.c
           port/esp32s3/i2c_esp32s3.c
           port/esp32s3/mb_spi_esp32s3.c"
@@ -94,6 +95,20 @@ fi
 # Static allocations that will not fit in DRAM. A 256 KB array in a function
 # overflowed dram0_0_seg by 3 KB and the linker's message named the segment,
 # not the array.
+# Pins come from port/esp32s3/board.h and nowhere else. The display and the
+# buttons drivers each carried their own numbers, which board.h's collision
+# test could not see: CS and DC on the SD card's and I2C's pins, switches on
+# the display bus. A pin number defined in any other port file fails here.
+stray=$(grep -nE '^#define (PIN|GPIO)_?[A-Z0-9_]*[[:space:]]+\(?-?[0-9]+|\{ *BTN_[A-Z]+, *[0-9]+ *\}' \
+        port/esp32s3/*.c 2>/dev/null)
+if [ -z "$stray" ]; then
+    printf '%-39s %s\n' "pins only in board.h" "ok"
+else
+    printf '%-39s FAIL\n' "pins only in board.h"
+    printf '    %s\n' "$stray"
+    fail=1
+fi
+
 if python3 qemu/bsscheck.py > /tmp/bss.out 2>&1; then
     printf '%-39s %s\n' "DRAM budget" "$(tail -1 /tmp/bss.out | sed 's/^ *//')"
 else

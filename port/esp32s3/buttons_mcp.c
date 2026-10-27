@@ -75,6 +75,11 @@ static uint32_t read_mapped(void *ctx) {
 ui_input_t *input_active(void) { return &s_input; }
 
 esp_err_t buttons_mcp_init(input_mode_t mode) {
+    if (mode == INPUT_ENCODER) {
+        /* An encoder cannot be sampled through an I2C hop; the caller falls
+         * back to the switches on this expander. */
+        return ESP_ERR_NOT_SUPPORTED;
+    }
     if (s_bus == NULL) {
         i2c_master_bus_config_t bus = {
             .i2c_port = -1,

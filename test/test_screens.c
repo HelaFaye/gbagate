@@ -232,8 +232,12 @@ static void test_shell(void) {
     check_frame("menu", true);
     shot("menu");
 
-    shell_select(&s);   /* Battle Chip: pick a game first */
-    check("Battle Chip asks for a game", s.screen, SHELL_SCREEN_GAMES);
+    /* Self Test: pick a game first. */
+    for (uint8_t i = 0; i < shell_item_count(&s); i++) {
+        if (!strcmp(shell_label_at(&s, i), "Self Test")) s.mode_cursor = i;
+    }
+    shell_select(&s);
+    check("Self Test asks for a game", s.screen, SHELL_SCREEN_GAMES);
     ui_render_menu(&g_canvas, "Choose game", shell_label, &s, shell_item_count(&s),
                    shell_cursor(&s), "back: hold");
     menu_fits("games", shell_label, &s, shell_item_count(&s), "back: hold");
@@ -579,6 +583,11 @@ static bool open_db(cg_game_t game, chipdb_t *db) {
     return g_blob && chipdb_open(db, g_blob, g_blob_len);
 }
 
+/* A gate that takes every chip, for the Battle Chip applet's shots. */
+static bool fake_gate_start(cg_game_t g) { (void)g; return true; }
+static bool fake_gate_send(uint16_t id) { (void)id; return true; }
+static bool fake_gate_linked(void) { return true; }
+
 static void test_applet_screens(const char *db_path) {
     printf("applets\n");
     FILE *f = db_path ? fopen(db_path, "rb") : NULL;
@@ -592,7 +601,8 @@ static void test_applet_screens(const char *db_path) {
     }
     applet_env_t env = { .caps = 0xFFFFFFFFu, .has_game = true,
                          .game = CG_GAME_BN6_US, .hint = "hold back",
-                         .open_db = open_db };
+                         .open_db = open_db, .gate_start = fake_gate_start,
+                         .gate_send = fake_gate_send, .gate_linked = fake_gate_linked };
     applet_bind_env(&env);
 
     for (uint8_t i = 0; i < applet_count(); i++) {

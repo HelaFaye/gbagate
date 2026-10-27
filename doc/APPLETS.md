@@ -12,6 +12,7 @@ Three examples ship in `applets/`:
 | `hello.c` | the smallest page applet: state, input, a page | no (uncomment it in `applets.def`) |
 | `test_pattern.c` | drawing the whole canvas yourself | yes, **Test Pattern** |
 | `chip_dice.c` | asking for a game, using host services, refusing cleanly | yes, **Chip Dice** |
+| `battle_chip.c` | the gate, the chip reader and saved favourites as services; tabs, favourite mark and sort as inputs; its own controls | yes, **Battle Chip** |
 
 `test/test_applets.c` runs all three the way the firmware does, and checks
 every behaviour this page describes. `make run-applets` runs it.
@@ -169,6 +170,10 @@ const applet_t applet_chip_dice = {
   | `hint` | how to leave (`hold back`, `B back`), the right half of a page's footer |
   | `open_db(game, &db)` | opens a game's chip database. **NULL** on an image without databases |
   | `random()` | 32 random bits (the ESP32's hardware generator). Never NULL |
+  | `gate_start(game)`, `gate_stop()` | be that game's Battle Chip Gate on the link port. NULL without a link port |
+  | `gate_send(wire_id)`, `gate_cancel()`, `gate_linked()` | send a chip by wire ID (`chipdb_id_for_slot`, never the record's index); drop one still going out; is the game clocking us |
+  | `read_chip()` | the wire ID of a chip in the reader board, or `CG_CHIP_NONE`. NULL without a reader. Read it a few times a second, not every frame |
+  | `favorites`, `favorites_len`, `favorites_changed()` | a bit per chip record, kept across power cycles; call `favorites_changed()` after changing it |
 
   Treat every service as optional except `random()`.
 - **Refuse in `enter()`** when the applet can't run. The menu then says "mode
@@ -198,11 +203,24 @@ typedef struct applet {
   timer, an animation, polling a peripheral.
 - **`page()` or `draw()`** is called every frame, so a screen can change
   without input.
-- **`input()`** gets one of three intents. `APPLET_IN_MOVE` comes with a
-  signed step (`value`). `APPLET_IN_CONFIRM` is the encoder button, or A.
-  `APPLET_IN_BACK` is a long press, or B. The physical buttons behind them
-  depend on the board and on Settings → input; the applet never needs to know
-  which.
+- **`input()`** gets one intent at a time:
+
+  | intent | value | from |
+  |---|---|---|
+  | `APPLET_IN_MOVE` | signed step | turning, or up/down; L/R page by 8 |
+  | `APPLET_IN_CONFIRM` | | the encoder button, or A |
+  | `APPLET_IN_BACK` | | a hold on the encoder, or B |
+  | `APPLET_IN_TAB` | +1 or -1 | left/right on the five-way |
+  | `APPLET_IN_MARK` | | Select |
+  | `APPLET_IN_MENU` | | Start, or a hold on A without one |
+
+  The physical buttons behind them depend on the board and on Settings →
+  input, and the applet never needs to know which. The last three arrive on
+  any board with those buttons. List the ones you use in `.controls`, as
+  `CTRL_BIT()`s from `controls.h`: that decides the long presses, so a
+  two-switch board treats a hold on A as Menu only for an applet that asked
+  for Menu. An encoder has only turn, click and hold, so there only the
+  first three ever arrive.
 
 Everything runs on the UI task. Don't block in a callback: a flash write, a
 long transfer or a `vTaskDelay` freezes the screen and the buttons. Anything

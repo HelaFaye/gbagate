@@ -554,17 +554,25 @@ overlap nor overrun the scrollbar.
 
 ### Mode shell
 
-`Battle Chip · Link · Send Program · Read Chip · Infrared · USB Storage ·
-Self Test · (applets) · Settings · Diagnostics`, filtered by `hw_caps`.
+`Link · Send Program · Infrared · USB Storage · Self Test · (applets:
+Battle Chip · Test Pattern · Chip Dice) · Settings · Diagnostics`, filtered by
+`hw_caps`.
+
+**Battle Chip** is an applet (`applets/battle_chip.c`) and includes what
+used to be Read Chip. Choose a chip and send it, or put a real one in the
+reader board and it goes out as a real gate would send it. It sends each
+chip's wire ID (`chipdb_id_for_slot`). The built-in mode it replaces sent
+the table index, which names a different chip for 203 of BN4's 285 sendable
+chips.
 
 **Link** opens a choice of interface, `USB - PC or mGBA` or `Wireless -
 gbagate`, showing only what the board has. A board with only one goes
 straight to it. Back from a running link returns to that choice.
 
 **Applets** are modes added without touching the core: one C file in
-`applets/` and a line in `applets/applets.def`. Test Pattern (panel
-calibration) and Chip Dice ship as examples; `doc/APPLETS.md` is the
-walkthrough.
+`applets/` and a line in `applets/applets.def`. Battle Chip, Test
+Pattern (panel calibration) and Chip Dice ship as examples;
+`doc/APPLETS.md` is the walkthrough.
 
 **Themes**: Settings' first row picks one of five palettes (Classic, Navi,
 DMG, Contrast, Daylight). It applies at once and is saved. `test_screens`

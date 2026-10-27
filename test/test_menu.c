@@ -49,6 +49,16 @@ static void draw(void) {
                    shell_item_count(&g_shell), shell_cursor(&g_shell), "gate");
 }
 
+/* Find a menu row by label; -1 if absent. */
+static int row_of(const char *label) {
+    for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
+        if (!strcmp(shell_label_at(&g_shell, i), label)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static void test_every_mode_is_reachable(void) {
     printf("every mode is offered\n");
 
@@ -120,12 +130,13 @@ static void test_realistic_caps(void) {
     bool gate = false, selftest = false, wireless = false, diag = false;
     for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
         const char *l = shell_label_at(&g_shell, i);
-        if (!strcmp(l, "Battle Chip"))    gate = true;
         if (!strcmp(l, "Self Test"))      selftest = true;
         if (!strcmp(l, "Link"))           wireless = true;
         if (!strcmp(l, "Diagnostics"))    diag = true;
     }
-    check("chip gate offered", gate, 1);
+    /* Battle Chip is an applet: the firmware adds it after shell_init, and
+     * test_applets checks it is listed. */
+    (void)gate;
     check("self test offered", selftest, 1);
     check("link offered", wireless, 1);
     /* WiFi but no USB: Link is the wireless cable, with no choice to make. */
@@ -246,7 +257,8 @@ static void test_game_screen(void) {
     printf("game chooser\n");
 
     shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
-    /* Chip gate is first, and it needs a game. */
+    /* Self Test needs a game. */
+    g_shell.mode_cursor = (uint8_t)row_of("Self Test");
     check("does not start immediately", shell_select(&g_shell), 0);
     check("moved to the game list", g_shell.screen, SHELL_SCREEN_GAMES);
 
@@ -276,15 +288,6 @@ static void test_blank_rows(void) {
     check("blank rows painted", 1, 1);
 }
 
-/* Find a menu row by label; -1 if absent. */
-static int row_of(const char *label) {
-    for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
-        if (!strcmp(shell_label_at(&g_shell, i), label)) {
-            return i;
-        }
-    }
-    return -1;
-}
 
 /*
  * One Link entry; the interface is chosen inside it. Only the interfaces the
@@ -299,7 +302,7 @@ static void test_link_chooser(void) {
     check("no Link: USB in the menu", row_of("Link: USB"), -1);
     check("no Link: Wireless in the menu", row_of("Link: Wireless"), -1);
     int link = row_of("Link");
-    check("Link is second", link, 1);
+    check("Link is first", link, 0);
 
     g_shell.mode_cursor = (uint8_t)link;
     check("two interfaces: a choice", shell_select(&g_shell), 0);

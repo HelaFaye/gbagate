@@ -36,6 +36,7 @@
 #include "app_modes.h"
 #include "chipdb.h"
 #include "chipgate.h"
+#include "controls.h"
 #include "hw_caps.h"
 #include "ui_screens.h"
 
@@ -49,6 +50,9 @@ typedef enum {
     APPLET_IN_MOVE = 0,   /* value: detents or steps, signed               */
     APPLET_IN_CONFIRM,    /* the encoder button, or A                      */
     APPLET_IN_BACK,       /* hold, or B                                    */
+    APPLET_IN_TAB,        /* value: +1 next tab, -1 previous               */
+    APPLET_IN_MARK,       /* the favourite button (Select)                 */
+    APPLET_IN_MENU,       /* sort, or the applet's own menu (Start)        */
 } applet_input_t;
 
 typedef struct {
@@ -63,6 +67,31 @@ typedef struct {
     bool     (*open_db)(cg_game_t game, chipdb_t *db);
     /* 32 random bits. Never NULL. */
     uint32_t (*random)(void);
+
+    /*
+     * The Battle Chip Gate on the link port: the game sees a gate while it
+     * is started. NULL on an image without a link port.
+     *   gate_start   be this game's gate; false if the port is not available
+     *   gate_send    load a chip by wire ID; false while one is still going
+     *   gate_cancel  drop a chip still going out; true if there was one
+     *   gate_linked  the game is clocking us
+     */
+    bool (*gate_start)(cg_game_t game);
+    void (*gate_stop)(void);
+    bool (*gate_send)(uint16_t wire_id);
+    bool (*gate_cancel)(void);
+    bool (*gate_linked)(void);
+
+    /* The chip in a reader slot, by wire ID, or CG_CHIP_NONE. NULL when no
+     * reader board is fitted. Reads the pads: call it a few times a second,
+     * not every frame. */
+    uint16_t (*read_chip)(void);
+
+    /* Favourites, one bit per chip record, kept by the host across power
+     * cycles. favorites_changed() asks it to save, when nothing is clocked. */
+    uint8_t *favorites;
+    size_t   favorites_len;
+    void   (*favorites_changed)(void);
 } applet_env_t;
 
 typedef struct applet {
@@ -70,6 +99,13 @@ typedef struct applet {
     uint32_t    requires;     /* hw_caps bits, all needed to be listed      */
     const char *absent_hint;  /* why it is hidden, for Diagnostics          */
     bool        needs_game;   /* ask which game first, like Battle Chip     */
+    /*
+     * The controls it uses, as CTRL_BIT()s from controls.h; 0 for a page's
+     * confirm and back. It decides which keys need a long press on this
+     * board -- on a two-switch board, sort is a hold on A -- so an applet
+     * that wants tabs, a favourite mark or sort says so here.
+     */
+    uint32_t    controls;
 
     bool (*enter)(const applet_env_t *env);
     void (*exit)(void);

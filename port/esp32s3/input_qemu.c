@@ -67,26 +67,11 @@ static const char *TAG = "input_qemu";
 
 #define IN_UART ((uart_port_t)QEMU_AUX_UART)
 
-/* Mirrors ui_event_t in pio/src/tasks.c. Kept in step by the compile-time
- * check at the bottom of that file. */
-typedef enum {
-    UI_EVENT_ENCODER = 0, UI_EVENT_CHIP_IN, UI_EVENT_CHIP_OUT,
-    UI_EVENT_LINK_UP, UI_EVENT_LINK_DOWN, UI_EVENT_CHIP_SENT,
-    UI_EVENT_USB_ATTACHED, UI_EVENT_USB_DETACHED
-} ui_event_type_t;
-
-typedef struct {
-    ui_event_type_t type;
-    int32_t         a;
-    uint16_t        b;
-} ui_event_t;
+#include "ui_event.h"
+#include "input_events.h"
 
 extern bool tasks_post_ui_event(const ui_event_t *e);
 
-static void post(ui_event_type_t type, int32_t a) {
-    ui_event_t e = { .type = type, .a = a, .b = 0 };
-    tasks_post_ui_event(&e);
-}
 
 /*
  * The virtual bank. A key sets a bit and a deadline; the reader clears bits
@@ -138,11 +123,7 @@ static controls_t  s_controls;
  * it is converted; until then the emulated bank offers the lot so a matrix run
  * can exercise every binding.
  */
-#define QEMU_WANTED (CTRL_BIT(CTRL_PREV) | CTRL_BIT(CTRL_NEXT) | \
-                     CTRL_BIT(CTRL_PAGE_PREV) | CTRL_BIT(CTRL_PAGE_NEXT) | \
-                     CTRL_BIT(CTRL_TAB_PREV) | CTRL_BIT(CTRL_TAB_NEXT) | \
-                     CTRL_BIT(CTRL_CONFIRM) | CTRL_BIT(CTRL_CANCEL) | \
-                     CTRL_BIT(CTRL_MARK) | CTRL_BIT(CTRL_MENU))
+#define QEMU_WANTED INPUT_WANTED
 
 static void input_task(void *arg) {
     (void)arg;
@@ -171,24 +152,8 @@ static void input_task(void *arg) {
             }
         }
 
-        /* Drain: one poll can produce a press and a repeat. */
-        for (;;) {
-            int32_t v = 0;
-            ctrl_action_t a = controls_next(&s_controls, now_ms(), &v);
-            if (a == CTRL_NONE) {
-                break;
-            }
-            switch (a) {
-            case CTRL_PREV:      post(UI_EVENT_ENCODER, -1); break;
-            case CTRL_NEXT:      post(UI_EVENT_ENCODER, +1); break;
-            case CTRL_PAGE_PREV: post(UI_EVENT_ENCODER, v);  break;
-            case CTRL_PAGE_NEXT: post(UI_EVENT_ENCODER, v);  break;
-            case CTRL_CONFIRM:   post(UI_EVENT_CHIP_SENT, 0); break;
-            case CTRL_CANCEL:    post(UI_EVENT_CHIP_OUT, 0);  break;
-            case CTRL_MARK:      post(UI_EVENT_CHIP_IN, 0);   break;
-            default: break;   /* tabs and the menu once gate_app takes them */
-            }
-        }
+        /* The same mapping the hardware uses (src/input_events.c). */
+        input_drain(&s_controls, now_ms(), tasks_post_ui_event);
     }
 }
 

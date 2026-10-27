@@ -86,7 +86,6 @@ typedef struct {
  */
 typedef enum {
     APP_ROUTE_NONE = 0,
-    APP_ROUTE_CHIPS,       /* the chip list: Battle Chip                     */
     APP_ROUTE_ROMS,        /* the program browser: Send Program              */
     APP_ROUTE_SETTINGS,    /* the settings editor                            */
     APP_ROUTE_PAGE,        /* a page of facts and one action                 */

@@ -31,9 +31,10 @@ def caps_in(path, pattern=r'\b(HW_CAP_[A-Z_]+)\b'):
 # table, or the feature is compiled in and unreachable -- which is how the
 # infrared codec sat unused after being written and tested.
 MODE_FEATURES = {
-    "FEAT_CHIPGATE":    "APP_MODE_CHIP_GATE",
+    # Battle Chip and Read Chip are one applet; it must be listed.
+    "FEAT_CHIPGATE":    "APPLET(battle_chip)",
     "FEAT_MULTIBOOT":   "APP_MODE_MULTIBOOT",
-    "FEAT_CHIP_READER": "APP_MODE_CHIP_SCAN",
+    "FEAT_CHIP_READER": "APPLET(battle_chip)",
     "FEAT_USB_EXPOSE":  "APP_MODE_USB_STORAGE",
     "FEAT_SELFTEST":    "APP_MODE_SELFTEST",
     "FEAT_IR":          "APP_MODE_INFRARED",
@@ -45,6 +46,10 @@ def check_mode_features(root) -> int:
         variant = fh.read()
     with open(os.path.join(root, "src", "ui_shell.c"), encoding="utf-8") as fh:
         shell = fh.read()
+    # Applets are menu entries too, when applets.def lists them outside a
+    # comment.
+    with open(os.path.join(root, "applets", "applets.def"), encoding="utf-8") as fh:
+        shell += re.sub(r'/\*.*?\*/', '', fh.read(), flags=re.S)
 
     fails = 0
     for feat, mode in sorted(MODE_FEATURES.items()):
@@ -60,6 +65,9 @@ def check_mode_features(root) -> int:
 
 def main() -> int:
     required = caps_in("src/ui_shell.c")
+    import glob
+    for applet in glob.glob(os.path.join(ROOT, "applets", "*.c")):
+        required |= caps_in(os.path.relpath(applet, ROOT))
     # The enum itself lists them all; the menu is what makes them load-bearing.
     known = caps_in("src/hw_caps.h")
     settable = caps_in("pio/src/app_main.c")

@@ -73,6 +73,12 @@ void check_supermini(int *fail) {
         printf("    FAIL supermini has no pins for a chip reader\n");
         (*fail)++;
     }
+    /* Two spare pins, three needed: an encoder here would be a pin map that
+     * cannot exist, and input_esp32s3.c falls back to the switches. */
+    if (BOARD_HAS_ENCODER) {
+        printf("    FAIL supermini has no pins for an encoder\n");
+        (*fail)++;
+    }
     if (!BOARD_BUTTONS_ON_EXPANDER) {
         printf("    FAIL supermini must put the switches on an expander\n");
         (*fail)++;

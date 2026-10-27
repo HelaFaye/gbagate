@@ -27,6 +27,7 @@
 #include "ui_list.h"
 #include "ui_render.h"
 #include "ui_screens.h"
+#include "ui_event.h"
 #include "controls.h"
 #include "ir_cdz.h"
 #include "ui_romview.h"
@@ -144,11 +145,8 @@ static const struct {
 /* ---- state ------------------------------------------------------------- */
 
 static chipgate_t  s_gate;
-static chipdb_t    s_db;
-static chipview_t  s_view;
-static ui_list_t   s_list;
-static uint16_t    s_view_storage[512];
-static bool        s_db_open;
+/* The chip list, its view and favourites are the Battle Chip applet's now
+ * (applets/battle_chip.c); this file keeps the gate it drives. */
 
 /*
  * The shell was compiled, tested and never drawn: ui_service() went straight
@@ -164,6 +162,8 @@ static bool        s_db_open;
  * ESP-IDF build with -Werror.
  */
 void gate_enter_mode(app_mode_t mode, cg_game_t game);
+void gate_note_input_mode(int actual);
+int  input_hw_set_mode(int mode);
 void gate_apply_display_settings(void);
 void gate_shell_start(uint32_t caps);
 bool gate_send_chip(uint16_t wire_id);
@@ -234,15 +234,8 @@ static bool s_settings_dirty;
 static void settings_touch(void) { s_settings_dirty = true; }
 
 static void settings_flush(void) {
-    /* Pick up anything the chip screen changed. chipview owns the live copy
-     * while a gate session is running; settings owns the stored one. */
-    if (s_view.favorites_dirty) {
-        memcpy(s_settings.favorites, s_view.favorites,
-               sizeof s_settings.favorites < sizeof s_view.favorites
-                   ? sizeof s_settings.favorites : sizeof s_view.favorites);
-        s_view.favorites_dirty = false;
-        s_settings_dirty = true;
-    }
+    /* Favourites arrive already in s_settings: the Battle Chip applet writes
+     * them through env.favorites and asks for a save (settings_touch). */
     if (!s_settings_dirty) {
         return;
     }
@@ -310,9 +303,6 @@ static ui_keys_t page_keys(void) {
                       CTRL_BIT(CTRL_PAGE_PREV) | CTRL_BIT(CTRL_PAGE_NEXT))
 
 /* The chip screen: everything. */
-#define CTRLS_CHIPS  (CTRLS_LIST | CTRL_BIT(CTRL_TAB_PREV) | \
-                      CTRL_BIT(CTRL_TAB_NEXT) | CTRL_BIT(CTRL_MARK) | \
-                      CTRL_BIT(CTRL_MENU))
 
 static ui_shell_t s_shell;
 static bool       s_shell_ready;
@@ -383,37 +373,27 @@ static uint32_t s_selftest_ready;
 
 /* ---- database ---------------------------------------------------------- */
 
+/*
+ * Give the gate a game's identity by database label. QEMU calls this at boot
+ * (tasks.c) so the emulated gate answers before any UI has run; on hardware
+ * the Battle Chip applet starts the gate through env.gate_start.
+ */
 bool gate_open_database(const char *label) {
 #if defined(GBAGATE_HAS_CHIPDB)
     for (unsigned i = 0; i < DB_COUNT; i++) {
         if (strcmp(k_databases[i].label, label) != 0) {
             continue;
         }
+        chipdb_t db;
         size_t size = (size_t)(k_databases[i].end - k_databases[i].start);
-        if (!chipdb_open(&s_db, k_databases[i].start, size)) {
+        if (!chipdb_open(&db, k_databases[i].start, size)) {
             ESP_LOGE(TAG, "%s failed to open (%u bytes) -- truncated embed?",
                      label, (unsigned)size);
             return false;
         }
         chipgate_init(&s_gate, k_databases[i].game);
-        chipview_init(&s_view, &s_db, s_view_storage,
-                      sizeof s_view_storage / sizeof s_view_storage[0]);
-        /*
-         * Restore favourites. settings.c has carried this array since it was
-         * written and nothing ever read it back, so starring a chip survived
-         * exactly until the next power cycle -- and looked like the save was
-         * broken rather than never loaded.
-         */
-        memcpy(s_view.favorites, s_settings.favorites,
-               sizeof s_view.favorites < sizeof s_settings.favorites
-                   ? sizeof s_view.favorites : sizeof s_settings.favorites);
-        chipview_rebuild(&s_view);
-        ui_list_init(&s_list, UI_ROWS, true);
-        ui_list_set(&s_list, s_view.view, s_view.view_count);
-        s_db_open = true;
-
         ESP_LOGI(TAG, "%s: %u chips, gate id %04X",
-                 label, chipdb_count(&s_db), s_gate.gate_id);
+                 label, chipdb_count(&db), s_gate.gate_id);
         return true;
     }
     ESP_LOGE(TAG, "no embedded database called '%s'", label);
@@ -508,17 +488,7 @@ bool gate_send_chip(uint16_t wire_id) {
 
 /* ---- the screen -------------------------------------------------------- */
 
-typedef enum {
-    UI_EVENT_ENCODER = 0, UI_EVENT_CHIP_IN, UI_EVENT_CHIP_OUT,
-    UI_EVENT_LINK_UP, UI_EVENT_LINK_DOWN, UI_EVENT_CHIP_SENT,
-    UI_EVENT_USB_ATTACHED, UI_EVENT_USB_DETACHED
-} ui_event_type_t;
-
-typedef struct {
-    ui_event_type_t type;
-    int32_t         a;
-    uint16_t        b;
-} ui_event_t;
+/* UI events: src/ui_event.h. */
 
 /*
  * A running mode that has no screen of its own used to render nothing at all,
@@ -703,6 +673,14 @@ static void render_settings(const ui_event_t *e, bool have_event)
     if (uiset_dirty(&s_setedit)) {
         settings_touch();
         uiset_clear_dirty(&s_setedit);
+        static uint8_t applied_input = 0xFF;
+        if (applied_input == 0xFF) {
+            applied_input = s_settings.input_mode;
+        }
+        if (s_settings.input_mode != applied_input) {
+            gate_note_input_mode(input_hw_set_mode((int)s_settings.input_mode));
+            applied_input = s_settings.input_mode;
+        }
         /* Apply immediately: an offset you cannot see change is one you cannot
          * calibrate by eye, which is the only way it gets calibrated. */
         if (uiset_display_affected(&s_setedit)) {
@@ -763,21 +741,6 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
         ui_page_infrared(&page, title, footer, &ir);
         if (have_event && e && e->type == UI_EVENT_CHIP_SENT && ir.ready) {
             ir_send(ir.last);
-        }
-        break;
-    }
-
-    case APP_MODE_CHIP_SCAN: {
-        ui_scan_t scan = { .id = CG_CHIP_NONE };
-        scan.reader = chip_reader_detect(&scan.advance, &scan.beast);
-        if (scan.reader && (scan.advance || scan.beast)) {
-            scan.id = gate_scan_chip(scan.advance, scan.beast);
-            scan.name = chip_name_for(s_shell.chosen_game, scan.id);
-        }
-        ui_page_chip_scan(&page, title, footer, &scan);
-        if (have_event && e && e->type == UI_EVENT_CHIP_SENT &&
-            scan.id != CG_CHIP_NONE) {
-            gate_send_chip(scan.id);
         }
         break;
     }
@@ -943,6 +906,10 @@ static void leave_mode(void)
 {
     shell_back(&s_shell);
     app_dispatch_from_shell(&s_dispatch, &s_shell);
+    /* Deferred writes -- an applet's favourites among them -- go now that the
+     * mode has let go of the link. Nothing is written unless something
+     * changed. */
+    settings_flush();
     render_shell();
 }
 
@@ -983,11 +950,61 @@ static const char *chip_name_for(cg_game_t game, uint16_t id)
     return slot == CHIPDB_NO_RECORD ? NULL : chipdb_name(&db, slot);
 }
 
+/* ---- what applets get from the device: the gate, the reader ----------- */
+
+static bool svc_gate_start(cg_game_t game) {
+    if (!link_source_active()) {
+        return false;            /* no link port in this image */
+    }
+    s_selftest = false;
+    chipgate_init(&s_gate, game);
+    snprintf(s_status, sizeof s_status, "WAITING");
+    return true;
+}
+
+static void svc_gate_stop(void) {
+    if (chipgate_busy(&s_gate)) {
+        chipgate_clear(&s_gate);
+    }
+}
+
+static bool svc_gate_send(uint16_t wire_id) {
+    return gate_send_chip(wire_id);
+}
+
+/* A chip staged against a link that never completes leaves the gate BUSY
+ * with no way for the user to clear it; Back clears it. */
+static bool svc_gate_cancel(void) {
+    if (!chipgate_busy(&s_gate)) {
+        return false;
+    }
+    chipgate_clear(&s_gate);
+    return true;
+}
+
+static bool svc_gate_linked(void) { return chipgate_connected(&s_gate); }
+
+/* The chip in a reader slot, or CG_CHIP_NONE. Read Chip used to be its own
+ * mode for this; it is the Battle Chip applet's reader now. */
+static uint16_t svc_read_chip(void) {
+    bool adv = false, beast = false;
+    if (!chip_reader_detect(&adv, &beast) || !(adv || beast)) {
+        return CG_CHIP_NONE;
+    }
+    return gate_scan_chip(adv, beast);
+}
+
+static void svc_favorites_changed(void) { settings_touch(); }
+
 static void render_applet(const ui_event_t *e, bool have_event)
 {
     s_applet_env.now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    const applet_t *a = applet_for_mode(s_shell.chosen_mode);
     static char hint[UI_PAGE_TEXT];
-    ui_keys_t keys = page_keys();
+    /* The applet's own controls decide the long presses (sort is a hold on
+     * A on a two-switch board); a page applet gets confirm and back. */
+    (void)screen_controls(a && a->controls ? a->controls : CTRLS_PAGE);
+    ui_keys_t keys = ui_keys_for((int)s_settings.input_mode);
     ui_keys_hint(hint, sizeof hint, &keys, NULL);
     s_applet_env.hint   = hint;
 
@@ -999,6 +1016,15 @@ static void render_applet(const ui_event_t *e, bool have_event)
             break;
         case UI_EVENT_CHIP_SENT:
             applet_input_to(m, APPLET_IN_CONFIRM, 0);
+            break;
+        case UI_EVENT_TAB:
+            applet_input_to(m, APPLET_IN_TAB, e->a);
+            break;
+        case UI_EVENT_MARK:
+            applet_input_to(m, APPLET_IN_MARK, 0);
+            break;
+        case UI_EVENT_MENU:
+            applet_input_to(m, APPLET_IN_MENU, 0);
             break;
         case UI_EVENT_CHIP_OUT:
             /* Back is the applet's first, so it can cancel something of its
@@ -1019,7 +1045,7 @@ static void render_applet(const ui_event_t *e, bool have_event)
     }
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
     /* Every frame: an applet may animate, and its tick() runs regardless. */
-    applet_render(applet_for_mode(s_shell.chosen_mode), &s_applet_env, &canvas);
+    applet_render(a, &s_applet_env, &canvas);
     st7735_mark_all_dirty();
     st7735_flush();
 }
@@ -1108,8 +1134,7 @@ void ui_service(const ui_event_t *e, bool have_event) {
     app_route_t route = app_mode_route(s_shell.chosen_mode);
 
     /* A mode that did not start says why, whatever its screen would be. */
-    if (!app_dispatch_running(&s_dispatch) || route == APP_ROUTE_NONE ||
-        (route == APP_ROUTE_CHIPS && !s_db_open)) {
+    if (!app_dispatch_running(&s_dispatch) || route == APP_ROUTE_NONE) {
         if (have_event && e && e->type == UI_EVENT_CHIP_OUT) {
             leave_mode();
             return;
@@ -1158,92 +1183,15 @@ void ui_service(const ui_event_t *e, bool have_event) {
         render_applet(e, have_event);
         return;
 
-    case APP_ROUTE_CHIPS:
     default:
-        break;   /* the chip screen, below */
-    }
-
-    if (have_event && e) {
-        switch (e->type) {
-        case UI_EVENT_ENCODER:
-            ui_list_move(&s_list, e->a);
-            break;
-        case UI_EVENT_CHIP_SENT: {
-            uint16_t pos;
-            if (ui_list_selected(&s_list, &pos)) {
-                uint16_t slot = chipview_slot_at(&s_view, s_list.cursor);
-                chip_record_t rec;
-                if (chipdb_get(&s_db, slot, &rec) && gate_send_chip(rec.index)) {
-                    /* The name, not the wire ID: it is what was chosen. */
-                    snprintf(s_status, sizeof s_status, "SENT %s",
-                             chipdb_name(&s_db, slot));
-                }
-            }
-            break;
-        }
-        case UI_EVENT_CHIP_OUT:
-            /*
-             * Back cancels a chip that is still going out, then leaves the
-             * mode. Without the cancel, a chip staged against a link that
-             * never completes leaves the gate BUSY with no way for the user
-             * to clear it.
-             */
-            if (chipgate_busy(&s_gate)) {
-                chipgate_clear(&s_gate);
-                snprintf(s_status, sizeof s_status, "CANCELLED");
-            } else {
-                /* The favourites flush is the mode's exit handler now. */
-                leave_mode();
-                return;
-            }
-            break;
-        case UI_EVENT_LINK_UP:
-            snprintf(s_status, sizeof s_status, "LINKED");
-            break;
-        case UI_EVENT_LINK_DOWN:
-            snprintf(s_status, sizeof s_status, "WAITING");
-            break;
-        default:
-            break;
-        }
-    }
-
-    /* The list must stay backed by this view or the renderer refuses to draw
-     * it -- see ui_render_list_matches(). */
-    if (s_list.items != s_view.view || s_list.count != s_view.view_count) {
-        ui_list_set(&s_list, s_view.view, s_view.view_count);
-    }
-
-    if (!s_list.dirty && !have_event) {
+        render_mode_screen();
         return;
     }
-    s_list.dirty = false;
-
-    uint16_t *fb = st7735_framebuffer();
-    if (!fb) {
-        return;
-    }
-    ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
-    /* Bind the full set: the chip screen is the only one that uses tabs, the
-     * favourite mark and the sort menu, and binding is what tells ui_input
-     * whether A needs a hold on this hardware. */
-    (void)screen_controls(CTRLS_CHIPS);
-    ui_render_chip_screen(&canvas, &s_view, &s_db, &s_list, s_status);
-    st7735_mark_all_dirty();
-    st7735_flush();
 }
 
 /* Called when the shell hands control to a mode. */
 void gate_enter_mode(app_mode_t mode, cg_game_t game) {
     switch (mode) {
-    case APP_MODE_CHIP_GATE:
-        s_selftest = false;
-        gate_open_database(game == CG_GAME_BN4 ? "bn4r" :
-                           game == CG_GAME_BN5 ? "bn5p" :
-                           game == CG_GAME_BN6_JP ? "bn6g" : "bn6g");
-        chipgate_init(&s_gate, game);
-        snprintf(s_status, sizeof s_status, "WAITING");
-        break;
     case APP_MODE_MULTIBOOT: {
         /*
          * Rescan on entry rather than caching: the drive changes underneath us
@@ -1319,6 +1267,21 @@ void gate_settings_start(void) {
 
 int gate_input_mode(void) { return (int)s_settings.input_mode; }
 
+/*
+ * The mode input actually started in. A board without an encoder runs its
+ * switches even when "encoder" is saved; Settings shows what is in use, not
+ * what was asked for, and the footers name the right keys.
+ */
+void gate_note_input_mode(int actual) {
+    if (actual >= 0 && actual != (int)s_settings.input_mode) {
+        s_settings.input_mode = (uint8_t)actual;
+    }
+}
+
+/* Settings changed the input mode: apply it now. Weak, for the QEMU image,
+ * whose keyboard has no pins to rewire. */
+__attribute__((weak)) int input_hw_set_mode(int mode) { return mode; }
+
 const settings_t *gate_settings(void) { return &s_settings; }
 
 /* ---- mode handler table ------------------------------------------------- */
@@ -1337,24 +1300,6 @@ const settings_t *gate_settings(void) { return &s_settings; }
  * rather than only on the Back key.
  */
 
-static bool mode_enter_chip_gate(void *ctx, cg_game_t game, bool has_game) {
-    (void)ctx; (void)has_game;
-    gate_enter_mode(APP_MODE_CHIP_GATE, game);
-    /* A gate with no database has no identity to announce. Refuse rather than
-     * strand the user on a blank chip screen the encoder cannot escape. */
-    return s_db_open;
-}
-
-static void mode_exit_chip_gate(void *ctx) {
-    (void)ctx;
-    /* A chip staged against a link that never completed would leave the gate
-     * BUSY for ever; clear it on the way out. */
-    if (chipgate_busy(&s_gate)) {
-        chipgate_clear(&s_gate);
-    }
-    settings_flush();   /* deferred favourites, written now that nothing clocks */
-}
-
 static bool mode_enter_multiboot(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
     /* No game applies to Send Program; the rescan and browser reset live in
@@ -1367,12 +1312,6 @@ static void mode_exit_multiboot(void *ctx) {
     (void)ctx;
     s_send_status[0] = '\0';
     s_send_pct       = 0;
-}
-
-static bool mode_enter_chip_scan(void *ctx, cg_game_t game, bool has_game) {
-    (void)ctx; (void)has_game;
-    gate_enter_mode(APP_MODE_CHIP_SCAN, game);
-    return true;
 }
 
 static bool mode_enter_usb_storage(void *ctx, cg_game_t game, bool has_game) {
@@ -1478,11 +1417,9 @@ static bool mode_enter_diagnostics(void *ctx, cg_game_t game, bool has_game) {
 }
 
 static const app_mode_handler_t k_handlers[] = {
-    { .mode = APP_MODE_CHIP_GATE, .enter = mode_enter_chip_gate, .exit = mode_exit_chip_gate, .tick = NULL },
     { .mode = APP_MODE_LINK_USB, .enter = mode_enter_link, .exit = NULL, .tick = mode_tick_link },
     { .mode = APP_MODE_LINK_WIRELESS, .enter = mode_enter_wireless, .exit = mode_exit_wireless, .tick = mode_tick_link },
     { .mode = APP_MODE_MULTIBOOT, .enter = mode_enter_multiboot, .exit = mode_exit_multiboot, .tick = NULL },
-    { .mode = APP_MODE_CHIP_SCAN, .enter = mode_enter_chip_scan, .exit = NULL, .tick = NULL },
     { .mode = APP_MODE_USB_STORAGE, .enter = mode_enter_usb_storage, .exit = mode_exit_usb_storage, .tick = NULL },
     { .mode = APP_MODE_INFRARED, .enter = mode_enter_infrared, .exit = NULL, .tick = NULL },
     { .mode = APP_MODE_SELFTEST, .enter = mode_enter_selftest, .exit = mode_exit_selftest, .tick = NULL },
@@ -1513,6 +1450,19 @@ void gate_shell_start(uint32_t caps) {
     s_applet_env.caps   = caps;
     s_applet_env.open_db = applet_open_db;
     s_applet_env.random  = esp_random;
+    if (caps & HW_CAP_LINK_PORT) {
+        s_applet_env.gate_start  = svc_gate_start;
+        s_applet_env.gate_stop   = svc_gate_stop;
+        s_applet_env.gate_send   = svc_gate_send;
+        s_applet_env.gate_cancel = svc_gate_cancel;
+        s_applet_env.gate_linked = svc_gate_linked;
+    }
+    if (caps & HW_CAP_CHIP_READER) {
+        s_applet_env.read_chip = svc_read_chip;
+    }
+    s_applet_env.favorites         = s_settings.favorites;
+    s_applet_env.favorites_len     = sizeof s_settings.favorites;
+    s_applet_env.favorites_changed = svc_favorites_changed;
     applet_bind_env(&s_applet_env);
     app_dispatch_init(&s_dispatch, s_handlers, n, caps, NULL);
     s_shell_ready = true;
@@ -1528,5 +1478,4 @@ void gate_stats(uint32_t *transfers, uint32_t *chips, bool *linked) {
 }
 
 const chipgate_t *gate_state(void) { return &s_gate; }
-chipview_t       *gate_view(void)  { return &s_view; }
-ui_list_t        *gate_list(void)  { return &s_list; }
+

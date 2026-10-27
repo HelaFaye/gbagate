@@ -12,16 +12,12 @@
  * always be reachable.
  */
 static const menu_entry_t k_modes[APP_MODE_COUNT] = {
-    { APP_MODE_CHIP_GATE, "Battle Chip",
-      HW_CAP_DISPLAY | HW_CAP_LINK_PORT, "connect the link cable" },
     { APP_MODE_LINK_USB, "Link: USB",
       HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB, "plug in USB" },
     { APP_MODE_LINK_WIRELESS, "Link: Wireless",
       HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_WIFI, "WiFi unavailable" },
     { APP_MODE_MULTIBOOT, "Send Program",
       HW_CAP_DISPLAY | HW_CAP_LINK_PORT, "connect the link cable" },
-    { APP_MODE_CHIP_SCAN, "Read Chip",
-      HW_CAP_DISPLAY | HW_CAP_CHIP_READER, "reader board not detected" },
     /*
      * Infrared drives an LED from RCNT bit 3 in General Purpose mode, so it
      * needs the link port and nothing else -- no SIO, no clock. ir_cdz.c has
@@ -65,8 +61,7 @@ bool shell_mode_needs_game(app_mode_t mode) {
      * Self-test needs one too: it checks the gate identity, and which identity
      * is correct depends on the game.
      */
-    return mode == APP_MODE_CHIP_GATE || mode == APP_MODE_CHIP_SCAN ||
-           mode == APP_MODE_SELFTEST;
+    return mode == APP_MODE_SELFTEST;
 }
 
 /*
@@ -80,8 +75,7 @@ static const menu_entry_t k_link = {
 };
 
 static const int k_head[] = {
-    APP_MODE_CHIP_GATE, SHELL_ITEM_LINK, APP_MODE_MULTIBOOT, APP_MODE_CHIP_SCAN,
-    APP_MODE_INFRARED, APP_MODE_USB_STORAGE, APP_MODE_SELFTEST,
+    SHELL_ITEM_LINK, APP_MODE_MULTIBOOT, APP_MODE_INFRARED, APP_MODE_USB_STORAGE, APP_MODE_SELFTEST,
 };
 static const int k_tail[] = { APP_MODE_SETTINGS, APP_MODE_DIAGNOSTICS };
 

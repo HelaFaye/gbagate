@@ -9,6 +9,7 @@
  * anything but APPLET(...) and comments breaks the build.
  */
 
+APPLET(battle_chip)
 APPLET(test_pattern)
 APPLET(chip_dice)
 

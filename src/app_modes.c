@@ -162,12 +162,10 @@ app_route_t app_mode_route(app_mode_t mode) {
         return APP_ROUTE_APPLET;
     }
     switch (mode) {
-    case APP_MODE_CHIP_GATE:     return APP_ROUTE_CHIPS;
     case APP_MODE_MULTIBOOT:     return APP_ROUTE_ROMS;
     case APP_MODE_SETTINGS:      return APP_ROUTE_SETTINGS;
     case APP_MODE_LINK_USB:
     case APP_MODE_LINK_WIRELESS:
-    case APP_MODE_CHIP_SCAN:
     case APP_MODE_USB_STORAGE:
     case APP_MODE_INFRARED:
     case APP_MODE_SELFTEST:
@@ -189,16 +187,6 @@ const char *app_dispatch_status_name(app_dispatch_status_t s) {
 }
 
 /* ---- mode handlers ----------------------------------------------------- */
-
-static bool chipgate_enter(void *ctx, cg_game_t game, bool has_game) {
-    (void)ctx;
-    (void)game; (void)has_game;  /* gate identity is per-game but not needed here */
-    return true;
-}
-
-static void chipgate_exit(void *ctx) { (void)ctx; }
-
-static void chipgate_tick(void *ctx) { (void)ctx; }
 
 static bool link_usb_enter(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx;
@@ -229,16 +217,6 @@ static bool multiboot_enter(void *ctx, cg_game_t game, bool has_game) {
 static void multiboot_exit(void *ctx) { (void)ctx; }
 
 static void multiboot_tick(void *ctx) { (void)ctx; }
-
-static bool chip_scan_enter(void *ctx, cg_game_t game, bool has_game) {
-    (void)ctx;
-    (void)game; (void)has_game;
-    return true;
-}
-
-static void chip_scan_exit(void *ctx) { (void)ctx; }
-
-static void chip_scan_tick(void *ctx) { (void)ctx; }
 
 static bool usb_storage_enter(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx;
@@ -296,11 +274,9 @@ static void diagnostics_tick(void *ctx) { (void)ctx; }
 /* ---- handler table ---------------------------------------------------- */
 
 static const app_mode_handler_t k_handlers[] = {
-    { .mode = APP_MODE_CHIP_GATE, .enter = chipgate_enter, .exit = chipgate_exit, .tick = chipgate_tick },
     { .mode = APP_MODE_LINK_USB, .enter = link_usb_enter, .exit = link_usb_exit, .tick = link_usb_tick },
     { .mode = APP_MODE_LINK_WIRELESS, .enter = link_wireless_enter, .exit = link_wireless_exit, .tick = link_wireless_tick },
     { .mode = APP_MODE_MULTIBOOT, .enter = multiboot_enter, .exit = multiboot_exit, .tick = multiboot_tick },
-    { .mode = APP_MODE_CHIP_SCAN, .enter = chip_scan_enter, .exit = chip_scan_exit, .tick = chip_scan_tick },
     { .mode = APP_MODE_USB_STORAGE, .enter = usb_storage_enter, .exit = usb_storage_exit, .tick = usb_storage_tick },
     { .mode = APP_MODE_INFRARED, .enter = ir_enter, .exit = ir_exit, .tick = ir_tick },
     { .mode = APP_MODE_SELFTEST, .enter = selftest_enter, .exit = selftest_exit, .tick = selftest_tick },

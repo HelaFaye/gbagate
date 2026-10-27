@@ -173,8 +173,9 @@ uint16_t ui_status_colour(const char *status) {
     /* The gate's own words (gate_app.c): a chip on its way is good news, a
      * wait or a refusal is worth a glance, a dead link is the one to act on. */
     static const struct { const char *prefix; int role; } k[] = {
-        { "SENT", 1 }, { "LINKED", 1 }, { "TEST CHIP", 1 },
+        { "SENT", 1 }, { "READ", 1 }, { "LINKED", 1 }, { "TEST CHIP", 1 },
         { "BUSY", 2 }, { "WAITING", 2 }, { "CANCELLED", 2 },
+        { "NOT A GATE CHIP", 2 }, { "UNKNOWN CHIP", 2 },
         { "LINK STALLED", 3 },
     };
     for (unsigned i = 0; status && i < sizeof k / sizeof k[0]; i++) {

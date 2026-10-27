@@ -130,6 +130,18 @@
 
 #define BOARD_BUTTONS_ON_EXPANDER 0
 
+/*
+ * The rotary encoder, in the "encoder" input mode. It needs real GPIOs --
+ * ~1 kHz sampling, which an I2C round trip per poll cannot give -- and none
+ * were ever assigned, so the default input mode had no pins at all. It takes
+ * the five-way's UP, DOWN and centre pins: the two inputs are alternatives
+ * (Settings > input), and in encoder mode the switches are not read.
+ */
+#define BOARD_HAS_ENCODER 1
+#define PIN_ENC_A   PIN_BTN_UP
+#define PIN_ENC_B   PIN_BTN_DOWN
+#define PIN_ENC_SW  PIN_BTN_A
+
 /* Fitted by default on this board. */
 #ifndef BOARD_HAS_DISPLAY
 #define BOARD_HAS_DISPLAY 1
@@ -190,6 +202,11 @@
 #define BOARD_HAS_BRIDGE 0
 
 #define BOARD_BUTTONS_ON_EXPANDER 1
+
+/* No encoder: it needs three real GPIOs and this board has two spare
+ * (doc/BOARD-MINI.md). A saved "encoder" setting falls back to the
+ * switches on the expander. */
+#define BOARD_HAS_ENCODER 0
 
 #ifndef BOARD_HAS_DISPLAY
 #define BOARD_HAS_DISPLAY 1

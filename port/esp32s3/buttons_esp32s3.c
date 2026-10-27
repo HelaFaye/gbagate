@@ -4,7 +4,8 @@
  * Reading only. Debounce, repeat and long-press are in src/ui_input.c, where
  * they can be tested; this returns a raw mask and nothing else.
  *
- * Not yet run on hardware.
+ * Not yet run on hardware. Started by input_esp32s3.c, which samples the
+ * encoder in that mode and turns everything into UI events.
  *
  * Wiring
  * ------
@@ -25,26 +26,27 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 
+#include "board.h"
 #include "ui_input.h"
 
 static const char *TAG = "buttons";
 
 /*
- * Pins. The five-way takes five, the extra switches two or four. These are
- * the pins left after the link port, the display, I2C and the UARTs; check
- * them against the pin budget in README.md before building a board.
+ * Pins, from board.h. This table used to carry its own -- 10 to 21 -- which
+ * on the devkit are the SD card's chip select, the display's SPI bus and its
+ * DC line: pressing a switch would have corrupted the panel.
  */
 static const struct { uint32_t bit; int pin; } k_map[] = {
-    { BTN_UP,     10 },
-    { BTN_DOWN,   11 },
-    { BTN_LEFT,   12 },
-    { BTN_RIGHT,  13 },
-    { BTN_A,      14 },   /* the five-way's centre click */
-    { BTN_B,      15 },
-    { BTN_SELECT, 16 },
-    { BTN_L,      17 },   /* four-switch boards only */
-    { BTN_R,      18 },
-    { BTN_START,  21 },   /* five-switch boards only */
+    { BTN_UP,     PIN_BTN_UP },
+    { BTN_DOWN,   PIN_BTN_DOWN },
+    { BTN_LEFT,   PIN_BTN_LEFT },
+    { BTN_RIGHT,  PIN_BTN_RIGHT },
+    { BTN_A,      PIN_BTN_A },      /* the five-way's centre click */
+    { BTN_B,      PIN_BTN_B },
+    { BTN_SELECT, PIN_BTN_SELECT },
+    { BTN_L,      PIN_BTN_L },      /* four-switch boards only */
+    { BTN_R,      PIN_BTN_R },
+    { BTN_START,  PIN_BTN_START },  /* five-switch boards only */
 };
 #define MAP_COUNT (sizeof k_map / sizeof k_map[0])
 
@@ -72,14 +74,40 @@ uint32_t buttons_read(void *ctx) {
     return mask;
 }
 
+#if BOARD_HAS_ENCODER
+/* In encoder mode the only switch is the encoder's own, and it is A. */
+static uint32_t encoder_button_read(void *ctx) {
+    (void)ctx;
+    return gpio_get_level(PIN_ENC_SW) == 0 ? BTN_A : 0;
+}
+#endif
+
 esp_err_t buttons_init(input_mode_t mode) {
-    ui_input_init(&s_input, mode, buttons_read, NULL);
     s_configured = 0;
     if (mode == INPUT_ENCODER) {
-        /* input_encoder.c owns the pins in that mode; nothing to do here. */
-        ESP_LOGI(TAG, "encoder mode: no navigation switches configured");
+#if BOARD_HAS_ENCODER
+        /* A, B and the switch, all pulled up; the quadrature is sampled by
+         * input_esp32s3.c, the switch by ui_input through this read. */
+        gpio_config_t enc = {
+            .pin_bit_mask = (1ULL << PIN_ENC_A) | (1ULL << PIN_ENC_B) |
+                            (1ULL << PIN_ENC_SW),
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        esp_err_t e = gpio_config(&enc);
+        if (e != ESP_OK) {
+            return e;
+        }
+        ui_input_init(&s_input, mode, encoder_button_read, NULL);
+        ESP_LOGI(TAG, "encoder on A=%d B=%d SW=%d", PIN_ENC_A, PIN_ENC_B, PIN_ENC_SW);
         return ESP_OK;
+#else
+        return ESP_ERR_NOT_SUPPORTED;   /* the caller falls back to switches */
+#endif
     }
+    ui_input_init(&s_input, mode, buttons_read, NULL);
 
     uint64_t pins = 0;
     for (unsigned i = 0; i < MAP_COUNT; i++) {

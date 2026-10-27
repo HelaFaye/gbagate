@@ -26,7 +26,9 @@ static void check(const char *what, long got, long want) {
     }
 }
 
-extern const applet_t applet_hello, applet_test_pattern, applet_chip_dice;
+extern const applet_t applet_hello, applet_test_pattern, applet_chip_dice,
+                      applet_battle_chip;
+extern uint16_t battle_chip_row_slot(uint16_t row);
 
 static uint16_t    g_fb[UI_SCREEN_W * UI_SCREEN_H];
 static ui_canvas_t g_canvas = { g_fb, UI_SCREEN_W, UI_SCREEN_H };
@@ -43,7 +45,10 @@ static bool has_colour(int x, int y, int w, int h, uint16_t c) {
 
 static void  *g_blob;
 static size_t g_blob_len;
+static void  *g_bn4;        /* BN4, where index and wire ID mostly differ */
+static size_t g_bn4_len;
 static int    g_opens;
+static cg_game_t g_pick = CG_GAME_BN6_US;   /* what host_choose picks */
 
 static bool load_db(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -59,7 +64,27 @@ static bool load_db(const char *path) {
 
 static bool open_db(cg_game_t game, chipdb_t *db) {
     g_opens++;
+    if (game == CG_GAME_BN4 && g_bn4) {
+        return chipdb_open(db, g_bn4, g_bn4_len);
+    }
     return game == CG_GAME_BN6_US && chipdb_open(db, g_blob, g_blob_len);
+}
+
+/* bn4r.chdb, next to the database the suite was handed. */
+static void load_bn4(const char *bn6_path) {
+    char path[512];
+    snprintf(path, sizeof path, "%s", bn6_path);
+    char *slash = strrchr(path, '/');
+    snprintf(slash ? slash + 1 : path, sizeof path - (size_t)(slash ? slash + 1 - path : 0),
+             "bn4r.chdb");
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    g_bn4 = malloc((size_t)n);
+    g_bn4_len = fread(g_bn4, 1, (size_t)n, f);
+    fclose(f);
 }
 
 static uint32_t g_seq;
@@ -70,10 +95,14 @@ static uint32_t counting_random(void) { return g_seq++ * 2654435761u; }
 static void test_registry(void) {
     printf("registry\n");
     /* applets/applets.def: test_pattern, chip_dice; hello commented out. */
-    check("two listed", applet_count(), 2);
-    check("Test Pattern first", applet_at(0) == &applet_test_pattern, 1);
-    check("then Chip Dice", applet_at(1) == &applet_chip_dice, 1);
-    check("past the end", applet_at(2) == NULL, 1);
+    /* applets/applets.def: battle_chip, test_pattern, chip_dice; hello is
+     * commented out. */
+    check("three listed", applet_count(), 3);
+    check("Battle Chip first", applet_at(0) == &applet_battle_chip, 1);
+    check("then Test Pattern", applet_at(1) == &applet_test_pattern, 1);
+    check("then Chip Dice", applet_at(2) == &applet_chip_dice, 1);
+    check("past the end", applet_at(3) == NULL, 1);
+    check("Battle Chip is valid", applet_valid(&applet_battle_chip), 1);
 
     check("examples are valid", applet_valid(&applet_hello) &&
           applet_valid(&applet_test_pattern) && applet_valid(&applet_chip_dice), 1);
@@ -91,7 +120,7 @@ static void test_registry(void) {
 
     check("a built-in mode is not an applet", applet_for_mode(APP_MODE_SETTINGS) == NULL, 1);
     check("an applet's mode finds it",
-          applet_for_mode((app_mode_t)APP_MODE_APPLET_FIRST) == &applet_test_pattern, 1);
+          applet_for_mode((app_mode_t)(APP_MODE_APPLET_FIRST + 1)) == &applet_test_pattern, 1);
     check("an unused applet number finds none",
           applet_for_mode((app_mode_t)(APP_MODE_APPLET_FIRST + 5)) == NULL, 1);
     check("input to no applet is unused",
@@ -119,12 +148,14 @@ static void test_env(void) {
 static void test_handlers(void) {
     printf("handlers\n");
     app_mode_handler_t h[APPLET_MAX + 2];
-    check("one per applet", applet_handlers(h, APPLET_MAX + 2), 2);
+    check("one per applet", applet_handlers(h, APPLET_MAX + 2), 3);
     check("modes from APP_MODE_APPLET_FIRST", h[0].mode, APP_MODE_APPLET_FIRST);
-    check("in order", h[1].mode, APP_MODE_APPLET_FIRST + 1);
-    check("ctx is the applet", h[1].ctx == &applet_chip_dice, 1);
-    check("requires carried", h[0].requires, HW_CAP_DISPLAY);
-    check("needs_game carried", h[1].needs_game, 1);
+    check("in order", h[2].mode, APP_MODE_APPLET_FIRST + 2);
+    check("ctx is the applet", h[2].ctx == &applet_chip_dice, 1);
+    check("requires carried", h[1].requires, HW_CAP_DISPLAY);
+    check("needs_game carried", h[2].needs_game, 1);
+    check("Battle Chip needs the link port",
+          h[0].requires, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
     check("a short buffer is respected", applet_handlers(h, 1), 1);
     check("and an empty one", applet_handlers(h, 0), 0);
 }
@@ -158,7 +189,7 @@ static bool host_choose(host_t *t, const char *label) {
             shell_select(&t->shell);
             if (t->shell.screen == SHELL_SCREEN_GAMES) {
                 /* The game list runs in cg_game_t order. */
-                t->shell.game_cursor = (uint8_t)CG_GAME_BN6_US;
+                t->shell.game_cursor = (uint8_t)g_pick;
                 shell_select(&t->shell);
             }
             return app_dispatch_from_shell(&t->d, &t->shell) == APP_DISPATCH_OK;
@@ -186,6 +217,18 @@ static void test_menu_placement(void) {
     check("Test Pattern listed", tp >= 0, 1);
     check("before Chip Dice", dice, tp + 1);
     check("both before Settings", settings, dice + 1);
+    int bc = -1;
+    for (uint8_t i = 0; i < shell_item_count(&t.shell); i++) {
+        if (!strcmp(shell_label_at(&t.shell, i), "Battle Chip")) bc = i;
+    }
+    check("Battle Chip listed with a link port", bc >= 0, 1);
+    check("first of the applets", tp, bc + 1);
+    host_init(&t, HW_CAP_DISPLAY);
+    bc = -1;
+    for (uint8_t i = 0; i < shell_item_count(&t.shell); i++) {
+        if (!strcmp(shell_label_at(&t.shell, i), "Battle Chip")) bc = i;
+    }
+    check("hidden without one", bc, -1);
     host_init(&t, 0);
     check("hidden without a display", shell_item_count(&t.shell), 1);  /* Diagnostics */
 }
@@ -291,7 +334,7 @@ static void test_chip_dice(void) {
     check("leaves to the game list", t.shell.screen, SHELL_SCREEN_GAMES);
 
     /* A game with no database: refused, and the shell says so. */
-    t.shell.game_cursor = (uint8_t)CG_GAME_BN4;
+    t.shell.game_cursor = (uint8_t)CG_GAME_BN5;   /* the fake has no BN5 */
     shell_select(&t.shell);
     check("no database: refused", app_dispatch_from_shell(&t.d, &t.shell), APP_DISPATCH_REFUSED);
 
@@ -300,6 +343,252 @@ static void test_chip_dice(void) {
     t.env.open_db = NULL;
     check("no open_db: refused", host_choose(&t, "Chip Dice"), 0);
     check("with the reason", t.d.last_status, APP_DISPATCH_REFUSED);
+}
+
+/* ---- Battle Chip -------------------------------------------------------- */
+
+/* A gate and a reader, recording what the applet asks of them. */
+static struct {
+    bool      started, stopped, busy, linked;
+    cg_game_t game;
+    uint16_t  sent[32];
+    int       nsent;
+    int       cancels;
+    uint16_t  in_reader;
+    int       saves;
+} g_gate;
+static uint8_t g_favs[64];
+
+static bool gate_start(cg_game_t g) { g_gate.started = true; g_gate.game = g; return true; }
+static bool gate_start_fails(cg_game_t g) { (void)g; return false; }
+static void gate_stop(void) { g_gate.stopped = true; }
+static bool gate_send(uint16_t id) {
+    if (g_gate.busy) return false;
+    if (g_gate.nsent < 32) g_gate.sent[g_gate.nsent++] = id;
+    return true;
+}
+static bool gate_cancel(void) {
+    bool was = g_gate.busy;
+    g_gate.busy = false;
+    g_gate.cancels++;
+    return was;
+}
+static bool gate_linked(void) { return g_gate.linked; }
+static uint16_t read_chip(void) { return g_gate.in_reader; }
+static void favs_changed(void) { g_gate.saves++; }
+
+static void bc_host(host_t *t, bool reader) {
+    memset(&g_gate, 0, sizeof g_gate);
+    memset(g_favs, 0, sizeof g_favs);
+    host_init(t, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
+    t->env.gate_start  = gate_start;
+    t->env.gate_stop   = gate_stop;
+    t->env.gate_send   = gate_send;
+    t->env.gate_cancel = gate_cancel;
+    t->env.gate_linked = gate_linked;
+    t->env.read_chip   = reader ? read_chip : NULL;
+    t->env.favorites   = g_favs;
+    t->env.favorites_len = sizeof g_favs;
+    t->env.favorites_changed = favs_changed;
+}
+
+static app_mode_t bc_mode(void) { return (app_mode_t)APP_MODE_APPLET_FIRST; }
+
+/* The footer's status line, as drawn: does it hold this colour? */
+static bool status_in(uint16_t colour) {
+    return has_colour(50, UI_SCREEN_H - UI_FOOTER_H + 2, 76, UI_FOOTER_H - 4, colour);
+}
+
+static void test_battle_chip(void) {
+    printf("battle chip\n");
+    host_t t;
+    chipdb_t db;
+    check("the BN4 database is there", g_bn4 != NULL, 1);
+    chipdb_open(&db, g_bn4, g_bn4_len);
+    g_pick = CG_GAME_BN4;
+
+    /* Without a gate service -- an image with no link port -- it refuses. */
+    bc_host(&t, false);
+    t.env.gate_start = NULL;
+    check("no gate: refused", host_choose(&t, "Battle Chip"), 0);
+    bc_host(&t, false);
+    t.env.gate_start = gate_start_fails;
+    check("gate unavailable: refused", host_choose(&t, "Battle Chip"), 0);
+    bc_host(&t, false);
+    t.env.open_db = NULL;
+    check("no database: refused", host_choose(&t, "Battle Chip"), 0);
+
+    bc_host(&t, false);
+    check("starts with a game", host_choose(&t, "Battle Chip"), 1);
+    check("asked which game", t.shell.has_game, 1);
+    check("the gate started", g_gate.started, 1);
+    check("as that game's gate", g_gate.game, CG_GAME_BN4);
+    host_draw(&t);
+    check("the chip list is drawn", px(UI_SCREEN_W - 6, 1), ui_theme()->header);
+    check("waiting, in warn", status_in(ui_theme()->warn), 1);
+
+    /*
+     * The chip sent is the wire ID of the chip on screen -- not its table
+     * index, which the old built-in mode sent and which names a different
+     * chip for most of the list. Walk to a row where the two differ, so the
+     * old bug could not pass this.
+     */
+    int found = -1;
+    for (int row = 0; row < 200; row++) {
+        uint16_t slot = battle_chip_row_slot(row);
+        chip_record_t r;
+        if (slot != 0xFFFF && chipdb_get(&db, slot, &r) &&
+            chipdb_id_for_slot(&db, slot) != CHIPDB_NO_ID &&
+            chipdb_id_for_slot(&db, slot) != r.index) {
+            found = row;
+            break;
+        }
+    }
+    check("a row where index and wire ID differ", found >= 0, 1);
+    applet_input_to(bc_mode(), APPLET_IN_MOVE, found);
+    check("confirm is used", applet_input_to(bc_mode(), APPLET_IN_CONFIRM, 0), 1);
+    check("one chip sent", g_gate.nsent, 1);
+    uint16_t slot = battle_chip_row_slot(found);
+    check("its wire ID, not its index", g_gate.sent[0], chipdb_id_for_slot(&db, slot));
+    host_draw(&t);
+    check("sent, in good", status_in(ui_theme()->good), 1);
+
+    /* Busy: refused, said, and Back cancels it rather than leaving. */
+    g_gate.busy = true;
+    applet_input_to(bc_mode(), APPLET_IN_CONFIRM, 0);
+    check("nothing sent while busy", g_gate.nsent, 1);
+    host_draw(&t);
+    check("busy, in warn", status_in(ui_theme()->warn), 1);
+    check("Back cancels the chip going out", applet_input_to(bc_mode(), APPLET_IN_BACK, 0), 1);
+    check("it was cancelled", g_gate.busy, 0);
+    check("then Back is the host's", applet_input_to(bc_mode(), APPLET_IN_BACK, 0), 0);
+
+    /* Linked, from the gate. */
+    g_gate.linked = true;
+    t.env.now_ms += 10;
+    app_dispatch_tick(&t.d);
+    host_draw(&t);
+    check("linked, in good", status_in(ui_theme()->good), 1);
+
+    /* Tabs change what is listed. */
+    host_draw(&t);
+    uint16_t before[UI_SCREEN_W * UI_SCREEN_H];
+    memcpy(before, g_fb, sizeof before);
+    check("tab is used", applet_input_to(bc_mode(), APPLET_IN_TAB, 1), 1);
+    host_draw(&t);
+    check("the list changed", memcmp(before, g_fb, sizeof before) != 0, 1);
+    memcpy(before, g_fb, sizeof before);
+    check("both ways", applet_input_to(bc_mode(), APPLET_IN_TAB, -1), 1);
+    host_draw(&t);
+    check("the list changed back", memcmp(before, g_fb, sizeof before) != 0, 1);
+
+    /* A favourite is kept by the host, and saved. */
+    int set_before = 0;
+    for (unsigned i = 0; i < sizeof g_favs; i++) set_before += g_favs[i] != 0;
+    check("mark is used", applet_input_to(bc_mode(), APPLET_IN_MARK, 0), 1);
+    int set_after = 0;
+    for (unsigned i = 0; i < sizeof g_favs; i++) set_after += g_favs[i] != 0;
+    check("written to the host's favourites", set_after > set_before, 1);
+    check("and a save asked for", g_gate.saves, 1);
+
+    /* Sort cycles four orders, then Move, where confirm picks and places
+     * rather than sending. */
+    for (int i = 0; i < 4; i++) {
+        check("menu is used", applet_input_to(bc_mode(), APPLET_IN_MENU, 0), 1);
+    }
+    int sent = g_gate.nsent;
+    applet_input_to(bc_mode(), APPLET_IN_CONFIRM, 0);     /* pick */
+    host_draw(&t);
+    check("a held row is drawn", has_colour(0, UI_LIST_Y, 100, UI_LIST_H, ui_theme()->held), 1);
+    check("Back drops the held chip", applet_input_to(bc_mode(), APPLET_IN_BACK, 0), 1);
+    applet_input_to(bc_mode(), APPLET_IN_CONFIRM, 0);     /* pick again */
+    applet_input_to(bc_mode(), APPLET_IN_MOVE, 2);
+    applet_input_to(bc_mode(), APPLET_IN_CONFIRM, 0);     /* place */
+    check("Move mode sends nothing", g_gate.nsent, sent);
+    applet_input_to(bc_mode(), APPLET_IN_MENU, 0);        /* back to library */
+    applet_input_to(bc_mode(), APPLET_IN_CONFIRM, 0);
+    check("and sending works again after", g_gate.nsent, sent + 1);
+
+    /* Leaving: the gate is cleared and stopped. */
+    shell_back(&t.shell);
+    app_dispatch_from_shell(&t.d, &t.shell);
+    check("left", app_dispatch_running(&t.d), 0);
+    check("a chip in flight is dropped", g_gate.cancels >= 2, 1);
+    check("the gate stopped", g_gate.stopped, 1);
+
+    /* A chip with no wire ID cannot be sent, and the screen says so. */
+    bc_host(&t, false);
+    host_choose(&t, "Battle Chip");
+    int noid = -1;
+    for (int row = 0; row < 400; row++) {
+        uint16_t sl = battle_chip_row_slot((uint16_t)row);
+        if (sl != 0xFFFF && chipdb_id_for_slot(&db, sl) == CHIPDB_NO_ID) {
+            noid = row;
+            break;
+        }
+    }
+    if (noid >= 0) {
+        applet_input_to(bc_mode(), APPLET_IN_MOVE, noid);
+        applet_input_to(bc_mode(), APPLET_IN_CONFIRM, 0);
+        check("no wire ID: nothing sent", g_gate.nsent, 0);
+        host_draw(&t);
+        check("and a warning", status_in(ui_theme()->warn), 1);
+    }
+    shell_back(&t.shell);
+    app_dispatch_from_shell(&t.d, &t.shell);
+    g_pick = CG_GAME_BN6_US;
+}
+
+/* The reader: a chip in the slot is sent once, as a real gate sends it. */
+static void test_battle_chip_reader(void) {
+    printf("battle chip: the reader\n");
+    host_t t;
+    chipdb_t db;
+    chipdb_open(&db, g_blob, g_blob_len);
+    bc_host(&t, true);
+    host_choose(&t, "Battle Chip");
+
+    uint16_t id = chipdb_id_for_slot(&db, 5);
+    check("a chip with a wire ID", id != CHIPDB_NO_ID, 1);
+
+    t.env.now_ms = 1000;
+    app_dispatch_tick(&t.d);
+    check("empty slot: nothing sent", g_gate.nsent, 0);
+
+    g_gate.in_reader = id;
+    t.env.now_ms += 100;
+    app_dispatch_tick(&t.d);
+    check("not read more often than every 250 ms", g_gate.nsent, 0);
+    t.env.now_ms += 200;
+    app_dispatch_tick(&t.d);
+    check("inserted: sent", g_gate.nsent, 1);
+    check("that chip", g_gate.sent[0], id);
+    host_draw(&t);
+    check("said, in good", status_in(ui_theme()->good), 1);
+
+    for (int i = 0; i < 4; i++) {
+        t.env.now_ms += 300;
+        app_dispatch_tick(&t.d);
+    }
+    check("left in: sent once", g_gate.nsent, 1);
+
+    g_gate.in_reader = CG_CHIP_NONE;
+    t.env.now_ms += 300;
+    app_dispatch_tick(&t.d);
+    g_gate.in_reader = id;
+    t.env.now_ms += 300;
+    app_dispatch_tick(&t.d);
+    check("out and in again: sent again", g_gate.nsent, 2);
+
+    g_gate.in_reader = 0x7FFF;   /* outside the map */
+    t.env.now_ms += 300;
+    app_dispatch_tick(&t.d);
+    check("an unknown chip is not sent", g_gate.nsent, 2);
+    host_draw(&t);
+    check("and says so, in warn", status_in(ui_theme()->warn), 1);
+
+    shell_back(&t.shell);
+    app_dispatch_from_shell(&t.d, &t.shell);
 }
 
 /* Hello: the walkthrough's page applet, not in the menu. */
@@ -346,12 +635,15 @@ int main(int argc, char **argv) {
         printf("usage: test_applets <bn6g.chdb>\n");
         return 1;
     }
+    load_bn4(argv[1]);
     test_registry();
     test_env();
     test_handlers();
     test_menu_placement();
     test_test_pattern();
     test_chip_dice();
+    test_battle_chip();
+    test_battle_chip_reader();
     test_hello();
     if (g_fail) {
         printf("%d FAILURES\n", g_fail);

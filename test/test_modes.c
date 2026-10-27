@@ -76,7 +76,7 @@ static bool diag_enter(void *ctx, cg_game_t game, bool has_game) {
 static void diag_exit(void *ctx) { ((fakes_t *)ctx)->diag.exits++; }
 
 static const app_mode_handler_t k_handlers[] = {
-    { .mode = APP_MODE_CHIP_GATE, .enter = gate_enter, .exit = gate_exit, .tick = gate_tick },
+    { .mode = APP_MODE_SELFTEST, .enter = gate_enter, .exit = gate_exit, .tick = gate_tick },
     { .mode = APP_MODE_SETTINGS, .enter = settings_enter, .exit = settings_exit, .tick = NULL },
     { .mode = APP_MODE_DIAGNOSTICS, .enter = diag_enter, .exit = diag_exit, .tick = NULL },
 };
@@ -102,7 +102,7 @@ static void test_enter_and_exit(void) {
     check("nothing running at init", app_dispatch_running(&d), 0);
 
     check("gate enters",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, CG_GAME_BN5, true),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, CG_GAME_BN5, true),
           APP_DISPATCH_OK);
     check("running", app_dispatch_running(&d), 1);
     check("enter called once", f.gate.enters, 1);
@@ -157,7 +157,7 @@ static void test_missing_caps(void) {
     setup(&d, &f, HW_CAP_DISPLAY);
 
     check("gate refused without a link port",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, CG_GAME_BN4, true),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, CG_GAME_BN4, true),
           APP_DISPATCH_MISSING_CAPS);
     check("enter never called", f.gate.enters, 0);
     check("still idle", app_dispatch_running(&d), 0);
@@ -184,12 +184,12 @@ static void test_needs_game(void) {
      * gate identity, and the console's only symptom is silence.
      */
     check("per-game mode refused without a game",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, CG_GAME_BN6_US, false),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, CG_GAME_BN6_US, false),
           APP_DISPATCH_NEEDS_GAME);
     check("enter never called", f.gate.enters, 0);
 
     check("and refused with an out-of-range game",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, (cg_game_t)42, true),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, (cg_game_t)42, true),
           APP_DISPATCH_NEEDS_GAME);
     check("still never called", f.gate.enters, 0);
 
@@ -226,7 +226,7 @@ static void test_refused(void) {
     f.gate.refuse = true;
 
     check("refusal reported",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, CG_GAME_BN4, true),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, CG_GAME_BN4, true),
           APP_DISPATCH_REFUSED);
     check("not running", app_dispatch_running(&d), 0);
 
@@ -238,7 +238,7 @@ static void test_refused(void) {
     /* And the dispatcher is left usable. */
     f.gate.refuse = false;
     check("recovers",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, CG_GAME_BN4, true),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, CG_GAME_BN4, true),
           APP_DISPATCH_OK);
 }
 
@@ -259,8 +259,11 @@ static void test_from_shell(void) {
     check("idle while choosing", app_dispatch_running(&d), 0);
     check("nothing entered", f.gate.enters, 0);
 
-    /* Battle Chip is first and needs a game, so this only advances a screen. */
-    check("gate does not start yet", shell_select(&s), 0);
+    /* Self Test needs a game, so this only advances a screen. */
+    while (strcmp(shell_current_label(&s), "Self Test") != 0) {
+        shell_move(&s, 1);
+    }
+    check("self test does not start yet", shell_select(&s), 0);
     app_dispatch_from_shell(&d, &s);
     check("still idle on the game list", app_dispatch_running(&d), 0);
 
@@ -451,7 +454,6 @@ static void test_every_menu_entry_has_a_screen(void) {
     }
     /* All ten built-in modes and the applet. */
     check("modes reached", reached, APP_MODE_COUNT + 1);
-    check("chip gate: the chip list", app_mode_route(APP_MODE_CHIP_GATE), APP_ROUTE_CHIPS);
     check("send program: the browser", app_mode_route(APP_MODE_MULTIBOOT), APP_ROUTE_ROMS);
     check("settings: the editor", app_mode_route(APP_MODE_SETTINGS), APP_ROUTE_SETTINGS);
     check("infrared: a page", app_mode_route(APP_MODE_INFRARED), APP_ROUTE_PAGE);

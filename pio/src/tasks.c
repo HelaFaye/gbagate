@@ -17,6 +17,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "ui_event.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -45,22 +46,7 @@ static const char *TAG = "tasks";
  */
 #define LINK_IDLE_YIELD_TICKS 1
 
-typedef enum {
-    UI_EVENT_ENCODER = 0,
-    UI_EVENT_CHIP_IN,
-    UI_EVENT_CHIP_OUT,
-    UI_EVENT_LINK_UP,
-    UI_EVENT_LINK_DOWN,
-    UI_EVENT_CHIP_SENT,
-    UI_EVENT_USB_ATTACHED,
-    UI_EVENT_USB_DETACHED
-} ui_event_type_t;
-
-typedef struct {
-    ui_event_type_t type;
-    int32_t         a;
-    uint16_t        b;
-} ui_event_t;
+/* The UI events: src/ui_event.h, shared with every driver that posts them. */
 
 static QueueHandle_t s_ui_events;
 static link_bridge_t s_bridge;
@@ -196,6 +182,20 @@ void tasks_start(uint32_t features) {
     if (features & (FEAT_ESPNOW | FEAT_USB_CDC)) {
         xTaskCreatePinnedToCore(transport_task, "transport", 4096, NULL,
                                 PRIO_TRANSPORT, NULL, CORE_APP);
+    }
+#endif
+
+#if !defined(GBAGATE_QEMU)
+    /*
+     * The buttons and the encoder. Nothing started them: the menu drew on a
+     * real board and nothing could move it. The mode is Settings' (a board
+     * without an encoder falls back to its switches).
+     */
+    if (features & FEAT_DISPLAY) {
+        extern int  input_hw_start(int mode);
+        extern int  gate_input_mode(void);
+        extern void gate_note_input_mode(int actual);
+        gate_note_input_mode(input_hw_start(gate_input_mode()));
     }
 #endif
 

@@ -44,14 +44,19 @@ void st7735_mark_all_dirty(void);
 
 /* ---- wiring ----------------------------------------------------------
  *
- * Supermini GPIO is tight, so the display gets four pins and no more:
- * RST ties to the board's EN line, and the backlight is hardwired to 3V3.
- * Leaves the link port, I2C for the chip reader, and the encoder.
+ * The display gets four pins and no more: RST ties to the board's EN line,
+ * and the backlight is hardwired to 3V3. Which four is board.h's: this file
+ * used to carry its own -- CS on 10, DC on 9 -- which on the devkit are the
+ * SD card's chip select and I2C's SCL, the very collisions board.h was
+ * written to end, and on the Supermini put DC on a pin that board routes
+ * nowhere near the panel.
  */
-#define PIN_SCK 12
-#define PIN_SDA 11  /* MOSI; the panel is write-only, MISO is not connected */
-#define PIN_CS  10
-#define PIN_DC   9
+#include "board.h"
+
+#define PIN_SCK PIN_SPI_SCK
+#define PIN_SDA PIN_SPI_MOSI  /* the panel is write-only; MISO is the card's */
+#define PIN_CS  PIN_LCD_CS
+#define PIN_DC  PIN_LCD_DC
 
 #define SPI_HOST_ID SPI2_HOST
 

@@ -51,6 +51,7 @@ DEPS_modes     = app_modes.c ui_shell.c hw_caps.c chipgate.c
 DEPS_frame     = gblink_frame.c
 DEPS_usbdesc   = gblink_usbdesc.c
 DEPS_peer      = gbl_peer.c
+DEPS_events    = input_events.c controls.c ui_input.c
 DEPS_applets   = applet.c app_modes.c ui_shell.c hw_caps.c chipgate.c chipdb.c \
                  ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c \
                  ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c
@@ -63,7 +64,7 @@ DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_
 EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events
 
 .PHONY: all strict lint clean chipdb gblink gblink-asan compat screens
 all: $(addprefix run-,$(SUITES)) gblink

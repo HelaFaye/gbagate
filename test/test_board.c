@@ -38,6 +38,13 @@ static bool shared_ok(const char *a, const char *b) {
     return false;
 }
 
+static void check(const char *what, long got, long want) {
+    if (got != want) {
+        printf("    FAIL %-40s got %ld, want %ld\n", what, got, want);
+        g_fail++;
+    }
+}
+
 static void check_map(const char *board, const claim_t *c, size_t n) {
     printf("  %s: %zu pins claimed\n", board, n);
 
@@ -135,6 +142,21 @@ int main(void) {
 #if BOARD_BUTTONS_ON_EXPANDER && !defined(PIN_I2C_SDA)
     printf("    FAIL buttons on an expander with no I2C pins\n");
     g_fail++;
+#endif
+/*
+ * The encoder: the default input mode, and for a long time it had no pins at
+ * all. On the devkit it shares the five-way's UP, DOWN and centre pins -- the
+ * two inputs are alternatives -- and those must be real, non-strapping GPIOs.
+ */
+#if !BOARD_HAS_ENCODER
+    printf("    FAIL the devkit has no encoder pins\n");
+    g_fail++;
+#else
+    check("encoder A is the UP pin", PIN_ENC_A, PIN_BTN_UP);
+    check("encoder B is the DOWN pin", PIN_ENC_B, PIN_BTN_DOWN);
+    check("encoder switch is the centre pin", PIN_ENC_SW, PIN_BTN_A);
+    check("encoder pins are distinct", PIN_ENC_A != PIN_ENC_B && PIN_ENC_B != PIN_ENC_SW &&
+          PIN_ENC_A != PIN_ENC_SW, 1);
 #endif
 #if !BOARD_HAS_BUTTONS && !BOARD_BUTTONS_ON_EXPANDER
     printf("    note: no buttons fitted -- nothing can be pressed, which is\n"

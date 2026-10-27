@@ -70,6 +70,8 @@ else()
     else()
         list(APPEND SRCS ../../port/esp32s3/buttons_esp32s3.c)
     endif()
+    # The input task: the encoder, the switches, and the events they make.
+    list(APPEND SRCS ../../port/esp32s3/input_esp32s3.c)
     # The GB-Link personality, in every hardware image (FEAT_GBLINK): GB-Link's
     # firmware from third_party/, the Zephyr shim it runs on, and this board's
     # USB, PHY and hardware glue. Listed rather than globbed for the same reason
