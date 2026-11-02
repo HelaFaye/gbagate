@@ -200,6 +200,10 @@ static void begin_link(celio_t *c, uint32_t now) {
     c->tx_seq = 0;
     c->rx_seq = 0;
     memset(c->held, 0, sizeof c->held);
+    memset(c->data_out, 0, sizeof c->data_out);
+    c->status_head = c->status_count = 0;
+    c->status_inflight = false;
+    c->status_tries = 0;
 }
 
 static void on_enter_reply(celio_t *c, json_t args, uint32_t now) {
@@ -386,6 +390,128 @@ static void on_event(celio_t *c, json_t args, uint32_t now) {
     }
 }
 
+/* ---- what we send, acknowledged ------------------------------------------
+ *
+ * As Celio-Client's emitWithRetry(): an emit carries an ack id, and one that
+ * is not acknowledged within CELIO_ACK_MS is sent again under a new id, up to
+ * CELIO_RETRIES times, the wait growing 100 ms a try. While the socket is
+ * down nothing goes out; when it is back everything outstanding is sent at
+ * once (the server drops what it already has).
+ */
+
+static void emit_status(celio_t *c, uint32_t now) {
+    const struct celio_status_out *o = &c->status_q[c->status_head];
+    char f[160];
+    c->status_ack = c->next_ack++;
+    int l = snprintf(f, sizeof f, "42%lu[\"deviceStatus\",{\"uuid\":\"%s\",\"linkStatus\":%u}]",
+                     (unsigned long)c->status_ack, o->uuid, (unsigned)o->status);
+    send(c, f, (size_t)l);
+    c->status_inflight = true;
+    c->status_due = now + CELIO_ACK_MS + 100u * c->status_tries;
+}
+
+static void emit_data(celio_t *c, struct celio_data_out *o, uint32_t now) {
+    char f[CELIO_FRAME_MAX];
+    o->ack = c->next_ack++;
+    int l = snprintf(f, sizeof f, "42%lu[\"deviceData\",[{\"sequence\":%lu,\"data\":[",
+                     (unsigned long)o->ack, (unsigned long)o->seq);
+    for (int i = 0; i < 32; i++) {
+        unsigned w = (unsigned)o->data[i * 2] | (unsigned)o->data[i * 2 + 1] << 8;
+        l += snprintf(f + l, sizeof f - (size_t)l, i ? ",%u" : "%u", w);
+    }
+    l += snprintf(f + l, sizeof f - (size_t)l, "]}]]");
+    send(c, f, (size_t)l);
+    o->due = now + CELIO_ACK_MS + 100u * o->tries;
+}
+
+static void status_pop(celio_t *c) {
+    c->status_head = (uint8_t)((c->status_head + 1) % CELIO_STATUS_QUEUE);
+    c->status_count--;
+    c->status_inflight = false;
+    c->status_tries = 0;
+}
+
+static void note_rtt(celio_t *c, uint32_t due_at, uint8_t tries, uint32_t now) {
+    uint32_t sent_at = due_at - CELIO_ACK_MS - 100u * tries;
+    uint32_t rtt = now - sent_at;
+    if (rtt > c->max_rtt_ms && rtt < 60000u) {
+        c->max_rtt_ms = rtt;
+    }
+}
+
+/* An ack for one of ours: true taken, false refused. Either way it is done. */
+static void on_our_ack(celio_t *c, uint32_t id, json_t args, uint32_t now) {
+    json_t v;
+    bool ok = json_at(args, 0, &v) && json_type(v) == JSON_TRUE;
+    if (c->status_inflight && id == c->status_ack) {
+        note_rtt(c, c->status_due, c->status_tries, now);
+        ok ? c->acked++ : c->rejected++;
+        status_pop(c);
+        return;
+    }
+    for (int i = 0; i < CELIO_DATA_WINDOW; i++) {
+        struct celio_data_out *o = &c->data_out[i];
+        if (o->used && o->ack == id) {
+            note_rtt(c, o->due, o->tries, now);
+            ok ? c->acked++ : c->rejected++;
+            o->used = false;
+            return;
+        }
+    }
+    /* an ack for an emit already resent and answered: nothing to do */
+}
+
+/* Send what is due: the next status, and anything whose ack is overdue. */
+static void pump(celio_t *c, uint32_t now) {
+    if (!c->connected || c->state != CELIO_LINKED) {
+        return;
+    }
+    if (c->status_inflight && due(now, c->status_due)) {
+        if (c->status_tries >= CELIO_RETRIES) {
+            c->given_up++;
+            status_pop(c);
+        } else {
+            c->status_tries++;
+            c->resent++;
+            emit_status(c, now);
+        }
+    }
+    if (!c->status_inflight && c->status_count) {
+        emit_status(c, now);
+    }
+    for (int i = 0; i < CELIO_DATA_WINDOW; i++) {
+        struct celio_data_out *o = &c->data_out[i];
+        if (!o->used || !due(now, o->due)) {
+            continue;
+        }
+        if (o->tries >= CELIO_RETRIES) {
+            c->given_up++;
+            o->used = false;
+        } else {
+            o->tries++;
+            c->resent++;
+            emit_data(c, o, now);
+        }
+    }
+}
+
+/* The socket is back: send everything outstanding again, now. */
+static void resend_all(celio_t *c, uint32_t now) {
+    if (c->state != CELIO_LINKED) {
+        return;
+    }
+    if (c->status_inflight) {
+        c->resent++;
+        emit_status(c, now);
+    }
+    for (int i = 0; i < CELIO_DATA_WINDOW; i++) {
+        if (c->data_out[i].used) {
+            c->resent++;
+            emit_data(c, &c->data_out[i], now);
+        }
+    }
+}
+
 void celio_on_text(celio_t *c, const char *text, size_t len, uint32_t now) {
     sio_packet_t p;
     if (c->state == CELIO_IDLE || !sio_parse(text, len, &p)) {
@@ -421,6 +547,8 @@ void celio_on_text(celio_t *c, const char *text, size_t len, uint32_t now) {
         c->lost_since = 0;
         if (c->state == CELIO_CONNECTING) {
             enter_session(c, now);
+        } else {
+            resend_all(c, now);
         }
         return;
     case '4':
@@ -432,11 +560,13 @@ void celio_on_text(celio_t *c, const char *text, size_t len, uint32_t now) {
     case '3':
         if (have && p.has_id && p.id == c->enter_ack && c->state == CELIO_ENTERING) {
             on_enter_reply(c, j, now);
+        } else if (have && p.has_id) {
+            on_our_ack(c, p.id, j, now);
         }
         return;
     case '2':
         if (p.has_id) {
-            ack(c, p.id);   /* the patched server retries until it hears this */
+            ack(c, p.id);   /* the server retries, and evicts, until it hears this */
         }
         if (have && json_type(j) == JSON_ARRAY) {
             on_event(c, j, now);
@@ -448,7 +578,6 @@ void celio_on_text(celio_t *c, const char *text, size_t len, uint32_t now) {
 }
 
 void celio_on_status(celio_t *c, uint16_t status, uint32_t now) {
-    (void)now;
     c->link_status = status;
     if (c->state == CELIO_STARTING && c->step == 1 && status == ST_DEVICE_READY) {
         c->state = CELIO_LINKED;
@@ -460,27 +589,38 @@ void celio_on_status(celio_t *c, uint16_t status, uint32_t now) {
     if (status == ST_DEVICE_READY || status == ST_TRADE_DONE || status == ST_DEBUG) {
         return;   /* LinkExchangeSession.handleDeviceStatusToSocket drops these */
     }
-    char uuid[37], f[128];
-    make_uuid(c, uuid);
-    int l = snprintf(f, sizeof f, "42[\"deviceStatus\",{\"uuid\":\"%s\",\"linkStatus\":%u}]",
-                     uuid, (unsigned)status);
-    send(c, f, (size_t)l);
+    if (c->status_count >= CELIO_STATUS_QUEUE) {
+        c->dropped++;   /* the server has not answered sixteen: it is gone */
+        return;
+    }
+    struct celio_status_out *o = &c->status_q[(c->status_head + c->status_count) % CELIO_STATUS_QUEUE];
+    make_uuid(c, o->uuid);
+    o->status = status;
+    c->status_count++;
+    pump(c, now);   /* in order: it goes when the one before it is acked */
 }
 
 void celio_on_data(celio_t *c, const uint8_t *data, size_t len, uint32_t now) {
-    (void)now;
     if (c->state != CELIO_LINKED || len != 64) {
         return;
     }
-    char f[CELIO_FRAME_MAX];
-    int l = snprintf(f, sizeof f, "42[\"deviceData\",{\"sequence\":%lu,\"data\":[",
-                     (unsigned long)c->tx_seq++);
-    for (int i = 0; i < 32; i++) {
-        unsigned w = (unsigned)data[i * 2] | (unsigned)data[i * 2 + 1] << 8;
-        l += snprintf(f + l, sizeof f - (size_t)l, i ? ",%u" : "%u", w);
+    struct celio_data_out *o = NULL;
+    for (int i = 0; i < CELIO_DATA_WINDOW && !o; i++) {
+        if (!c->data_out[i].used) o = &c->data_out[i];
     }
-    l += snprintf(f + l, sizeof f - (size_t)l, "]}]");
-    send(c, f, (size_t)l);
+    if (!o) {
+        c->dropped++;   /* CELIO_DATA_WINDOW unacked: the link has stalled */
+        return;
+    }
+    o->used = true;
+    o->seq = c->tx_seq++;
+    o->tries = 0;
+    memcpy(o->data, data, 64);
+    if (c->connected) {
+        emit_data(c, o, now);
+    } else {
+        o->due = now;   /* sent when the socket is back */
+    }
 }
 
 void celio_tick(celio_t *c, uint32_t now) {
@@ -514,7 +654,9 @@ void celio_tick(celio_t *c, uint32_t now) {
     if (c->lost_since && c->state >= CELIO_WAITING && c->state <= CELIO_LINKED &&
         due(now, c->lost_since + CELIO_LOST_MS)) {
         fail(c, "server lost");
+        return;
     }
+    pump(c, now);
 }
 
 const char *celio_state_name(celio_state_t s) {

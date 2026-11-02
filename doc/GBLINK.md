@@ -252,13 +252,12 @@ as root or after `sysctl -w net.ipv4.ip_unprivileged_port_start=0`, as CI does
   `backport/gblink-launcher` teaches the launcher to recognise gbagate and hide
   the updater. Until that is merged, flash gbagate with `pio run -t upload` or
   esptool.
-- **Celio.** The newest public Celio-Client (since b057315, 3 October 2026)
-  sends with Socket.IO acks and retries. The newest public Celio-Server
-  (9f02d3e) does not answer acks. The two current heads therefore do not
-  interoperate, with any adapter. The relay test uses the client from just
-  before that change. `backport/Celio-Server` fixes the server (it then links
-  the current client, the earlier one, and one of each);
-  `backport/verify-celio.sh` checks that.
+- **Celio is Celio-Link's.** The client (since b057315) and the server
+  (since 5ead974) both moved to acked Socket.IO emits on 3 October 2026, and
+  link fine together. `GB-Link/Celio-Server` is a fork that stopped at
+  9f02d3e, before that; an earlier note here took it for the current server
+  and called the two incompatible. The compat suite now pins
+  `Celio-Link/Celio-Server` and `Celio-Link/Celio-Client` (run.sh).
 - **USB is GB-Link or a drive, not both.** The ESP32-S3 has four IN endpoints
   besides EP0, and GB-Link's interface plus CDC use them all. The `usb` setting
   chooses one, and the board reboots to apply it.

@@ -392,9 +392,11 @@ void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
     case C_WAITING:
         ui_page_add(p, COL_WARN, "waiting for partner");
         ui_page_add(p, COL_TEXT_DIM, "their code to join:");
-        if (o->session) {
-            /* Celio's ids are 21 characters, one more than a line: split
-             * them where a reader can keep their place */
+        if (o->session && strlen(o->session) <= 16) {
+            ui_page_add(p, COL_TEXT, "%s", o->session);   /* Celio's: 4 digits */
+        } else if (o->session) {
+            /* a long id (a server using nanoid()s): split it where a
+             * reader can keep their place */
             size_t n = strlen(o->session), half = (n + 1) / 2;
             ui_page_add(p, COL_TEXT, "%.*s", (int)half, o->session);
             ui_page_add(p, COL_TEXT, "%s", o->session + half);

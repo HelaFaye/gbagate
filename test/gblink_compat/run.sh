@@ -22,22 +22,27 @@ mkdir -p "$BUILD"
 # weekly, apart from the gate).
 PINS="
 gblink-netplay-bridge c554c691615c677a67c6b6190e4800ea49d8b5e0
-Celio-Client          be562a93b48c6025e398714af82bddfb6498e00c
-Celio-Server          9f02d3e6cba624f51fcac9e436be153e1e6e4119
+Celio-Client          e1bf4f831953c134f45ba074b0155ddc9f9bf616 Celio-Link
+Celio-Server          8f509bdcf2a8383b936e0f2f31b2f6553ae421ce Celio-Link
 gblink-ereader        26fb65f7a54f142c5654651721d58e15b42300c2
 gb-pokemon-web        525b2fb4b62864d6d2f6a1b3cf0f9a4fb0212b0e
 gblink-distributor    afa48efcee7f4e5cdb4a2e0070d41e82023055a5
 gblink-launcher       bac443a78c05476a2b82ebab021ea58747966998
 GB-Link-Switch-LDN    37c693b7f7689d8812a06e54018b5468ed4d8075
 "
+# Celio is Celio-Link's: GB-Link/Celio-Server is a fork that stopped at
+# 9f02d3e (2026-06-17), before upstream answered the client's acks (Oct 3-6).
+# Testing against it made the two look incompatible when they are not.
 SRC="${GBLINK_SRC:-$BUILD/src}"
 mkdir -p "$SRC"
-echo "$PINS" | while read -r repo pin; do
+echo "$PINS" | while read -r repo pin owner; do
     [ -n "$repo" ] || continue
+    url="https://github.com/${owner:-GB-Link}/$repo"
     if [ ! -d "$SRC/$repo/.git" ] && [ ! -d "$SRC/$repo/src" ]; then
-        git clone -q "https://github.com/GB-Link/$repo" "$SRC/$repo"
+        git clone -q "$url" "$SRC/$repo"
     fi
     if [ -z "${GBLINK_SRC:-}" ]; then
+        git -C "$SRC/$repo" remote set-url origin "$url"   # an older checkout may be the fork's
         if [ -n "${GBLINK_COMPAT_HEADS:-}" ]; then
             git -C "$SRC/$repo" fetch -q origin && git -C "$SRC/$repo" checkout -q --detach origin/HEAD
         else
@@ -54,19 +59,6 @@ export GBLINK_LAUNCHER_BASE
 if [ -n "${GBLINK_COMPAT_HEADS:-}" ]; then GBLINK_LAUNCHER_BASE=origin/HEAD
 else GBLINK_LAUNCHER_BASE=bac443a78c05476a2b82ebab021ea58747966998; fi
 
-# The newest public Celio-Client sends status and data with Socket.IO acks
-# and retries (b057315, 2026-10-03); the newest public Celio-Server
-# (9f02d3e, 2026-06-17) neither acks them nor unwraps the ack argument, so the
-# two current repos do not interoperate (see doc/GBLINK.md). The test runs
-# the client from just before that change, the pair the public server serves.
-LEGACY="$BUILD/src/Celio-Client-pre-ack"
-if [ ! -d "$LEGACY/src" ]; then
-    git -C "$SRC/Celio-Client" fetch -q --unshallow 2>/dev/null || true
-    if ! git -C "$SRC/Celio-Client" worktree add -q --detach "$LEGACY" b057315^ 2>/dev/null; then
-        git clone -q "$SRC/Celio-Client" "$LEGACY" && git -C "$LEGACY" checkout -q b057315^
-    fi
-fi
-
 # esbuild pinned to the bridge's version; Celio's runtime deps at the ranges
 # its package.json files ask for; playwright-core for the launcher test, which
 # drives the preinstalled Chromium (it downloads no browser). One install for
@@ -78,11 +70,10 @@ if [ ! -d "$BUILD/node_modules/socket.io-client" ] || [ ! -d "$BUILD/node_module
         uuid@11.1.1 nanoid@5.1.16 true-myth@9.4.0 ws@8.22.0 playwright-core@1.56.1 >/dev/null)
 fi
 
-echo "Celio-Client used for the relay test: $(git -C "$LEGACY" log -1 --format='%h %cd' --date=short) (pre-ack, matches the public server)"
 
 "$ROOT/test/gblink_sim/fetch_librfu.sh" || { echo "librfu: not fetched; the Wireless Adapter parts will skip"; [ -z "${GBLINK_NO_SKIP:-}" ]; }
 make -s -C "$ROOT/test/gblink_sim"
-node "$HERE/build.mjs" "$BUILD" "$SRC/gblink-netplay-bridge" "$LEGACY" "$SRC/Celio-Server"
+node "$HERE/build.mjs" "$BUILD" "$SRC/gblink-netplay-bridge" "$SRC/Celio-Client" "$SRC/Celio-Server"
 
 fail=0
 for t in "$HERE"/test_*.mjs; do

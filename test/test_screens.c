@@ -524,10 +524,13 @@ static void test_pages(void) {
     lead("online-connecting", &p, "finding Celio...", COL_WARN);
     on.celio = 3; on.session = "V1StGXR8_Z5jdHi6B-myT";
     ui_page_online(&p, "Link: Online", foot, &on);
+    check("online: a long id, in two halves", strcmp(p.line[2], "V1StGXR8_Z5") ||
+                                              strcmp(p.line[3], "jdHi6B-myT"), 0);
+    on.session = "0427";   /* Celio-Server's: four digits */
+    ui_page_online(&p, "Link: Online", foot, &on);
     lead("online-waiting", &p, "waiting for partner", COL_WARN);
-    check("online: the code, in two halves", strcmp(p.line[2], "V1StGXR8_Z5") ||
-                                             strcmp(p.line[3], "jdHi6B-myT"), 0);
-    check("online: and the address", strcmp(p.line[4], "IP 192.168.100.200"), 0);
+    check("online: Celio's code on one line", strcmp(p.line[2], "0427"), 0);
+    check("online: and the address", strcmp(p.line[3], "IP 192.168.100.200"), 0);
     check("online: nothing to confirm", p.footer[0] == '\0' || strstr(p.footer, "retry") == NULL, 1);
     page("online-waiting", &p);
     on.celio = 4;

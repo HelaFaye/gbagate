@@ -7,22 +7,18 @@
 // carries WebSocket frames between each simulator and the server, the way
 // the board's network driver would, byte for byte: it parses none of them.
 //
-// Runs against the public server's code (9f02d3e, unmodified) and, when
-// backport/verify-celio.sh has built it, backport/Celio-Server's patched one.
+// Runs against Celio-Link/Celio-Server, the server Celio-Client's own
+// production setting points at (run.sh pins it): acked emits both ways,
+// data in batches, four-digit session codes.
 import { spawn } from 'node:child_process';
-import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { SimDevice } from './sim_transport.mjs';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
 const out = process.argv[2];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const STATE = ['idle', 'connecting', 'entering', 'waiting', 'starting', 'linked', 'closed', 'failed'];
 
-const servers = process.env.CELIO_ONLY === 'patched' ? [] : [['public', path.join(out, 'celio_server.mjs')]];
-const patched = path.resolve(HERE, '../../build/backport/celio-patched/server/dist/index.js');
-if (fs.existsSync(patched)) servers.push(['patched', patched]);
+const servers = [['Celio-Link', path.join(out, 'celio_server.mjs')]];
 
 /** The board's network driver, played by node: a WebSocket per connect(true). */
 function network(dev, url, log) {
@@ -109,7 +105,7 @@ async function run(name, serverJs) {
     devA.send('c', 0);                                       // create
     const a = await until(async () => { const v = await view(devA); return v.state === 'waiting' && v; },
                           10000, 'A in a session');
-    if (a.session.length < 10) throw new Error(`session id "${a.session}"`);
+    if (!/^\d{4}$/.test(a.session)) throw new Error(`session code "${a.session}"`);
     devB.send('c', 0, Buffer.from(a.session));               // join by the id A shows
     await until(async () => (await view(devA)).state === 'linked' && (await view(devB)).state === 'linked',
                 10000, 'both linked');

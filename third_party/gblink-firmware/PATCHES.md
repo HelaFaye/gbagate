@@ -51,10 +51,10 @@ overflow.
 
 ## Not gbagate's to fix
 
-- **Celio-Client and Celio-Server do not interoperate at their current heads**
-  (the client acks and retries since b057315; the server does not answer
-  acks). Nothing in the firmware is involved; the server fix is offered in
-  `backport/Celio-Server/` (see backport/README.md).
+- **Celio-Client and Celio-Server do interoperate** -- withdrawn. The
+  incompatibility noted here was against `GB-Link/Celio-Server`, a fork that
+  stopped at 9f02d3e; `Celio-Link/Celio-Server` answers the client's acks
+  since 5ead974 (3 October 2026). `backport/Celio-Server/` is superseded.
 
 ## Known and left alone
 

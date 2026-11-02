@@ -14,6 +14,7 @@
 # --client-suite also runs Celio-Client's own tests (tests/, vitest), which
 # start the server from a checkout, against the patched server. They need
 # port 443 (root, or net.ipv4.ip_unprivileged_port_start=0) and npm.
+echo "verify-celio: superseded -- Celio-Link/Celio-Server already has these changes (backport/README.md)"; exit 0
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"

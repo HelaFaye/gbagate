@@ -15,11 +15,15 @@
  * runs on the board and in the simulator, where test/gblink_compat drives it
  * against the real Celio-Server.
  *
- * What it speaks is the Socket.IO protocol of Celio-Client before b057315,
- * the one the public Celio-Server (9f02d3e) serves: status and data emitted
- * without acknowledgements. It acknowledges whatever the server sends with an
- * ack id, so it works with backport/Celio-Server's patched server too, which
- * serves both kinds of client.
+ * What it speaks is Celio-Client's current protocol (since b057315), the one
+ * Celio-Link/Celio-Server answers (since 5ead974, both 2026-10-03): every
+ * deviceStatus and deviceData is emitted with a Socket.IO ack and resent
+ * until it is acknowledged, status one at a time in order, data as
+ * single-packet batches with up to CELIO_DATA_WINDOW in flight; the server
+ * drops duplicates (status by uuid, data by sequence). Whatever the server
+ * sends with an ack id -- commands, data batches, session events -- is
+ * acknowledged. (GB-Link/Celio-Server is a fork that stopped before this; it
+ * does not unwrap acked emits and is not a server to target.)
  *
  * The flow, as Celio-Client's onlineLink page runs it:
  *   connect, then create a session (and show its id) or join one;
@@ -41,9 +45,15 @@ extern "C" {
 #endif
 
 #define CELIO_SESSION_MAX 32
-#define CELIO_REORDER     16    /* data packets held while one is missing   */
+#define CELIO_REORDER     64    /* data packets held while one is missing:
+                                 * the server pipelines its sends            */
 #define CELIO_SEEN_CMDS   16    /* command uuids remembered, for duplicates */
 #define CELIO_FRAME_MAX   512   /* the longest frame it sends               */
+#define CELIO_STATUS_QUEUE 16   /* status words waiting their turn          */
+#define CELIO_DATA_WINDOW 64    /* data packets sent and not yet acked, as
+                                 * Celio-Client's MAX_UNACKED_DATA           */
+#define CELIO_ACK_MS      1000  /* socket.timeout(1000) before a resend      */
+#define CELIO_RETRIES     5     /* resends before a packet is given up       */
 
 typedef struct {
     /* One WebSocket text frame to the server. False if it could not be sent
@@ -95,8 +105,31 @@ typedef struct {
     char          seen[CELIO_SEEN_CMDS][37];
     uint8_t       seen_next;
 
+    /* What we sent that the server has not acknowledged. A slot is resent
+     * when `due`, with a fresh ack id, until CELIO_RETRIES are spent. */
+    struct celio_status_out {
+        char     uuid[37];
+        uint16_t status;
+    } status_q[CELIO_STATUS_QUEUE];
+    uint8_t       status_head, status_count;
+    uint32_t      status_ack, status_due;      /* the head, in flight         */
+    uint8_t       status_tries;
+    bool          status_inflight;
+
+    struct celio_data_out {
+        bool     used;
+        uint32_t seq, ack, due;
+        uint8_t  tries;
+        uint8_t  data[64];
+    } data_out[CELIO_DATA_WINDOW];
+
     /* counters, for the screen and for tests */
     uint32_t      sent, received, dropped, duplicates, reconnects;
+    uint32_t      resent;      /* emits sent again for want of an ack   */
+    uint32_t      given_up;    /* packets dropped after every retry     */
+    uint32_t      rejected;    /* packets the server acked false        */
+    uint32_t      acked;       /* our emits the server acknowledged     */
+    uint32_t      max_rtt_ms;  /* the slowest ack seen                  */
 } celio_t;
 
 /*

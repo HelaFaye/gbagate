@@ -86,11 +86,19 @@ going to the Cable Club together do.
 A code joins once: the board forgets it when the link comes up. If a session
 ends or fails, the screen says why, and **confirm** starts again.
 
-What the board speaks: the Socket.IO protocol of Celio-Client before b057315,
-the one the public server (Celio-Server 9f02d3e) answers. Status and data go
-up without acknowledgements. Anything the server sends with an ack id is
-acknowledged, so the patched server in `backport/Celio-Server/`, which serves
-both kinds of client, works too.
+What the board speaks is current Celio-Client's protocol, the one
+`Celio-Link/Celio-Server` answers:
+
+- every status word and data packet goes up with a Socket.IO ack;
+- status one at a time, in order;
+- data as single-packet batches, up to 64 in flight;
+- anything unacknowledged after 1 s is sent again, with a growing wait, up
+  to 5 times;
+- after a reconnect everything outstanding is sent again at once; the server
+  drops duplicates by uuid and sequence number;
+- everything the server sends with an ack id is acknowledged.
+
+Session codes are four digits.
 
 ## `/gblink`: an adapter on the network
 

@@ -2,13 +2,14 @@
  * test_celio.c -- the on-board Celio client against a scripted server.
  *
  * The frames the server sends here are copied from what socket.io 4.8 and
- * Celio-Server (9f02d3e, and backport/Celio-Server's patched one) put on the
+ * Celio-Link/Celio-Server (8f509bd) put on the
  * wire. test/gblink_compat/test_celio_device.mjs then runs the same code in
  * the simulator against the real server; this suite covers what that run
  * cannot provoke on demand -- reordering, duplicates, a lost socket.
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "celio.h"
@@ -24,18 +25,18 @@ static void check(const char *what, long got, long want) {
 
 /* ---- a fake socket and adapter ------------------------------------------- */
 
-static char     g_out[64][CELIO_FRAME_MAX];
+static char     g_out[256][CELIO_FRAME_MAX];
 static int      g_nout;
 static uint8_t  g_cmd[32][4];
 static int      g_ncmd;
-static uint8_t  g_data[64][64];
+static uint8_t  g_data[256][64];
 static int      g_ndata;
 static bool     g_socket_up = true;
 static uint32_t g_rand = 1;
 
 static bool ws_send(void *ctx, const char *t, size_t n) {
     (void)ctx;
-    if (!g_socket_up || g_nout >= 64 || n >= CELIO_FRAME_MAX) return false;
+    if (!g_socket_up || g_nout >= 256 || n >= CELIO_FRAME_MAX) return false;
     memcpy(g_out[g_nout], t, n);
     g_out[g_nout][n] = '\0';
     g_nout++;
@@ -53,7 +54,7 @@ static void gbl_command(void *ctx, const uint8_t *c, size_t n) {
 
 static void gbl_data(void *ctx, const uint8_t d[64]) {
     (void)ctx;
-    if (g_ndata < 64) memcpy(g_data[g_ndata++], d, 64);
+    if (g_ndata < 256) memcpy(g_data[g_ndata++], d, 64);
 }
 
 static uint32_t rnd(void *ctx) {
@@ -157,7 +158,7 @@ static void test_create_and_wait(void) {
     check("linked on DeviceReady", c.state, CELIO_LINKED);
     check("DeviceReady itself is not sent", g_nout, before);
     celio_on_status(&c, 0xFF02, 540);
-    check("AwaitMode goes up", strncmp(last(), "42[\"deviceStatus\",{\"uuid\":\"", 26), 0);
+    check("AwaitMode goes up, with an ack id", strncmp(last(), "421[\"deviceStatus\",{\"uuid\":\"", 27), 0);
     check("... as a number", strstr(last(), "\"linkStatus\":65282}]") != NULL, 1);
 }
 
@@ -200,9 +201,9 @@ static void test_commands_and_data(void) {
     uint8_t d[64];
     for (int i = 0; i < 64; i++) d[i] = (uint8_t)i;
     celio_on_data(&c, d, 64, 710);
-    check("data goes up with sequence 0",
-          strncmp(last(), "42[\"deviceData\",{\"sequence\":0,\"data\":[256,770,", 46), 0);
-    check("... 32 words, the last 0x3F3E", strstr(last(), ",16190]}]") != NULL, 1);
+    check("data goes up as a batch of one, acked, sequence 0",
+          strncmp(strchr(last(), '['), "[\"deviceData\",[{\"sequence\":0,\"data\":[256,770,", 44), 0);
+    check("... 32 words, the last 0x3F3E", strstr(last(), ",16190]}]]") != NULL, 1);
     celio_on_data(&c, d, 64, 711);
     check("then sequence 1", strstr(last(), "\"sequence\":1,") != NULL, 1);
     int before = g_nout;
@@ -376,6 +377,115 @@ static void test_timeouts_and_reconnect(void) {
     check("... and the adapter alone", g_ncmd + g_ndata, 0);
 }
 
+/* The ack id of frame i ("42<id>[..."), or -1. */
+static long frame_id(int i) {
+    if (i < 0 || i >= g_nout || strncmp(g_out[i], "42", 2) != 0) return -1;
+    char *e;
+    long id = strtol(g_out[i] + 2, &e, 10);
+    return (e > g_out[i] + 2 && *e == '[') ? id : -1;
+}
+
+static int count_frames(const char *what, int from) {
+    int n = 0;
+    for (int i = from; i < g_nout; i++) n += strstr(g_out[i], what) != NULL;
+    return n;
+}
+
+static void ack_frame(celio_t *c, int i, bool ok, uint32_t now) {
+    char f[32];
+    snprintf(f, sizeof f, "43%ld[%s]", frame_id(i), ok ? "true" : "false");
+    rx(c, f, now);
+}
+
+/* Upstream's protocol: everything we send is acked, or sent again. */
+static void test_acks(void) {
+    celio_t c;
+    up(&c, NULL, true);
+    link(&c, 4);
+    uint32_t t = 1000;
+
+    /* status: one at a time, in order, each acked */
+    int s0 = g_nout;
+    celio_on_status(&c, 0xFF02, t);
+    celio_on_status(&c, 0xFF03, t);
+    check("the first status goes at once", count_frames("deviceStatus", s0), 1);
+    check("... the second waits its turn", c.status_count, 2);
+    ack_frame(&c, g_nout - 1, true, t + 30);
+    celio_tick(&c, t + 30);
+    check("acked: the second goes", count_frames("deviceStatus", s0), 2);
+    check("... with its own status", strstr(last(), "\"linkStatus\":65283") != NULL, 1);
+    check("... and the first counted", c.acked, 1);
+    check("round trip measured", c.max_rtt_ms, 30);
+
+    /* unanswered: resent under a new id, up to CELIO_RETRIES, then given up */
+    long first = frame_id(g_nout - 1);
+    int s1 = g_nout;
+    celio_tick(&c, t + 30 + CELIO_ACK_MS - 1);
+    check("not before its second is up", g_nout, s1);
+    celio_tick(&c, t + 30 + CELIO_ACK_MS);
+    check("resent", count_frames("deviceStatus", s1), 1);
+    check("... under a new id", frame_id(g_nout - 1) != first, 1);
+    check("... the same status", strstr(last(), "\"linkStatus\":65283") != NULL, 1);
+    uint32_t now = t + 30 + CELIO_ACK_MS;
+    for (int i = 0; i < CELIO_RETRIES + 2; i++) {
+        now += CELIO_ACK_MS + 100u * CELIO_RETRIES;
+        celio_tick(&c, now);
+    }
+    check("five resends, then given up", c.resent == CELIO_RETRIES && c.given_up == 1, 1);
+    check("... and the queue moves on", c.status_count, 0);
+
+    /* a late ack for an id resent since is harmless */
+    char f[32];
+    snprintf(f, sizeof f, "43%ld[true]", first);
+    rx(&c, f, now);
+    check("a stale ack changes nothing", c.acked, 1);
+
+    /* refused: counted, and not resent */
+    celio_on_status(&c, 0xFF05, now);
+    ack_frame(&c, g_nout - 1, false, now + 5);
+    check("refused", c.rejected, 1);
+    int s2 = g_nout;
+    celio_tick(&c, now + 5000);
+    check("... and not sent again", count_frames("deviceStatus", s2), 0);
+
+    /* data: a window of acks in flight, each resent alone */
+    up(&c, NULL, true);
+    link(&c, 4);
+    uint8_t d[64] = {0};
+    int s3 = g_nout;
+    for (int i = 0; i < 3; i++) celio_on_data(&c, d, 64, 2000);
+    check("three packets out at once", count_frames("deviceData", s3), 3);
+    ack_frame(&c, s3, true, 2010);
+    ack_frame(&c, s3 + 2, true, 2010);
+    int s4 = g_nout;
+    celio_tick(&c, 2000 + CELIO_ACK_MS);
+    check("only the unacked one resent", count_frames("deviceData", s4), 1);
+    check("... sequence 1", strstr(last(), "\"sequence\":1,") != NULL, 1);
+
+    for (int i = 0; i < CELIO_DATA_WINDOW + 5; i++) celio_on_data(&c, d, 64, 3000);
+    check("the window is CELIO_DATA_WINDOW: the rest dropped, counted", c.dropped, 5 + 1);
+
+    /* the socket drops: nothing goes; it is back: everything outstanding goes */
+    up(&c, NULL, true);
+    link(&c, 4);
+    celio_on_data(&c, d, 64, 4000);
+    celio_on_status(&c, 0xFF02, 4000);
+    celio_on_close(&c, 4100);
+    g_socket_up = false;
+    int s5 = g_nout;
+    celio_on_data(&c, d, 64, 4200);
+    celio_tick(&c, 4000 + 3 * CELIO_ACK_MS);
+    check("nothing sent while down", g_nout, s5);
+    check("... and nothing given up for it", c.given_up, 0);
+    g_socket_up = true;
+    celio_on_open(&c, 5000);
+    rx(&c, OPEN, 5001);
+    rx(&c, "40{\"sid\":\"z\"}", 5002);
+    check("back: both data packets and the status resent",
+          count_frames("deviceData", s5) == 2 && count_frames("deviceStatus", s5) == 1, 1);
+    check("no new session", count_frames("session", s5), 0);
+}
+
 int main(void) {
     test_framing();
     test_create_and_wait();
@@ -384,6 +494,7 @@ int main(void) {
     test_ordering();
     test_session_end();
     test_timeouts_and_reconnect();
+    test_acks();
     printf("\n%s\n", g_fail ? "FAILURES" : "all checks passed");
     return g_fail != 0;
 }
