@@ -46,7 +46,9 @@ jobs:
           exit 1
       - run: make rom
       # agent-emu runs the memory agent on an emulated ARM7
-      - run: pip install unicorn==2.1.1
+      # System-wide: the tests run python3 -I, which ignores the user site a
+      # plain pip install would use.
+      - run: sudo python3 -m pip install --break-system-packages -q unicorn==2.1.1
       - run: make
         env:
           REQUIRE_EMU: '1'
