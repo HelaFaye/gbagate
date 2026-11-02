@@ -9,6 +9,7 @@ The board with the larger nonce becomes master, so it gets the child GBA and
 the other the parent GBA, as a cable between the two GBAs would.
 """
 import os
+import heapq
 import random
 import struct
 import sys
@@ -33,16 +34,27 @@ def check(cond, what):
 
 
 class Air:
-    """Joins two sims' radios, losing and duplicating on request."""
+    """Joins two sims' radios, losing, duplicating and delaying on request.
 
-    def __init__(self, a, b, loss=0.0, dup=0.0, seed=1):
+    delay and jitter are seconds, one way. ESP-NOW datagrams are independent,
+    so a delayed one may arrive after a later one: unlike the Celio socket's
+    TCP, the air reorders. One scheduler thread delivers them on time."""
+
+    def __init__(self, a, b, loss=0.0, dup=0.0, seed=1, delay=0.0, jitter=0.0):
         self.rng = random.Random(seed)
         self.loss, self.dup = loss, dup
+        self.delay, self.jitter = delay, jitter
         self.lock = threading.Lock()
+        self.cv = threading.Condition(self.lock)
         self.sent = 0
         self.dropped = 0
+        self.queue = []        # (due, n, to, datagram)
+        self.n = 0
+        self.closed = False
         a.on_radio = lambda d: self.carry(b, d)
         b.on_radio = lambda d: self.carry(a, d)
+        if delay or jitter:
+            threading.Thread(target=self._run, daemon=True).start()
 
     def carry(self, to, d):
         with self.lock:
@@ -51,16 +63,41 @@ class Air:
                 self.dropped += 1
                 return
             n = 2 if self.rng.random() < self.dup else 1
+            if self.delay or self.jitter:
+                for _ in range(n):
+                    due = time.time() + self.delay + self.rng.random() * self.jitter
+                    self.n += 1
+                    heapq.heappush(self.queue, (due, self.n, to, bytes(d)))
+                self.cv.notify()
+                return
         for _ in range(n):
             try:
                 to.radio(d)
             except (BrokenPipeError, ValueError):
                 return  # the other board has been shut down
 
+    def _run(self):
+        while True:
+            with self.lock:
+                while not self.closed and (not self.queue or self.queue[0][0] > time.time()):
+                    self.cv.wait(max(0.0005, self.queue[0][0] - time.time()) if self.queue else 0.1)
+                if self.closed:
+                    return
+                _, _, to, d = heapq.heappop(self.queue)
+            try:
+                to.radio(d)
+            except (BrokenPipeError, ValueError, OSError):
+                pass
 
-def pair(loss=0.0, dup=0.0, mode=1, variant=0, models=(1, 2)):
+    def close(self):
+        with self.lock:
+            self.closed = True
+            self.cv.notify()
+
+
+def pair(loss=0.0, dup=0.0, mode=1, variant=0, models=(1, 2), delay=0.0, jitter=0.0, seed=1):
     a, b = Sim(), Sim()
-    air = Air(a, b, loss, dup)
+    air = Air(a, b, loss, dup, seed=seed, delay=delay, jitter=jitter)
     a.gba(0x06, 1); b.gba(0x06, 1)
     a.gba(0x01, models[0])       # A is master: child GBA
     b.gba(0x01, models[1])       # B is slave: parent GBA
@@ -262,6 +299,40 @@ def wireless_cable_refuses_a_usb_host():
         check(tuple(d[1:4]) == (2, 2, 7), 'answered on USB once the cable stopped')
     finally:
         a.close(); b.close()
+
+
+# One-way air delay, seconds: ESP-NOW is a few ms; interference, a busy
+# channel or a board scanning for WiFi stretch it. Up to MUST is what the
+# cable promises to carry; the rest only report where it gives out.
+LATENCY_CASES = [(0.002, 0.002, 0.0), (0.01, 0.005, 0.0), (0.03, 0.02, 0.0),
+                 (0.03, 0.02, 0.1), (0.06, 0.04, 0.0), (0.12, 0.06, 0.0),
+                 (0.25, 0.1, 0.0), (0.5, 0.2, 0.0), (1.0, 0.4, 0.0), (2.0, 0.5, 0.0)]
+LATENCY_MUST = 4      # through 30 ms with 10% of datagrams lost too
+
+
+@test
+def wireless_cable_latency_sweep():
+    """The cable through a slow, jittery, reordering air: how long until the
+    GBAs are linked and a frame has crossed each way, and where it breaks."""
+    print('  air one-way  jitter  loss   linked  frames  lost')
+    bad = []
+    for i, (delay, jitter, loss) in enumerate(LATENCY_CASES):
+        a, b, air = pair(loss=loss, delay=delay, jitter=jitter, seed=i + 7)
+        t0 = time.time()
+        try:
+            ok = exchange(a, b, timeout=30)
+            took = time.time() - t0
+            linked = ST['LinkConnected'] in peer_status(a) and ST['LinkConnected'] in peer_status(b)
+        finally:
+            air.close()
+            a.close(); b.close()
+        mark = 'ok  ' if ok else ('FAIL' if i < LATENCY_MUST else 'gone')
+        print('  %s %5.0f ms  %5.0f ms  %3.0f%%   %-6s  %s  %4s' % (
+            mark, delay * 1000, jitter * 1000, loss * 100, 'yes' if linked else 'no',
+            ('%5.1fs' % took) if ok else '    - ', air.dropped))
+        if not ok and i < LATENCY_MUST:
+            bad.append(delay)
+    check(not bad, 'the cable must carry %.0f ms of air delay' % (LATENCY_CASES[LATENCY_MUST - 1][0] * 1000))
 
 
 def main(argv):

@@ -52,7 +52,9 @@ extern "C" {
 #define CELIO_STATUS_QUEUE 16   /* status words waiting their turn          */
 #define CELIO_DATA_WINDOW 64    /* data packets sent and not yet acked, as
                                  * Celio-Client's MAX_UNACKED_DATA           */
-#define CELIO_ACK_MS      1000  /* socket.timeout(1000) before a resend      */
+#define CELIO_ACK_MS      1000  /* socket.timeout(1000): the least wait for
+                                 * an ack, and the first                     */
+#define CELIO_ACK_MAX_MS  8000  /* the most, however slow the line           */
 #define CELIO_RETRIES     5     /* resends before a packet is given up       */
 
 typedef struct {
@@ -113,12 +115,13 @@ typedef struct {
     } status_q[CELIO_STATUS_QUEUE];
     uint8_t       status_head, status_count;
     uint32_t      status_ack, status_due;      /* the head, in flight         */
+    uint32_t      status_sent;                 /* ... when it last went       */
     uint8_t       status_tries;
     bool          status_inflight;
 
     struct celio_data_out {
         bool     used;
-        uint32_t seq, ack, due;
+        uint32_t seq, ack, due, sent;
         uint8_t  tries;
         uint8_t  data[64];
     } data_out[CELIO_DATA_WINDOW];
@@ -130,6 +133,9 @@ typedef struct {
     uint32_t      rejected;    /* packets the server acked false        */
     uint32_t      acked;       /* our emits the server acknowledged     */
     uint32_t      max_rtt_ms;  /* the slowest ack seen                  */
+    uint32_t      srtt_ms;     /* smoothed round trip, from first sends  */
+    uint32_t      rto_ms;      /* how long an ack may take: 2 x srtt,
+                                * CELIO_ACK_MS..CELIO_ACK_MAX_MS        */
 } celio_t;
 
 /*

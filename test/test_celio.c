@@ -486,6 +486,46 @@ static void test_acks(void) {
     check("no new session", count_frames("session", s5), 0);
 }
 
+/* The ack timeout follows the line, and only first sends are measured. */
+static void test_rto(void) {
+    celio_t c;
+    up(&c, NULL, true);
+    link(&c, 4);
+    check("it starts at Celio-Client's 1 s", c.rto_ms, CELIO_ACK_MS);
+    uint32_t t = 10000;
+    for (int i = 0; i < 40; i++) {               /* a 900 ms line */
+        celio_on_status(&c, 0xFF02, t);
+        ack_frame(&c, g_nout - 1, true, t + 900);
+        t += 1000;
+        celio_tick(&c, t);
+    }
+    check("a 900 ms line: srtt near 900", c.srtt_ms >= 880 && c.srtt_ms <= 900, 1);
+    check("... and the wait twice that", c.rto_ms >= 1760 && c.rto_ms <= 1800, 1);
+    check("nothing resent for being slow", c.resent, 0);
+
+    /* a resent packet's ack says nothing about the line */
+    uint32_t before = c.srtt_ms;
+    celio_on_status(&c, 0xFF03, t);
+    celio_tick(&c, t + c.rto_ms);                /* resent */
+    ack_frame(&c, g_nout - 1, true, t + c.rto_ms + 5);
+    check("Karn: a resend's ack is not measured", c.srtt_ms, before);
+
+    for (int i = 0; i < 60; i++) {               /* then a 10 ms line */
+        celio_on_status(&c, 0xFF02, t);
+        ack_frame(&c, g_nout - 1, true, t + 10);
+        t += 100;
+        celio_tick(&c, t);
+    }
+    check("a fast line: never under 1 s", c.rto_ms, CELIO_ACK_MS);
+    for (int i = 0; i < 80; i++) {               /* and a 20 s one */
+        celio_on_status(&c, 0xFF02, t);
+        ack_frame(&c, g_nout - 1, true, t + 20000);
+        t += 20001;
+        celio_tick(&c, t);
+    }
+    check("a hopeless line: never over CELIO_ACK_MAX_MS", c.rto_ms, CELIO_ACK_MAX_MS);
+}
+
 int main(void) {
     test_framing();
     test_create_and_wait();
@@ -495,6 +535,7 @@ int main(void) {
     test_session_end();
     test_timeouts_and_reconnect();
     test_acks();
+    test_rto();
     printf("\n%s\n", g_fail ? "FAILURES" : "all checks passed");
     return g_fail != 0;
 }

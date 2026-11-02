@@ -25,7 +25,8 @@ enum {
                               * mode i8, owner, status lo hi, u32 statuses,
                               * u32 frames x4]                              */
     SIM_EV_CELIO       = 13  /* gblink_celio_view(), on a 'K' record: [state,
-                              * status lo hi, u32 up down lost reconnects,
+                              * status lo hi, u32 up down lost reconnects
+                              * resent given_up max_rtt_ms,
                               * session NUL, error NUL]                     */
 };
 

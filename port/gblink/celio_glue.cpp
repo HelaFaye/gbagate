@@ -111,6 +111,9 @@ namespace
         v.down = g_celio.received;
         v.lost = g_celio.dropped + g_overlong.load();
         v.reconnects = g_celio.reconnects;
+        v.resent = g_celio.resent;
+        v.given_up = g_celio.given_up;
+        v.max_rtt_ms = g_celio.max_rtt_ms;
         const unsigned key = irq_lock();
         g_view = v;
         irq_unlock(key);

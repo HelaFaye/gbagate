@@ -132,7 +132,7 @@ int main(int argc, char **argv) {
         case 'K': {
             gblink_celio_view_t v;
             gblink_celio_view(&v);
-            uint8_t b[3 + 16 + sizeof v.session + sizeof v.error];
+            uint8_t b[3 + 28 + sizeof v.session + sizeof v.error];
             size_t o = 0;
             b[o++] = (uint8_t)v.state;
             b[o++] = (uint8_t)v.link_status;
@@ -141,6 +141,9 @@ int main(int argc, char **argv) {
             memcpy(b + o, &v.down, 4); o += 4;
             memcpy(b + o, &v.lost, 4); o += 4;
             memcpy(b + o, &v.reconnects, 4); o += 4;
+            memcpy(b + o, &v.resent, 4); o += 4;
+            memcpy(b + o, &v.given_up, 4); o += 4;
+            memcpy(b + o, &v.max_rtt_ms, 4); o += 4;
             size_t sl = strnlen(v.session, sizeof v.session - 1);
             memcpy(b + o, v.session, sl); o += sl; b[o++] = 0;
             size_t el = strnlen(v.error, sizeof v.error - 1);

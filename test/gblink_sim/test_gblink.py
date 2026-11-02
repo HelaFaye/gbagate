@@ -136,6 +136,36 @@ def wifi_host_runs_a_link_mode():
 
 
 @test
+def wifi_host_latency_sweep():
+    """A GB-Link host on the board's WiFi (/gblink) through a slow line: the
+    netplay bridge's link-up sequence (link_up_master) with delay on the
+    WebSocket only. Up to 100 ms one way it must work; past that the table
+    reports where the host's own timeouts give out -- the board answers at
+    once, so the limit is the host's, which this measures for it."""
+    cases = [(0.0, 0.0), (0.01, 0.005), (0.05, 0.02), (0.1, 0.05), (0.25, 0.1),
+             (0.5, 0.2), (1.0, 0.3), (2.0, 0.5)]
+    must = 4
+    print('  WiFi one-way  jitter   link up')
+    bad = []
+    for i, (delay, jitter) in enumerate(cases):
+        s = Sim(net=True, net_delay=delay, net_jitter=jitter)
+        s.gba(0x01, CHILD)       # a child GBA: the adapter is master
+        t0 = time.time()
+        try:
+            link_up_master(s, grace=0.15)
+            ok, took = True, time.time() - t0
+        except (TimeoutError, AssertionError):
+            ok, took = False, None
+        finally:
+            s.close()
+        print('  %s %6.0f ms  %5.0f ms   %s' % ('ok  ' if ok else ('FAIL' if i < must else 'gone'),
+              delay * 1000, jitter * 1000, ('%.1fs' % took) if ok else '-'))
+        if not ok and i < must:
+            bad.append(delay)
+    check(not bad, 'a WiFi host must link through 100 ms one way')
+
+
+@test
 def settings_persist_across_power_cycles():
     """launcher: 0x44 landing, 0x4B cable, 0x46 LED slot; all survive a reboot."""
     path = tempfile.mktemp()

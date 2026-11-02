@@ -125,6 +125,33 @@ taken at the time for the current server. It is a fork that stopped there.
 | 1 | Forget a client's state when it leaves the session | a9e6c00 "Fixed bug where leaving could cause a stale handshake" |
 | 2 | Speak Celio-Client's acked protocol | 5ead974, 87923bf, 4299ffa, d85fbcc (3-4 October 2026) |
 
+How upstream did it, against ours:
+
+- **Stale handshake (patch 1).** The same line: delete the leaver's
+  `clientState` in `removeClient`. Upstream also deletes it from
+  `SessionManager.clientToSession`, which we missed: without that a client
+  that left could not join or create another session ("AlreadyExists").
+- **Acks (patch 2).** Same wire result, different design:
+  - *Old clients.* Ours detected per client whether it acks and kept
+    serving pre-ack clients plainly. Upstream requires the new protocol:
+    `deviceData` must be a batch array, and create/join without an ack
+    callback are ignored.
+  - *Sending.* Ours queued every acked send of a session -- data,
+    commands, both directions -- through one `concatMap`, so each packet
+    waited a full round trip for the one before it. Upstream gives each
+    client a `PipelinedSender` with 64 data batches in flight, and a
+    separate ordered queue for its commands. Under latency that is the
+    difference between one packet per round trip and 64.
+  - *Validation.* Upstream checks every payload (`validation.ts`) and acks
+    `false` for a malformed one; ours acked `true` before looking.
+  - *Duplicates.* Upstream remembers sequence numbers only and dropped
+    `requestData` (never used); ours kept every packet.
+  - *Disconnects.* Upstream resets the 5 s disconnect timer when a client
+    comes back first (2edc83a), and a retry that fails because the client
+    is gone does not evict or log (`ClientDisconnectedError`).
+  - *Leaving.* Both spare the leaver the `sessionClose`: ours by skipping
+    it in `evict`, upstream by removing it first.
+
 Nothing here needs sending upstream. What would help is GB-Link syncing its
 fork from Celio-Link. The pull request opened against the fork (#1) can be
 closed. The patches stay in the tree as a record; `verify-celio.sh` no

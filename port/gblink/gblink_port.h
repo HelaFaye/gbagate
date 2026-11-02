@@ -129,6 +129,7 @@ typedef struct {
     char     error[40];          /* why it failed                           */
     uint16_t link_status;        /* the adapter's last status word          */
     uint32_t up, down, lost, reconnects;
+    uint32_t resent, given_up, max_rtt_ms;  /* acks: resends, abandoned, slowest */
 } gblink_celio_view_t;
 
 /* For the UI, from any task. */

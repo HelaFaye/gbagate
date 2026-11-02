@@ -87,6 +87,7 @@ void celio_start(celio_t *c, const celio_io_t *io, const char *session, uint32_t
     }
     c->state = CELIO_CONNECTING;
     c->deadline = now_ms + CONNECT_MS;
+    c->rto_ms = CELIO_ACK_MS;
 }
 
 void celio_stop(celio_t *c) {
@@ -407,7 +408,8 @@ static void emit_status(celio_t *c, uint32_t now) {
                      (unsigned long)c->status_ack, o->uuid, (unsigned)o->status);
     send(c, f, (size_t)l);
     c->status_inflight = true;
-    c->status_due = now + CELIO_ACK_MS + 100u * c->status_tries;
+    c->status_sent = now;
+    c->status_due = now + c->rto_ms + 100u * c->status_tries;
 }
 
 static void emit_data(celio_t *c, struct celio_data_out *o, uint32_t now) {
@@ -421,7 +423,8 @@ static void emit_data(celio_t *c, struct celio_data_out *o, uint32_t now) {
     }
     l += snprintf(f + l, sizeof f - (size_t)l, "]}]]");
     send(c, f, (size_t)l);
-    o->due = now + CELIO_ACK_MS + 100u * o->tries;
+    o->sent = now;
+    o->due = now + c->rto_ms + 100u * o->tries;
 }
 
 static void status_pop(celio_t *c) {
@@ -431,12 +434,27 @@ static void status_pop(celio_t *c) {
     c->status_tries = 0;
 }
 
-static void note_rtt(celio_t *c, uint32_t due_at, uint8_t tries, uint32_t now) {
-    uint32_t sent_at = due_at - CELIO_ACK_MS - 100u * tries;
+/*
+ * The ack timeout follows the line, as TCP's does: a smoothed round trip
+ * (7/8 old, 1/8 new), and twice that to wait, never under Celio-Client's
+ * 1 s or over CELIO_ACK_MAX_MS. Only first sends are measured (Karn): an ack
+ * for a resent packet could be the answer to either copy. A fixed 1 s made
+ * a 600 ms line resend packets that were only slow.
+ */
+static void note_rtt(celio_t *c, uint32_t sent_at, uint8_t tries, uint32_t now) {
     uint32_t rtt = now - sent_at;
-    if (rtt > c->max_rtt_ms && rtt < 60000u) {
+    if (rtt >= 60000u) {
+        return;
+    }
+    if (rtt > c->max_rtt_ms) {
         c->max_rtt_ms = rtt;
     }
+    if (tries) {
+        return;
+    }
+    c->srtt_ms = c->srtt_ms ? (7u * c->srtt_ms + rtt) / 8u : rtt;
+    uint32_t rto = 2u * c->srtt_ms;
+    c->rto_ms = rto < CELIO_ACK_MS ? CELIO_ACK_MS : rto > CELIO_ACK_MAX_MS ? CELIO_ACK_MAX_MS : rto;
 }
 
 /* An ack for one of ours: true taken, false refused. Either way it is done. */
@@ -444,7 +462,7 @@ static void on_our_ack(celio_t *c, uint32_t id, json_t args, uint32_t now) {
     json_t v;
     bool ok = json_at(args, 0, &v) && json_type(v) == JSON_TRUE;
     if (c->status_inflight && id == c->status_ack) {
-        note_rtt(c, c->status_due, c->status_tries, now);
+        note_rtt(c, c->status_sent, c->status_tries, now);
         ok ? c->acked++ : c->rejected++;
         status_pop(c);
         return;
@@ -452,7 +470,7 @@ static void on_our_ack(celio_t *c, uint32_t id, json_t args, uint32_t now) {
     for (int i = 0; i < CELIO_DATA_WINDOW; i++) {
         struct celio_data_out *o = &c->data_out[i];
         if (o->used && o->ack == id) {
-            note_rtt(c, o->due, o->tries, now);
+            note_rtt(c, o->sent, o->tries, now);
             ok ? c->acked++ : c->rejected++;
             o->used = false;
             return;

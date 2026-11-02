@@ -136,6 +136,40 @@ function gbagatePort(host) {
 }
 ```
 
+## How much latency it takes
+
+Measured with delay, jitter and stalls added to the WiFi leg only: the
+board-to-server socket, the air between boards, the `/gblink` socket. Each
+row is a whole session.
+
+**Link: Online** (`test_celio_latency.mjs`, through Celio-Link/Celio-Server):
+
+| round trip | result |
+|---|---|
+| 4 ms (LAN) to 600 ms (a mobile hotspot, ±200 ms jitter) | links; frames cross in 1–8 s |
+| 120 ms with a 1 s stall every 6 s | links |
+| 800 ms | links, in 9 s |
+| 900 ms and over | the server ends the session |
+
+The limit is the server's, not the board's. Celio-Server waits a fixed
+1 s for each ack (`emitWithRetry`'s `timeout`). On a line slower than that,
+every retry times out and the server ends the session. Over about 2.5 s,
+Engine.IO's ping timeout drops the socket too. The board acknowledges at
+once, so nothing it does can buy that time back; a server whose ack timeout
+followed the line would. The board's own resend timer does follow the line:
+it is twice the smoothed round trip, 1–8 s, so a slow link is not flooded with
+needless resends.
+
+**Link: Wireless** (`wireless_cable_latency_sweep`, the air reordering as
+ESP-NOW does): links at every delay tried, up to 2 s one way, and with 10% of
+datagrams lost at 30 ms. GB-Link's relay buffers the link, so the limit on
+real hardware is the game's own link timeout, which the simulated GBA does
+not have.
+
+**`/gblink`** (`wifi_host_latency_sweep`): a host's link-up sequence
+completes up to 1 s one way and fails at 2 s, where the host's own waits run
+out.
+
 ## How it is tested
 
 | what | where |
@@ -144,6 +178,7 @@ function gbagatePort(host) {
 | The same code, in the GB-Link simulator, linking two GBAs through the **real** Celio-Server, both the public build and the patched one | `test/gblink_compat/test_celio_device.mjs` |
 | `wifi.txt` and the form: untidy files, every field's limits, the stored blob under every single-bit flip, the setup page escaped and never echoing a password | `test/test_wificfg.c` |
 | The bounded JSON reader | `test/test_json.c` |
+| Latency on each WiFi leg, above | `test_celio_latency.mjs`, `test_peer.py`, `test_gblink.py` |
 | `/gblink` as a GB-Link host: SetMode over it, replies on it and nowhere else | `wifi_host_runs_a_link_mode` in `test/gblink_sim/test_gblink.py` |
 | Every Link: Online screen state | `test/test_screens.c` |
 
