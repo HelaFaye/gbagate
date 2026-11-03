@@ -257,34 +257,44 @@ opposite client".
   player in a pair, as now, or to everyone waiting once the last joins.
   `partnerLeft` follows the same rule before the link starts. After it
   starts, a leaver still ends it for everyone.
-- **Starting:** one master and the rest slaves, as now. The handshake starts
-  only when the session is full and every player has one, and for all of
-  them. ConnectLink goes to all the others.
+- **Roles:** a pair as now. A Multi-Play link has one parent GBA and up to
+  three children. In GB-Link's terms the parent's board answers as the
+  children (`SetModeSlave`) and each child's board drives the link as the
+  parent (`SetModeMaster`). So with more than two players, the first ready
+  gets `SetModeSlave` and link ID 0, and the others get `SetModeMaster` and
+  IDs 1–3. Every command carries the player's `id`, and a board asking again
+  keeps its ID. (A first draft gave one master and three slaves, which would
+  have made three parents.)
+- **Starting:** the handshake starts only when the session is full and every
+  player has one, and for all of them. ConnectLink goes to all the others.
 - **Data:** each player's packets go to every other player, through each
   receiver's own sender. With more than two players each packet carries
-  `from` (the sender's slot), so a receiver can keep each sender's order.
+  `from`, the sender's link ID, so a receiver can put each word in its
+  Multi-Play slot and keep each sender's order.
 
 **Tested.**
 
-*`test/session.test.ts`*, upstream's vitest style, 14 tests:
+*`test/session.test.ts`*, upstream's vitest style, 16 tests:
 - the options;
-- a pair, as before;
+- a pair, as before: roles, no link IDs, packets unchanged;
 - four players:
   - full at four, a fifth refused;
   - told only when complete;
-  - one master and three slaves;
+  - one parent and three children, with their link IDs, kept on a repeat;
   - no handshake until all four;
   - ConnectLink to the other three;
   - each player's data reaches the others once and in order, with its
     sender;
   - leaving before and after the start.
 
-12 of the 14 fail without the patch; the two pair tests pass on both. All 20
-of the server's tests pass with it, and `tsc --noEmit` is clean.
+The three pair tests pass with and without the patch, and the other 13 fail
+without it. All 22 of the server's tests pass with it, and `tsc --noEmit` is
+clean.
 
 *`test/gblink_compat/test_celio_4p.mjs`*, end to end: four socket.io clients
 against the real server bundle, on 2, 40, 150 and 600 ms lines.
-- One master and three slaves.
+- One parent and three children: link IDs 0–3, carried on every command.
+  The pair beside them gets none.
 - The handshake and ConnectLink go where they should.
 - Every player gets all 30 of each other player's packets, in order,
   marked, and none of its own.
@@ -305,11 +315,13 @@ they took 3 s each and passed only because vitest does not type-check.
 > A GBA Multi-Play link joins up to four GBAs. This lets `sessionCreate`
 > take `{players: 2..4}`; clients that send nothing get two, as today, and a
 > two-player session is unchanged on the wire. A larger session tells its
-> players `partnerJoined` once complete, starts the handshake only when all
-> have one, relays each player's data to all the others with a `from` slot,
-> and ends for all if anyone leaves a started link. New
-> `test/session.test.ts` (14 tests; 12 fail without the change) and an end
-> to end run with four clients on 2-600 ms lines.
+> players `partnerJoined` once complete, gives one player the parent's role
+> (link ID 0) and the others the children's (1-3) with the ID on every
+> command, starts the handshake only when all have one, relays each player's
+> data to all the others marked with the sender's link ID, and ends for all
+> if anyone leaves a started link. New `test/session.test.ts` (16 tests; 13
+> fail without the change) and an end to end run with four clients on
+> 2-600 ms lines.
 
 **What clients need.** A client that wants four players must:
 - create with `{players: 4}`;

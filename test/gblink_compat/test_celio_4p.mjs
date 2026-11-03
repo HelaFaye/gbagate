@@ -6,10 +6,12 @@
 // {players: 4}, report AwaitMode / HandshakeReceived / LinkConnected as the
 // server's commands come, ack everything the server sends -- and sends 30
 // data packets. Checked:
-//   - one master, three slaves; StartHandshake to all four only once all
-//     four have reported a handshake; ConnectLink to the other three;
+//   - one parent GBA and three children: SetModeSlave with link ID 0 to one
+//     board, SetModeMaster with IDs 1-3 to the others; every command carries
+//     the player's ID; StartHandshake to all four only once all four have
+//     reported a handshake; ConnectLink to the other three;
 //   - every player receives each other player's 30 packets, marked with the
-//     sender's slot, and none of its own (deduplicated by sender and
+//     sender's link ID, and none of its own (deduplicated by sender and
 //     sequence, as a receiver does: a slow line gets resent copies);
 //   - a fifth client is refused ("Session is full");
 //   - a two-player session on the same server at the same time is as before:
@@ -56,12 +58,16 @@ class Player {
     this.name = name;
     this.up = line(ms, ms / 4, seed);           // to the server
     this.down = line(ms, ms / 4, seed + 7);     // from it
-    this.commands = []; this.events = []; this.packets = []; this.uuid = 0;
+    this.commands = []; this.ids = []; this.events = []; this.packets = []; this.uuid = 0;
     this.sock = io(URL_, { transports: ['websocket'], auth: { clientId: `${name}-${Date.now()}` }, reconnection: false });
     const on = (ev, f) => this.sock.on(ev, (data, ack) => this.down(() => { f(data); if (typeof ack === 'function') this.up(() => ack(true)); }));
     on('deviceCommand', (c) => {
       this.commands.push(c.command);
-      if (c.command === C.SetModeMaster || c.command === C.SetModeSlave) this.status(S.HandshakeReceived);
+      this.ids.push(c.id);
+      if (c.command === C.SetModeMaster || c.command === C.SetModeSlave) {
+        this.linkId = c.id;
+        this.status(S.HandshakeReceived);
+      }
       if (c.command === C.StartHandshake) this.status(S.LinkConnected);
     });
     on('deviceData', (batch) => this.packets.push(...batch));
@@ -75,7 +81,7 @@ class Player {
   status(linkStatus) { return this.call('deviceStatus', { uuid: `${this.name}-${this.uuid++}`, linkStatus }); }
   async sendData() {
     for (let seq = 0; seq < PACKETS; seq++) {
-      const data = new Array(32).fill(0); data[0] = seq; data[1] = this.slot;
+      const data = new Array(32).fill(0); data[0] = seq; data[1] = this.linkId ?? this.slot;
       await this.call('deviceData', [{ sequence: seq, data }]);
     }
   }
@@ -120,9 +126,16 @@ async function run(serverJs, lines) {
     check('the three waiting are told the session is complete', players.slice(0, 3).every((p) => p.events.includes('partnerJoined')));
     for (const p of [...players, ...pair]) await p.status(S.AwaitMode);
     await until(() => players.every((p) => p.commands.includes(C.StartHandshake)), 30000);
+    // One parent GBA, three children: the parent's board answers as the
+    // children (SetModeSlave, link ID 0), each child's board drives the link
+    // (SetModeMaster, IDs 1-3). Every command carries the player's ID.
     const modes = players.map((p) => p.commands.find((c) => c === C.SetModeMaster || c === C.SetModeSlave));
-    check(`one master, three slaves (${modes.map((m) => (m === C.SetModeMaster ? 'M' : 'S')).join('')})`,
-          modes.filter((m) => m === C.SetModeMaster).length === 1 && modes.filter((m) => m === C.SetModeSlave).length === 3);
+    const ids = players.map((p) => p.linkId);
+    check(`one parent and three children, link IDs ${ids.join(',')} (${modes.map((m) => (m === C.SetModeSlave ? 'P' : 'c')).join('')})`,
+          modes.filter((m) => m === C.SetModeSlave).length === 1 && modes.filter((m) => m === C.SetModeMaster).length === 3 &&
+          [...ids].sort().join() === '0,1,2,3' && players.every((p) => (p.linkId === 0) === (modes[players.indexOf(p)] === C.SetModeSlave)));
+    check('every command to a player carries its link ID', players.every((p) => p.ids.every((i) => i === p.linkId)));
+    check('the pair beside it gets no link IDs', pair.every((p) => p.ids.every((i) => i === undefined)));
     check('StartHandshake reached all four', players.every((p) => p.commands.includes(C.StartHandshake)));
     await until(() => players.every((p) => p.commands.filter((c) => c === C.ConnectLink).length === 3), 30000);
     check('each got ConnectLink once for each of the other three',
@@ -136,7 +149,7 @@ async function run(serverJs, lines) {
     // slow line gets resends (the server's ack wait ran out first), so
     // duplicates and late copies are the protocol working, not a fault.
     for (const p of players) {
-      const others = players.filter((q) => q !== p).map((q) => q.slot);
+      const others = players.filter((q) => q !== p).map((q) => q.linkId);
       let dups = 0, late = 0;
       const ok = others.every((s) => {
         const seqs = p.packets.filter((k) => k.from === s).map((k) => k.sequence);
@@ -146,9 +159,9 @@ async function run(serverJs, lines) {
         for (const v of seqs) { if (v < high) late++; else high = v; }
         return uniq.size === PACKETS && [...uniq].every((v) => v >= 0 && v < PACKETS);
       });
-      const own = p.packets.some((k) => k.from === p.slot);
+      const own = p.packets.some((k) => k.from === p.linkId);
       const tagged = p.packets.every((k) => k.data[1] === k.from && k.data[0] === k.sequence);
-      check(`slot ${p.slot} (${lines[p.slot]} ms): all ${PACKETS} from each of the other three, none of its own,` +
+      check(`link ID ${p.linkId} (${lines[p.slot]} ms): all ${PACKETS} from each of the other three, none of its own,` +
             ` each marked with its sender (${dups} duplicate copies, ${late} behind a later one)`, ok && !own && tagged);
     }
     check('the two-player session got its partner\'s packets, unchanged (no `from`)',

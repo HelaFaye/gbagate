@@ -17,21 +17,29 @@ leaves a two-player session exactly as it was on the wire.
   the first as before; with more, to everyone waiting once the last joins.
   "partnerLeft" likewise, before the link has started; once it has, a
   leaver still ends it for everyone.
-- The first player ready is master, the rest slaves, as before. The
-  handshake starts only when the session is full and every player has one,
-  and for all of them; ConnectLink goes to all the others.
+- Roles: a two-player session as before (first ready master, the other
+  slave). A Multi-Play link has one parent GBA and up to three children;
+  in GB-Link's terms the parent's board answers as the children
+  (SetModeSlave) and each child's board drives the link as the parent
+  (SetModeMaster). So with more than two, the first ready gets SetModeSlave
+  and link ID 0, the others SetModeMaster and IDs 1-3, and every command to
+  a player carries its `id`. A board asking again keeps its ID.
+- The handshake starts only when the session is full and every player has
+  one, and for all of them; ConnectLink goes to all the others.
 - Each player's data goes to every other player, through each receiver's
   own PipelinedSender, deduplicated by sequence per sender as before. In a
-  session of more than two each packet carries `from` (the sender's slot)
-  so a receiver keeps each sender's order; a two-player session's packets
-  are unchanged.
+  session of more than two each packet carries `from`, the sender's link
+  ID, so a receiver can put each word in its Multi-Play slot and keep each
+  sender's order; a two-player session's packets are unchanged.
 
-test/session.test.ts (new, 14 tests): the options; a two-player session as
-before; a four-player session: full at four and a fifth refused, told only
-when complete, one master and three slaves, no handshake until all four,
-ConnectLink to the other three, every player's data to the other three
-once and in order with its sender, a leave before and after the start. 12
-of them fail without this change; the two two-player tests pass on both.
+test/session.test.ts (new, 16 tests): the options; a two-player session as
+before (roles, no link IDs, packets unchanged); a four-player session: full
+at four and a fifth refused, told only when complete, one parent and three
+children with their link IDs (kept on a repeat), no handshake until all
+four, ConnectLink to the other three, every player's data to the other
+three once and in order marked with the sender's link ID, a leave before
+and after the start. The three two-player tests pass with and without the
+change; the other 13 fail without it.
 
 diff --git a/src/client.ts b/src/client.ts
 index 2747e56..ab47290 100644
@@ -95,10 +103,10 @@ index 24c0a8d..e86037d 100644
      return typeof value === "string" && value.length > 0 && value.length <= 64;
  }
 diff --git a/src/session.ts b/src/session.ts
-index c83ac79..b026a6c 100644
+index c83ac79..f8e2c00 100644
 --- a/src/session.ts
 +++ b/src/session.ts
-@@ -16,6 +16,7 @@ type DataArray = [
+@@ -16,11 +16,13 @@ type DataArray = [
  interface DataPacket {
      sequence: number;
      data: DataArray;
@@ -106,7 +114,31 @@ index c83ac79..b026a6c 100644
  }
  
  interface CommandPacket {
-@@ -105,12 +106,15 @@ export class Session {
+     uuid: string;
+     command: CommandType;
++    id?: number;        // the player's Multi-Play link ID; only in sessions of more than two
+ }
+ 
+ interface StatusPacket {
+@@ -30,6 +32,8 @@ interface StatusPacket {
+ 
+ class ClientState {
+     public status: LinkStatus = LinkStatus.Empty;
++    // Multi-Play link ID, in sessions of more than two: 0 for the parent GBA, 1-3 for the children
++    public linkId?: number;
+     public subscription: Subscription = new Subscription();
+     // Sequence numbers of data packets received from this client, to drop duplicates from retries
+     public receivedSequences: Set<number> = new Set();
+@@ -46,6 +50,8 @@ export class Session {
+ 
+     private masterSelected: boolean = false;
+ 
++    private nextLinkId: number = 0;
++
+     private receivedStati: Set<string> = new Set();
+ 
+     private clients: Client[] = [];
+@@ -105,12 +111,15 @@ export class Session {
                  receivedSequences.add(dataPacket.sequence);
                  newPackets.push(dataPacket);
              }
@@ -124,7 +156,36 @@ index c83ac79..b026a6c 100644
  
      /**
       * Check if the session has started, meaning the first status packet has been received.
-@@ -146,12 +150,14 @@ export class Session {
+@@ -118,8 +127,8 @@ export class Session {
+      */
+     hasStarted(): boolean { return this.started; }
+ 
+-    private makeCommand(command: CommandType) : CommandPacket {
+-        return {uuid: uuidv4(), command: command}
++    private makeCommand(command: CommandType, id?: number) : CommandPacket {
++        return id === undefined ? {uuid: uuidv4(), command: command} : {uuid: uuidv4(), command: command, id};
+     }
+ 
+     private handleStatusMessage(client: Client, statusPacket: StatusPacket): void {
+@@ -130,7 +139,16 @@ export class Session {
+ 
+         switch (statusPacket.linkStatus) {
+             case LinkStatus.AwaitMode:
+-                if (!this.masterSelected) {
++                if (this.players > 2) {
++                    // A Multi-Play link has one parent GBA and up to three children. In GB-Link's terms the board
++                    // of the parent answers as the children (SetModeSlave) and each child's board drives the
++                    // link as the parent (SetModeMaster). The first ready is the parent; a board asking again
++                    // keeps its ID.
++                    if (clientState.linkId === undefined) clientState.linkId = this.nextLinkId++;
++                    this.sendCommand(client, clientState.linkId === 0 ? CommandType.SetModeSlave : CommandType.SetModeMaster,
++                                     clientState.linkId);
++                }
++                else if (!this.masterSelected) {
+                     this.sendCommand(client, CommandType.SetModeMaster);
+                     this.masterSelected = true;
+                 }
+@@ -146,12 +164,14 @@ export class Session {
              case LinkStatus.HandshakeReceived:
                  clientState.status = LinkStatus.HandshakeReceived;
  
@@ -135,13 +196,14 @@ index c83ac79..b026a6c 100644
                      .every(state => state.status === LinkStatus.HandshakeReceived);
  
                  if (allHandshakesReceived) {
-                     this.sendCommand(client, CommandType.StartHandshake);
+-                    this.sendCommand(client, CommandType.StartHandshake);
 -                    this.sendCommandToOppositeClient(client, CommandType.StartHandshake);
++                    this.sendCommand(client, CommandType.StartHandshake, clientState.linkId);
 +                    this.sendCommandToOtherClients(client, CommandType.StartHandshake);
                  }
                  break
  
-@@ -161,7 +167,7 @@ export class Session {
+@@ -161,7 +181,7 @@ export class Session {
  
              case LinkStatus.LinkConnected:
                  clientState.status = LinkStatus.LinkConnected;
@@ -150,7 +212,7 @@ index c83ac79..b026a6c 100644
                  break;
  
              case LinkStatus.LinkReconnecting:
-@@ -196,7 +202,7 @@ export class Session {
+@@ -196,7 +216,7 @@ export class Session {
       * @returns {boolean} - true if the session is full, false otherwise.
       */
      isFull(): boolean {
@@ -159,7 +221,7 @@ index c83ac79..b026a6c 100644
      }
  
      /**
-@@ -208,13 +214,15 @@ export class Session {
+@@ -208,13 +228,15 @@ export class Session {
      }
  
      /**
@@ -178,7 +240,7 @@ index c83ac79..b026a6c 100644
          }
          this.clients.push(client);
          const clientState = new ClientState(new PipelinedSender<DataPacket[]>(dataPackets =>
-@@ -246,9 +254,14 @@ export class Session {
+@@ -246,9 +268,14 @@ export class Session {
                  }
              }));
          });
@@ -195,7 +257,7 @@ index c83ac79..b026a6c 100644
      }
  
      /**
-@@ -266,7 +279,7 @@ export class Session {
+@@ -266,7 +293,7 @@ export class Session {
              this.removeClient(client);
              this.evict();
          } else {
@@ -204,7 +266,7 @@ index c83ac79..b026a6c 100644
              this.removeClient(client);
          }
      }
-@@ -296,19 +309,15 @@ export class Session {
+@@ -296,19 +323,15 @@ export class Session {
      }
  
      /**
@@ -230,7 +292,16 @@ index c83ac79..b026a6c 100644
          }
      }
  
-@@ -323,24 +332,30 @@ export class Session {
+@@ -317,30 +340,37 @@ export class Session {
+      * @param client
+      * @param command
+      */
+-    private sendCommand(client: Client, command: CommandType) {
+-        console.log('Sending command to Client ' + client.id() + ': ' + CommandType[command]);
+-        this.clientState.get(client)?.commands$.next(this.makeCommand(command));
++    private sendCommand(client: Client, command: CommandType, id?: number) {
++        console.log('Sending command to Client ' + client.id() + ': ' + CommandType[command] + (id === undefined ? '' : ' (link ID ' + id + ')'));
++        this.clientState.get(client)?.commands$.next(this.makeCommand(command, id));
      }
  
      /**
@@ -245,15 +316,15 @@ index c83ac79..b026a6c 100644
 -        this.sendCommand(receiverClient, command);
 +    private sendCommandToOtherClients(client: Client, command: CommandType) {
 +        for (const other of this.clients) {
-+            if (other !== client) this.sendCommand(other, command);
++            if (other !== client) this.sendCommand(other, command, this.clientState.get(other)?.linkId);
 +        }
      }
  
      /**
 -     * Queue data packets for the opposite client of the given client. Save to call when only one client is in the session.
 +     * Queue data packets for every other client in the session, each through its own sender. With more than two
-+     * players a receiver has several senders, so each packet says whose it is; a two-player session's packets
-+     * are unchanged.
++     * players a receiver has several senders, so each packet says whose it is: the sender's link ID (its join slot
++     * until it has one). A two-player session's packets are unchanged.
       * @param client
       * @param dataPackets
       */
@@ -263,8 +334,9 @@ index c83ac79..b026a6c 100644
 -        this.clientState.get(receiverClient)?.dataSender.push(dataPackets);
 +    private sendDataToOtherClients(client: Client, dataPackets: DataPacket[]) {
 +        if (dataPackets.length === 0) return;
++        const from = this.clientState.get(client)?.linkId ?? this.slotOf(client);
 +        const packets = this.players > 2
-+            ? dataPackets.map(p => ({sequence: p.sequence, data: p.data, from: this.slotOf(client)}))
++            ? dataPackets.map(p => ({sequence: p.sequence, data: p.data, from}))
 +            : dataPackets;
 +        for (const other of this.clients) {
 +            if (other !== client) this.clientState.get(other)?.dataSender.push(packets);
@@ -317,10 +389,10 @@ index 8f523f1..9634a41 100644
      leaveSession(client: Client)  {
 diff --git a/test/session.test.ts b/test/session.test.ts
 new file mode 100644
-index 0000000..976c2fc
+index 0000000..1345de6
 --- /dev/null
 +++ b/test/session.test.ts
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,191 @@
 +import {describe, expect, test} from "vitest";
 +import {Subject} from "rxjs";
 +import {Session} from "../src/session.js";
@@ -358,6 +430,7 @@ index 0000000..976c2fc
 +    data(sequence: number) { return this.play("deviceData", [{sequence, data: new Array(32).fill(sequence)}]); }
 +
 +    commands() { return this.sent.filter(s => s.event === "deviceCommand").map(s => s.data.command as CommandType); }
++    commandIds() { return this.sent.filter(s => s.event === "deviceCommand").map(s => s.data.id); }
 +    packets() { return this.sent.filter(s => s.event === "deviceData").flatMap(s => s.data); }
 +}
 +
@@ -392,6 +465,14 @@ index 0000000..976c2fc
 +        expect(clients[0].sessionEvents).toEqual(["partnerJoined"]);
 +        expect(clients[1].sessionEvents).toEqual([]);
 +    });
++    test("first ready master, the other slave, with no link IDs", async () => {
++        const {clients} = sessionOf(2);
++        clients[1].status(LinkStatus.AwaitMode);
++        clients[0].status(LinkStatus.AwaitMode);
++        await flush();
++        expect(clients.map(c => c.commands())).toEqual([[CommandType.SetModeSlave], [CommandType.SetModeMaster]]);
++        expect(clients.flatMap(c => c.commandIds())).toEqual([undefined, undefined]);
++    });
 +    test("data goes to the partner unchanged, with no sender field", async () => {
 +        const {clients} = sessionOf(2);
 +        expect(clients[0].data(0)).toBe(true);
@@ -425,12 +506,26 @@ index 0000000..976c2fc
 +        expect(clients.map(c => c.sessionEvents)).toEqual([["partnerJoined"], ["partnerJoined"], ["partnerJoined"], []]);
 +    });
 +
-+    test("one master, three slaves", async () => {
++    test("one parent GBA (its board SetModeSlave), three children (SetModeMaster), each with its link ID", async () => {
 +        const {clients} = sessionOf(4);
-+        for (const c of clients) c.status(LinkStatus.AwaitMode);
++        for (const i of [2, 0, 3, 1]) clients[i].status(LinkStatus.AwaitMode);
 +        await flush();
 +        expect(clients.map(c => c.commands())).toEqual([
-+            [CommandType.SetModeMaster], [CommandType.SetModeSlave], [CommandType.SetModeSlave], [CommandType.SetModeSlave]]);
++            [CommandType.SetModeMaster], [CommandType.SetModeMaster], [CommandType.SetModeSlave], [CommandType.SetModeMaster]]);
++        expect(clients.map(c => c.commandIds())).toEqual([[1], [3], [0], [2]]);
++        clients[2].data(0);                    // joined third, ready first: link ID 0
++        await flush();
++        for (const i of [0, 1, 3]) expect(clients[i].packets().map(p => p.from)).toEqual([0]);
++    });
++
++    test("a board asking again keeps its link ID", async () => {
++        const {clients} = sessionOf(4);
++        clients[1].status(LinkStatus.AwaitMode);
++        clients[0].status(LinkStatus.AwaitMode);
++        clients[1].status(LinkStatus.AwaitMode);
++        await flush();
++        expect(clients[1].commandIds()).toEqual([0, 0]);
++        expect(clients[0].commandIds()).toEqual([1]);
 +    });
 +
 +    test("starts the handshake only when all four have one, and for all four", async () => {
@@ -459,6 +554,7 @@ index 0000000..976c2fc
 +
 +    test("each player's data reaches the other three once, in order, saying whose it is", async () => {
 +        const {clients} = sessionOf(4);
++        for (const c of clients) c.status(LinkStatus.AwaitMode);   // link IDs 0-3, in this order
 +        for (let seq = 0; seq < 3; seq++) {
 +            clients[2].data(seq);
 +            clients[2].data(seq);              // a retry: dropped
