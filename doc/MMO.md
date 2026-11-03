@@ -207,6 +207,21 @@ from pret's symbols. It shows, from power-on:
   This is the real Union Room, two players together, on our adapter
   emulation.
 
+**Four on one cable** (`link4.py`, `mgba_multi.c`): four mGBA cores in
+lockstep (1,024-cycle quanta, one thread each) on a modelled Multi-Player
+cable, as GBATEK gives it:
+- SI/SD terminals and IDs;
+- the parent's Start;
+- every unit's SIOMLT_SEND latched in turn;
+- SIOMULTI0-3 the same on all at the end;
+- mGBA's cycle counts per transfer.
+
+Four new games, each with its own trainer, call the game's own `OpenLink()`.
+Every game sees four players, and only the parent is master. After the
+parent's `CheckShouldAdvanceLinkState()`, every game holds the same four
+trainer IDs in link order, with no link errors. This is the ground truth for
+the board's 4-player relay.
+
 Next on mGBA:
 - **Talking, trading and battling** in the room. Each starts a link session
   over the same adapters.

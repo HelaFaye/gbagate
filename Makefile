@@ -90,12 +90,14 @@ agent-emu: | $(BUILD)
 # tree: EMERALD_ROM=/path/to/emerald.gba make mgba-emerald
 mgba-shim: | $(BUILD)
 	@$(CC) -std=gnu11 -O1 -shared -fPIC test/mgba/mgba_shim.c -o $(BUILD)/libmgba_shim.so -lmgba
+	@$(CC) -std=gnu11 -O1 -shared -fPIC test/mgba/mgba_multi.c -o $(BUILD)/libmgba_multi.so -lmgba -lpthread
 mgba-emerald: mgba-shim
 	@test/mgba/fetch_symbols.sh
 	@$(MAKE) -s -C test/gblink_sim
 	@python3 -I test/mgba/union_room.py "$(EMERALD_ROM)" $(BUILD)/emerald
 	@python3 -I test/mgba/rfu_union.py "$(EMERALD_ROM)" $(BUILD)/emerald
 	@python3 -I test/mgba/rfu_union2.py "$(EMERALD_ROM)" $(BUILD)/emerald
+	@python3 -I test/mgba/link4.py "$(EMERALD_ROM)" $(BUILD)/emerald
 
 # After a change to rom/agent.c or agent_proto.h: rebuild the image and the
 # C array the firmware embeds (lint checks the two are current).

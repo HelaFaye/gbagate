@@ -170,3 +170,72 @@ class Emu:
             if v == a and v >= 0x08000000:
                 return n
         return hex(addr)
+
+
+class Multi:
+    """Up to four Emeralds on one Multi-Player link cable (mgba_multi.c),
+    in lockstep. multi.core(i) is an Emu for core i: every method Emu has
+    (symbols, memory, inject, call_once, ...) works on it."""
+
+    def __init__(self, rom, n, lib=os.path.join(ROOT, 'build/libmgba_multi.so')):
+        check_rom(rom)
+        self.lib = L = ctypes.CDLL(lib)
+        for f in ('m_r8', 'm_r16', 'm_r32', 'm_frame', 'm_bus_transfers'):
+            getattr(L, f).restype = ctypes.c_uint32
+        L.m_state_size.restype = ctypes.c_size_t
+        if L.m_open(n, rom.encode()) != 0:
+            raise SystemExit('mGBA could not load the ROM')
+        self.n = n
+        self.sym = find_symbols()
+        self.cores = [_Core(self, i) for i in range(n)]
+
+    def core(self, i):
+        return self.cores[i]
+
+    def attach(self):
+        self.lib.m_bus_attach()
+
+    def run(self, frames, keys=None):
+        for i, k in enumerate(keys or [0] * self.n):
+            self.lib.m_keys(i, k)
+        self.lib.m_run(frames)
+
+    def transfers(self):
+        last = (ctypes.c_uint16 * 4)()
+        n = self.lib.m_bus_transfers(last)
+        return n, list(last)
+
+
+class _Core(Emu):
+    def __init__(self, multi, i):          # not Emu.__init__: the cores are multi's
+        self.m, self.i, self.sym = multi, i, multi.sym
+
+    def run(self, frames, keys=0):
+        ks = [0] * self.m.n
+        ks[self.i] = keys
+        self.m.run(frames, ks)
+
+    def frame(self): return self.m.lib.m_frame(self.i)
+    def r8(self, a):  return self.m.lib.m_r8(self.i, a)
+    def r16(self, a): return self.m.lib.m_r16(self.i, a)
+    def r32(self, a): return self.m.lib.m_r32(self.i, a)
+    def w8(self, a, v):  self.m.lib.m_w8(self.i, a, v & 0xFF)
+    def w16(self, a, v): self.m.lib.m_w16(self.i, a, v & 0xFFFF)
+    def w32(self, a, v): self.m.lib.m_w32(self.i, a, v & 0xFFFFFFFF)
+
+    def screen(self):
+        buf = (ctypes.c_uint8 * (240 * 160 * 3))()
+        self.m.lib.m_screen(self.i, buf)
+        return bytes(buf)
+
+    def save_state(self):
+        n = self.m.lib.m_state_size(self.i)
+        buf = (ctypes.c_uint8 * n)()
+        if self.m.lib.m_save_state(self.i, buf) != 0:
+            raise RuntimeError('saveState failed')
+        return bytes(buf)
+
+    def load_state(self, data):
+        buf = (ctypes.c_uint8 * len(data)).from_buffer_copy(data)
+        if self.m.lib.m_load_state(self.i, buf) != 0:
+            raise RuntimeError('loadState failed')
