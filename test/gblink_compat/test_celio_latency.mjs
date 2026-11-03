@@ -9,11 +9,13 @@
 // the ones past it find where the link breaks down, and only report.
 //
 //   node test_celio_latency.mjs <build> [one-way ms ...]   one case per delay
+//   CELIO_SERVER=<bundle.mjs> ...    against another server build (say one
+//                                    with a patched ack timeout)
 import path from 'node:path';
 import { runPair } from './celio_harness.mjs';
 
 const out = process.argv[2];
-const server = path.join(out, 'celio_server.mjs');
+const server = process.env.CELIO_SERVER ? path.resolve(process.env.CELIO_SERVER) : path.join(out, 'celio_server.mjs');
 
 // one-way delay, each direction, on each board's WiFi; jitter on top of it
 const CASES = [

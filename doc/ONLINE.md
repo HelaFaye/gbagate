@@ -92,8 +92,9 @@ What the board speaks is current Celio-Client's protocol, the one
 - every status word and data packet goes up with a Socket.IO ack;
 - status one at a time, in order;
 - data as single-packet batches, up to 64 in flight;
-- anything unacknowledged after 1 s is sent again, with a growing wait, up
-  to 5 times;
+- anything unacknowledged is sent again, up to 5 times. The first wait is
+  1 s, or twice the measured round trip; each later wait doubles. An ack for
+  any copy counts;
 - after a reconnect everything outstanding is sent again at once; the server
   drops duplicates by uuid and sequence number;
 - everything the server sends with an ack id is acknowledged.
@@ -144,21 +145,29 @@ row is a whole session.
 
 **Link: Online** (`test_celio_latency.mjs`, through Celio-Link/Celio-Server):
 
-| round trip | result |
-|---|---|
-| 4 ms (LAN) to 600 ms (a mobile hotspot, ±200 ms jitter) | links; frames cross in 1–8 s |
-| 120 ms with a 1 s stall every 6 s | links |
-| 800 ms | links, in 9 s |
-| 900 ms and over | the server ends the session |
+| round trip | today's server | with backport/Celio-Link-Server |
+|---|---|---|
+| 4 ms (LAN) to 600 ms (a mobile hotspot, ±200 ms jitter) | links; frames cross in 1–8 s | the same |
+| 120 ms with a 1 s stall every 6 s | links | the same |
+| 1.2 s | the server ends the session | links, frames in 13 s |
+| 2 s | the server ends the session | links, 22 s |
+| 3 s | never connects | links, 30 s |
 
-The limit is the server's, not the board's. Celio-Server waits a fixed
-1 s for each ack (`emitWithRetry`'s `timeout`). On a line slower than that,
-every retry times out and the server ends the session. Over about 2.5 s,
-Engine.IO's ping timeout drops the socket too. The board acknowledges at
-once, so nothing it does can buy that time back; a server whose ack timeout
-followed the line would. The board's own resend timer does follow the line:
-it is twice the smoothed round trip, 1–8 s, so a slow link is not flooded with
-needless resends.
+The limit is the server's, not the board's. Celio-Server waits a fixed 1 s
+for each ack (`emitWithRetry`'s `timeout`) and drops an ack that arrives
+later. So on a line slower than that, no ack is accepted, and after five
+retries the server ends the session. Over about 2 s, Engine.IO's ping timeout
+drops the socket too. The board acknowledges at once, so nothing it does can
+buy that time back. `backport/README.md` has the server patch and the issue
+to send.
+
+The board's own resends do follow the line, the way TCP's do:
+
+- The first wait is twice the smoothed round trip, 1–8 s.
+- Each resend waits twice as long as the last.
+- An ack for any copy of a packet counts: on a slow line the first copy's
+  ack often lands after the second copy went.
+- Only first sends are timed.
 
 **Link: Wireless** (`wireless_cable_latency_sweep`, the air reordering as
 ESP-NOW does): links at every delay tried, up to 2 s one way, and with 10% of

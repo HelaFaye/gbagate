@@ -427,8 +427,14 @@ static void test_acks(void) {
     check("... under a new id", frame_id(g_nout - 1) != first, 1);
     check("... the same status", strstr(last(), "\"linkStatus\":65283") != NULL, 1);
     uint32_t now = t + 30 + CELIO_ACK_MS;
+    int s1b = g_nout;
+    celio_tick(&c, now + 2 * CELIO_ACK_MS - 1);
+    check("each resend waits twice the last", g_nout, s1b);
+    celio_tick(&c, now + 2 * CELIO_ACK_MS);
+    check("... and then goes", count_frames("deviceStatus", s1b), 1);
+    now += 2 * CELIO_ACK_MS;
     for (int i = 0; i < CELIO_RETRIES + 2; i++) {
-        now += CELIO_ACK_MS + 100u * CELIO_RETRIES;
+        now += CELIO_ACK_MAX_MS;
         celio_tick(&c, now);
     }
     check("five resends, then given up", c.resent == CELIO_RETRIES && c.given_up == 1, 1);
@@ -439,6 +445,25 @@ static void test_acks(void) {
     snprintf(f, sizeof f, "43%ld[true]", first);
     rx(&c, f, now);
     check("a stale ack changes nothing", c.acked, 1);
+
+    /* a slow line: the first copy's ack lands after the resend. It counts
+     * (the packet arrived), the second copy's ack is then stale, and
+     * neither is timed (Karn) */
+    uint32_t srtt0 = c.srtt_ms, acked0 = c.acked;
+    celio_on_status(&c, 0xFF06, now);
+    long copy1 = frame_id(g_nout - 1);
+    celio_tick(&c, now + c.rto_ms);
+    long copy2 = frame_id(g_nout - 1);
+    check("slow: resent", copy2 != copy1, 1);
+    snprintf(f, sizeof f, "43%ld[true]", copy1);
+    rx(&c, f, now + c.rto_ms + 200);
+    check("... the first copy's ack counts", c.acked, acked0 + 1);
+    check("... and the status is done", c.status_inflight, 0);
+    check("... not timed", c.srtt_ms, srtt0);
+    snprintf(f, sizeof f, "43%ld[true]", copy2);
+    rx(&c, f, now + c.rto_ms + 400);
+    check("... the second's ack is then stale", c.acked, acked0 + 1);
+    now += c.rto_ms + 400;
 
     /* refused: counted, and not resent */
     celio_on_status(&c, 0xFF05, now);

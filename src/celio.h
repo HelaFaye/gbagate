@@ -108,20 +108,24 @@ typedef struct {
     uint8_t       seen_next;
 
     /* What we sent that the server has not acknowledged. A slot is resent
-     * when `due`, with a fresh ack id, until CELIO_RETRIES are spent. */
+     * when `due`, with a fresh ack id, until CELIO_RETRIES are spent; each
+     * resend waits twice as long as the last. */
     struct celio_status_out {
         char     uuid[37];
         uint16_t status;
     } status_q[CELIO_STATUS_QUEUE];
     uint8_t       status_head, status_count;
-    uint32_t      status_ack, status_due;      /* the head, in flight         */
+    uint32_t      status_ack[CELIO_RETRIES + 1]; /* the head's ack id, per copy */
+    uint32_t      status_due;                  /* ... when the next copy goes */
     uint32_t      status_sent;                 /* ... when it last went       */
     uint8_t       status_tries;
     bool          status_inflight;
 
     struct celio_data_out {
         bool     used;
-        uint32_t seq, ack, due, sent;
+        uint32_t seq, due, sent;
+        uint32_t ack[CELIO_RETRIES + 1];       /* the id each copy went under:
+                                                * an ack for any of them counts */
         uint8_t  tries;
         uint8_t  data[64];
     } data_out[CELIO_DATA_WINDOW];

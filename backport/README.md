@@ -157,6 +157,58 @@ fork from Celio-Link. The pull request opened against the fork (#1) can be
 closed. The patches stay in the tree as a record; `verify-celio.sh` no
 longer runs.
 
+## Celio-Link/Celio-Server -- the ack timeout
+
+`Celio-Link-Server/0001-ack-timeout-follows-the-line.patch`, against
+Celio-Link/Celio-Server 8f509bd: not sent; it is the user's to send.
+
+**The problem.** `Client.emitWithRetry` waits a fixed 1 s for each ack, sends
+again 5 times 100-500 ms apart, then ends the session. Every server-to-client
+message goes through it: session events, commands, data. On a line whose
+round trip nears 1 s, every copy's wait runs out before its ack can come
+back. socket.io throws away an ack that arrives after its own timeout, so
+even the first copy's late ack is lost. And `pingTimeout: 2000` drops the
+socket of any client whose round trip nears 2 s. A satellite link or a bad
+mobile connection cannot hold a session; the client can do nothing about it,
+since it already acks at once.
+
+**The fix.**
+- Each copy waits twice as long as the last: 1, 2, 4, 8, 8, 8 s, as TCP backs
+  off its retransmit timer.
+- Every copy listens for its ack until the last one's time is up, so a late
+  ack for an earlier copy counts. Duplicates are already harmless: clients
+  drop them by uuid and sequence.
+- Once a round trip is known, the first wait is twice the smoothed round
+  trip (first sends only, Karn's rule), 1-8 s.
+- `pingTimeout` goes from 2 s to 5 s.
+
+gbagate's own client does the same in the other direction (`src/celio.c`).
+
+**Measured** with `test_celio_latency.mjs`: two board clients, delay and
+jitter on each one's socket, a whole session per row.
+
+| round trip | 8f509bd | with the patch |
+|---|---|---|
+| 4-600 ms, and 1 s stalls | links | links |
+| 1.2 s | session ended | links, frames in 12.8 s |
+| 2 s | session ended | links, 21.6 s |
+| 3 s | never connects | links, 30.4 s |
+
+To run it against a build of the patched server:
+`CELIO_SERVER=<bundle.mjs> node test/gblink_compat/test_celio_latency.mjs build/gblink_compat`.
+
+**What to send.** An issue on Celio-Link/Celio-Server, with the patch and the
+table:
+
+> *Sessions end on links with a round trip over about 1 s.*
+> `emitWithRetry` waits a fixed 1 s per copy, and socket.io drops an ack
+> that comes after its timeout. So on a slow line no ack is ever accepted,
+> and after five retries the session ends. Proposal: double the wait on each
+> retry, keep each copy's ack listener until the last deadline, start from
+> the measured round trip, and raise `pingTimeout` to 5 s. With these, two
+> clients hold a session at 1.2, 2 and 3 s round trips that today end or
+> never connect. Nothing changes on a fast line.
+
 ## Not patches: things worth knowing upstream
 
 - **Multi-Play link counters.** gbagate's `0x4E` reports words clocked,

@@ -400,23 +400,47 @@ static void on_event(celio_t *c, json_t args, uint32_t now) {
  * once (the server drops what it already has).
  */
 
+/*
+ * How long copy `tries` waits for its ack: the RTO, doubled for each resend,
+ * up to CELIO_ACK_MAX_MS. A fixed wait shorter than the line resends every
+ * copy too soon; doubling reaches the line's round trip within a few copies
+ * even before a single ack has been measured.
+ */
+static uint32_t ack_wait(const celio_t *c, uint8_t tries) {
+    uint32_t w = c->rto_ms;
+    while (tries-- && w < CELIO_ACK_MAX_MS) {
+        w *= 2u;
+    }
+    return w < CELIO_ACK_MAX_MS ? w : CELIO_ACK_MAX_MS;
+}
+
+/* Was `id` the ack id of one of the first `copies` sends? */
+static bool sent_as(const uint32_t *ids, uint8_t copies, uint32_t id) {
+    for (uint8_t i = 0; i <= copies; i++) {
+        if (ids[i] == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void emit_status(celio_t *c, uint32_t now) {
     const struct celio_status_out *o = &c->status_q[c->status_head];
     char f[160];
-    c->status_ack = c->next_ack++;
+    const uint32_t id = c->status_ack[c->status_tries] = c->next_ack++;
     int l = snprintf(f, sizeof f, "42%lu[\"deviceStatus\",{\"uuid\":\"%s\",\"linkStatus\":%u}]",
-                     (unsigned long)c->status_ack, o->uuid, (unsigned)o->status);
+                     (unsigned long)id, o->uuid, (unsigned)o->status);
     send(c, f, (size_t)l);
     c->status_inflight = true;
     c->status_sent = now;
-    c->status_due = now + c->rto_ms + 100u * c->status_tries;
+    c->status_due = now + ack_wait(c, c->status_tries);
 }
 
 static void emit_data(celio_t *c, struct celio_data_out *o, uint32_t now) {
     char f[CELIO_FRAME_MAX];
-    o->ack = c->next_ack++;
+    const uint32_t id = o->ack[o->tries] = c->next_ack++;
     int l = snprintf(f, sizeof f, "42%lu[\"deviceData\",[{\"sequence\":%lu,\"data\":[",
-                     (unsigned long)o->ack, (unsigned long)o->seq);
+                     (unsigned long)id, (unsigned long)o->seq);
     for (int i = 0; i < 32; i++) {
         unsigned w = (unsigned)o->data[i * 2] | (unsigned)o->data[i * 2 + 1] << 8;
         l += snprintf(f + l, sizeof f - (size_t)l, i ? ",%u" : "%u", w);
@@ -424,7 +448,7 @@ static void emit_data(celio_t *c, struct celio_data_out *o, uint32_t now) {
     l += snprintf(f + l, sizeof f - (size_t)l, "]}]]");
     send(c, f, (size_t)l);
     o->sent = now;
-    o->due = now + c->rto_ms + 100u * o->tries;
+    o->due = now + ack_wait(c, o->tries);
 }
 
 static void status_pop(celio_t *c) {
@@ -461,7 +485,7 @@ static void note_rtt(celio_t *c, uint32_t sent_at, uint8_t tries, uint32_t now) 
 static void on_our_ack(celio_t *c, uint32_t id, json_t args, uint32_t now) {
     json_t v;
     bool ok = json_at(args, 0, &v) && json_type(v) == JSON_TRUE;
-    if (c->status_inflight && id == c->status_ack) {
+    if (c->status_inflight && sent_as(c->status_ack, c->status_tries, id)) {
         note_rtt(c, c->status_sent, c->status_tries, now);
         ok ? c->acked++ : c->rejected++;
         status_pop(c);
@@ -469,14 +493,16 @@ static void on_our_ack(celio_t *c, uint32_t id, json_t args, uint32_t now) {
     }
     for (int i = 0; i < CELIO_DATA_WINDOW; i++) {
         struct celio_data_out *o = &c->data_out[i];
-        if (o->used && o->ack == id) {
+        if (o->used && sent_as(o->ack, o->tries, id)) {
             note_rtt(c, o->sent, o->tries, now);
             ok ? c->acked++ : c->rejected++;
             o->used = false;
             return;
         }
     }
-    /* an ack for an emit already resent and answered: nothing to do */
+    /* an ack for a packet already answered or given up: nothing to do.
+     * An ack for an earlier copy of one in flight counts (above): it says
+     * the packet arrived, though not which copy, so it is not timed. */
 }
 
 /* Send what is due: the next status, and anything whose ack is overdue. */
