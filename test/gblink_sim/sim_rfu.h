@@ -14,6 +14,12 @@ typedef void (*sim_gba_irq_t)(void);
 /* The GBA hardware model and the adapter driver; call before gblink_start. */
 void sim_rfu_init(void);
 
+/* sim_rfu_wire.c: with GBLINK_RFU_WIRE=<file>, install the adapter's driver
+ * on that shared-memory cable (rfu_wire.h) instead of the built-in GBA, and
+ * return true. */
+#include <stdbool.h>
+bool sim_rfu_wire_init(void);
+
 /* The game thread: route its IRQs, then claim the CPU for them. */
 void sim_gba_set_irq(sim_gba_irq_t serial, int timer, sim_gba_irq_t timer_fn);
 void sim_gba_attach_cpu(void);

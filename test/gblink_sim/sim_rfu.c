@@ -595,6 +595,9 @@ static const gbl_rfu_phy_t s_drv = {
 };
 
 void sim_rfu_init(void) {
+    /* GBLINK_RFU_WIRE: the GBA is another process (an emulator running the
+     * real game) on a shared-memory cable; see rfu_wire.h. */
+    if (sim_rfu_wire_init()) return;
     /* The GBA's power-on state: SIO in Normal mode, SO idle high. */
     *IO16(R_SIOCNT) = CNT_SO;
     gbl_rfu_install(&s_drv);

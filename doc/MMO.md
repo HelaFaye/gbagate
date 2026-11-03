@@ -181,9 +181,37 @@ from pret's symbols. It shows, from power-on:
   stands in the room) and `mapLayout`. The copy happens twice during a warp,
   so the write must follow it, not lead it.
 
+**A Wireless Adapter on mGBA.** Our firmware's Wireless Adapter mode
+(0x07), unchanged, in the GB-Link simulator, plugged into mGBA's link port:
+- **The cable** is shared memory (`test/gblink_sim/rfu_wire.h`):
+  - On the simulator's side, `sim_rfu_wire.c` implements the same
+    adapter-side driver as `sim_rfu.c` (`GBLINK_RFU_WIRE=<file>` selects it).
+  - On the game's side, an mGBA serial driver in `test/mgba/mgba_shim.c`
+    plays the GBA's serial hardware. Transfers the game clocks (GBATEK:
+    Normal 32-bit, 2 MHz) take the adapter's staged word, the serial IRQ is
+    raised, SIOCNT bit 2 shows the adapter's SI, and the reset pulse on SD is
+    read from RCNT.
+- **Pacing.** The adapter is firmware with real-time waits, so the emulator
+  is paced to real time. An mGBA timing event every 256 cycles brings the
+  wires up to date and waits for the wall clock.
+- **One player** (`rfu_union.py`): the real `RunUnionRoom` runs with no
+  error. The game logs in and alternates hosting (0x19/0x1A) with searching
+  (0x1C-0x1E). The wire shows no unstaged or late words.
+- **Two players** (`rfu_union2.py`): two mGBA processes, each on its own
+  simulator, with the 64-byte radio stream relayed between the adapters.
+  - Every scan finds the other adapter.
+  - Each room lists the other trainer among its players.
+  - Each field draws the other with the sprite the game's own table
+    (`sUnionRoomObjGfxIds`) gives their gender and trainer ID.
+
+  This is the real Union Room, two players together, on our adapter
+  emulation.
+
 Next on mGBA:
-- **A Wireless Adapter on mGBA's serial port.** Our firmware's adapter
-  emulation, paced to real time, so the real `RunUnionRoom` runs.
+- **Talking, trading and battling** in the room. Each starts a link session
+  over the same adapters.
+- **More than two players.** The firmware tracks up to 4 remote peers, and a
+  room holds 5.
 - **A custom room** loaded through the header window and the IRQ-table hook.
 - **The ROM-patch route,** for a modded copy.
 
