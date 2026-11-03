@@ -247,8 +247,8 @@ def hardware_commands():
     try:
         s.cmd(0x41)
         check(s.wait_event(EV_VCC) == b'\x01', '5 V')
+        n = len(s.events)          # before the command: its answer can beat the next line
         s.cmd(0x40)
-        n = len(s.events)
         check(s.wait_event(EV_VCC, start=n) == b'\x00', '3.3 V')
         s.cmd(0x42, 1, 2, 3, 1)
         check(s.wait_event(EV_LED, lambda b: b == b'\x01\x02\x03\x01'), 'live LED')

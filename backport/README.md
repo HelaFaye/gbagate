@@ -214,9 +214,15 @@ Every case also checks:
 `run.sh` builds `celio_server_patched.mjs` from this patch file, so CI tests
 the patch itself.
 
-One run on upstream saw the LAN pair fail to link beside the 1.2 s pair.
-Seven reruns of that case passed, and the cause is not known. The test now
-prints the full log on any required failure, to catch it if it recurs.
+A LAN pair once failed to link in a crowd, locally and then in CI (on both
+servers). The cause was the simulator, not a server: it seeded the boards'
+client IDs with `getpid() ^ time(NULL)`. Simulators started back to back
+have neighbouring PIDs, and PIDs p and p ^ 1 started in seconds t and t ^ 1
+seed alike. Two boards with one ID make the server take the second for a
+reconnect of the first, and it drops the first's socket. The IDs now come
+from `getrandom`, and the crowd test checks that every board has its own.
+Its delay line also keeps order strictly now (one queue, one timer), as a
+TCP connection does; the numbers above are unchanged.
 
 To run it against a build of the patched server:
 `CELIO_SERVER=<bundle.mjs> node test/gblink_compat/test_celio_latency.mjs build/gblink_compat`.
@@ -232,6 +238,84 @@ table:
 > the measured round trip, and raise `pingTimeout` to 5 s. With these, two
 > clients hold a session at 1.2, 2 and 3 s round trips that today end or
 > never connect. Nothing changes on a fast line.
+
+## Celio-Link/Celio-Server -- four-player sessions
+
+`Celio-Link-Server/0002-sessions-of-up-to-four-players.patch`, on 8f509bd
+with 0001. Not sent: sending it is the user's call.
+
+**Why.** A GBA Multi-Play link joins up to four GBAs. Pokémon's Cable Club
+multi battles, the Berry Blender and the record corner use it, as do other
+games. Celio sessions were fixed at two, and every relay went "to the
+opposite client".
+
+**What changes.** A two-player session is exactly what it was on the wire.
+- **Creating:** `sessionCreate` takes an optional `{players: 2..4}`. Today's
+  clients send `null`, which means 2. The create/join reply adds `players`
+  and `slot` (the order of joining, 0 = the creator).
+- **`partnerJoined`** means the session is complete: sent to the first
+  player in a pair, as now, or to everyone waiting once the last joins.
+  `partnerLeft` follows the same rule before the link starts. After it
+  starts, a leaver still ends it for everyone.
+- **Starting:** one master and the rest slaves, as now. The handshake starts
+  only when the session is full and every player has one, and for all of
+  them. ConnectLink goes to all the others.
+- **Data:** each player's packets go to every other player, through each
+  receiver's own sender. With more than two players each packet carries
+  `from` (the sender's slot), so a receiver can keep each sender's order.
+
+**Tested.**
+
+*`test/session.test.ts`*, upstream's vitest style, 14 tests:
+- the options;
+- a pair, as before;
+- four players:
+  - full at four, a fifth refused;
+  - told only when complete;
+  - one master and three slaves;
+  - no handshake until all four;
+  - ConnectLink to the other three;
+  - each player's data reaches the others once and in order, with its
+    sender;
+  - leaving before and after the start.
+
+12 of the 14 fail without the patch; the two pair tests pass on both. All 20
+of the server's tests pass with it, and `tsc --noEmit` is clean.
+
+*`test/gblink_compat/test_celio_4p.mjs`*, end to end: four socket.io clients
+against the real server bundle, on 2, 40, 150 and 600 ms lines.
+- One master and three slaves.
+- The handshake and ConnectLink go where they should.
+- Every player gets all 30 of each other player's packets, in order,
+  marked, and none of its own.
+- A fifth player is refused.
+- A pair running on the same server at the same time still gets
+  packets with no `from`.
+
+**0001 amended alongside.** Upstream's `client.test.ts` passes a `backoff`
+option, which 0001 had dropped, and it fails copies outright. 0001 now
+restores that behaviour: a copy that fails outright is resent after
+`backoff`, and a copy that is only slow is resent on the doubling timer.
+Upstream's two `emitWithRetry` tests take 11 ms, as before. Without the fix
+they took 3 s each and passed only because vitest does not type-check.
+
+**Pull request text** (for Celio-Link/Celio-Server, after 0001):
+
+> *Sessions of up to four players, for Multi-Play links.*
+> A GBA Multi-Play link joins up to four GBAs. This lets `sessionCreate`
+> take `{players: 2..4}`; clients that send nothing get two, as today, and a
+> two-player session is unchanged on the wire. A larger session tells its
+> players `partnerJoined` once complete, starts the handshake only when all
+> have one, relays each player's data to all the others with a `from` slot,
+> and ends for all if anyone leaves a started link. New
+> `test/session.test.ts` (14 tests; 12 fail without the change) and an end
+> to end run with four clients on 2-600 ms lines.
+
+**What clients need.** A client that wants four players must:
+- create with `{players: 4}`;
+- keep per-sender order by `from`;
+- show its GBA the other three. On our board that is a Multi-Play relay in
+  the firmware, the next step.
 
 ## Not patches: things worth knowing upstream
 

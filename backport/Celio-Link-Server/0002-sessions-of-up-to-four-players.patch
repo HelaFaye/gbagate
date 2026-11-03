@@ -1,0 +1,490 @@
+From: gbagate
+Subject: [PATCH] Sessions of up to four players, for Multi-Play links
+
+Base: Celio-Link/Celio-Server 8f509bd with 0001.
+
+A Game Boy Advance Multi-Play link joins up to four GBAs (Pokemon's Cable
+Club multi battles, Berry Blender, the record corner; Mario Kart Super
+Circuit; and more). Sessions were fixed at two: everything went "to the
+opposite client". This lets a session be created for 2 to 4 players, and
+leaves a two-player session exactly as it was on the wire.
+
+- sessionCreate takes an optional {players: 2..4}. Clients today send null
+  or nothing: two players. Anything else invalid is refused (Invalid
+  request). The create/join reply adds `players` and `slot` (the order of
+  joining, 0 = the creator).
+- "partnerJoined" means the session is complete: with two players, sent to
+  the first as before; with more, to everyone waiting once the last joins.
+  "partnerLeft" likewise, before the link has started; once it has, a
+  leaver still ends it for everyone.
+- The first player ready is master, the rest slaves, as before. The
+  handshake starts only when the session is full and every player has one,
+  and for all of them; ConnectLink goes to all the others.
+- Each player's data goes to every other player, through each receiver's
+  own PipelinedSender, deduplicated by sequence per sender as before. In a
+  session of more than two each packet carries `from` (the sender's slot)
+  so a receiver keeps each sender's order; a two-player session's packets
+  are unchanged.
+
+test/session.test.ts (new, 14 tests): the options; a two-player session as
+before; a four-player session: full at four and a fifth refused, told only
+when complete, one master and three slaves, no handshake until all four,
+ConnectLink to the other three, every player's data to the other three
+once and in order with its sender, a leave before and after the start. 12
+of them fail without this change; the two two-player tests pass on both.
+
+diff --git a/src/client.ts b/src/client.ts
+index 2747e56..ab47290 100644
+--- a/src/client.ts
++++ b/src/client.ts
+@@ -3,7 +3,7 @@ import {ErrorType, SessionManager} from "./sessionManager.js";
+ import {BehaviorSubject, concatMap, Observable, Subject, switchMap} from 'rxjs';
+ import {v4 as uuidv4} from 'uuid';
+ import {err} from 'true-myth/result';
+-import {AckFn, isAckFn, isSessionId} from "./messages/validation.js";
++import {AckFn, isAckFn, isSessionId, sessionCreatePlayers } from "./messages/validation.js";
+ 
+ /**
+  * An emit ran out of retries because the client is disconnected. Removing the client is up to the disconnect
+@@ -30,12 +30,18 @@ export class Client {
+     private sessionEvents$: Subject<string> = new Subject<string>();
+     private eventHandlers: Record<string, (...args: unknown[]) => void> = {
+ 
+-        sessionCreate: (_: unknown, responseHandler: unknown) => {
++        sessionCreate: (options: unknown, responseHandler: unknown) => {
+             if (!isAckFn(responseHandler)) {
+                 console.warn('Client ' + this.clientId + ' sent sessionCreate without ack callback');
+                 return;
+             }
+-            const sessionState = this.sessionManager.createSession(this);
++            const players = sessionCreatePlayers(options);
++            if (players === undefined) {
++                console.warn('Client ' + this.clientId + ' sent sessionCreate with invalid options');
++                responseHandler(err(ErrorType.InvalidRequest));
++                return;
++            }
++            const sessionState = this.sessionManager.createSession(this, players);
+             if (sessionState.isOk) console.log('Client ' + this.clientId + ` created session with id ` + sessionState.value.id);
+             responseHandler(sessionState);
+         },
+diff --git a/src/messages/validation.ts b/src/messages/validation.ts
+index 24c0a8d..e86037d 100644
+--- a/src/messages/validation.ts
++++ b/src/messages/validation.ts
+@@ -28,6 +28,22 @@ export function isSessionId(value: unknown): value is string {
+     return typeof value === "string" && /^\d{4}$/.test(value);
+ }
+ 
++export const MIN_PLAYERS = 2;
++export const MAX_PLAYERS = 4;
++
++/**
++ * The options a client may pass with sessionCreate. Older clients pass nothing (or null): a two-player session.
++ * Returns the player count, or undefined if the options are invalid.
++ */
++export function sessionCreatePlayers(value: unknown): number | undefined {
++    if (value === undefined || value === null) return MIN_PLAYERS;
++    if (!isRecord(value)) return undefined;
++    if (value.players === undefined) return MIN_PLAYERS;
++    const players = value.players;
++    if (!Number.isInteger(players) || (players as number) < MIN_PLAYERS || (players as number) > MAX_PLAYERS) return undefined;
++    return players as number;
++}
++
+ export function isClientId(value: unknown): value is string {
+     return typeof value === "string" && value.length > 0 && value.length <= 64;
+ }
+diff --git a/src/session.ts b/src/session.ts
+index c83ac79..b026a6c 100644
+--- a/src/session.ts
++++ b/src/session.ts
+@@ -16,6 +16,7 @@ type DataArray = [
+ interface DataPacket {
+     sequence: number;
+     data: DataArray;
++    from?: number;      // the sender's slot; only in sessions of more than two, where a receiver has several senders
+ }
+ 
+ interface CommandPacket {
+@@ -105,12 +106,15 @@ export class Session {
+                 receivedSequences.add(dataPacket.sequence);
+                 newPackets.push(dataPacket);
+             }
+-            this.sendDataToOppositeClient(client, newPackets);
++            this.sendDataToOtherClients(client, newPackets);
+             ack?.(true);
+         }
+     };
+ 
+-    constructor(private sessionId: string) {}
++    constructor(private sessionId: string, private players: number = 2) {}
++
++    /** How many players the session is for: 2 (one link cable) to 4 (a Multi-Play link). */
++    capacity(): number { return this.players; }
+ 
+     /**
+      * Check if the session has started, meaning the first status packet has been received.
+@@ -146,12 +150,14 @@ export class Session {
+             case LinkStatus.HandshakeReceived:
+                 clientState.status = LinkStatus.HandshakeReceived;
+ 
+-                const allHandshakesReceived = [...this.clientState.values()]
++                // Every player, and the session complete: with more than two, an early pair must not start
++                // the link without the others.
++                const allHandshakesReceived = this.isFull() && [...this.clientState.values()]
+                     .every(state => state.status === LinkStatus.HandshakeReceived);
+ 
+                 if (allHandshakesReceived) {
+                     this.sendCommand(client, CommandType.StartHandshake);
+-                    this.sendCommandToOppositeClient(client, CommandType.StartHandshake);
++                    this.sendCommandToOtherClients(client, CommandType.StartHandshake);
+                 }
+                 break
+ 
+@@ -161,7 +167,7 @@ export class Session {
+ 
+             case LinkStatus.LinkConnected:
+                 clientState.status = LinkStatus.LinkConnected;
+-                this.sendCommandToOppositeClient(client, CommandType.ConnectLink);
++                this.sendCommandToOtherClients(client, CommandType.ConnectLink);
+                 break;
+ 
+             case LinkStatus.LinkReconnecting:
+@@ -196,7 +202,7 @@ export class Session {
+      * @returns {boolean} - true if the session is full, false otherwise.
+      */
+     isFull(): boolean {
+-        return this.clients.length >= 2;
++        return this.clients.length >= this.players;
+     }
+ 
+     /**
+@@ -208,13 +214,15 @@ export class Session {
+     }
+ 
+     /**
+-     * Add a client to the session. Emits a "partnerJoined" event to the other client.
++     * Add a client to the session. When that completes it, emits "partnerJoined" to the clients already in it:
++     * with two players, the other one, as before; with more, everyone waiting, once the last has joined.
+      * @param client
++     * @returns the client's slot, or -1 if the session is full
+      */
+-    enter(client: Client) : boolean {
++    enter(client: Client) : number {
+         if (this.isFull()) {
+             console.warn("Session is full");
+-            return false;
++            return -1;
+         }
+         this.clients.push(client);
+         const clientState = new ClientState(new PipelinedSender<DataPacket[]>(dataPackets =>
+@@ -246,9 +254,14 @@ export class Session {
+                 }
+             }));
+         });
+-        this.emitToOppositeSocket(client, "partnerJoined");
++        if (this.isFull()) this.emitToOtherSockets(client, "partnerJoined");
+         client.inSession(true)
+-        return true;
++        return this.clients.length - 1;
++    }
++
++    /** A client's slot: its place in the order the session was joined, 0 = the creator. */
++    private slotOf(client: Client): number {
++        return this.clients.findIndex(c => c.id() === client.id());
+     }
+ 
+     /**
+@@ -266,7 +279,7 @@ export class Session {
+             this.removeClient(client);
+             this.evict();
+         } else {
+-            this.emitToOppositeSocket(client, "partnerLeft");
++            if (this.isFull()) this.emitToOtherSockets(client, "partnerLeft");
+             this.removeClient(client);
+         }
+     }
+@@ -296,19 +309,15 @@ export class Session {
+     }
+ 
+     /**
+-     * Send a session event to the opposite client of the given client. Save to call when only one client is in the session.
++     * Send a session event to every other client in the session.
+      * @param client
+      * @param event
+      */
+-    private emitToOppositeSocket(client: Client, event: string) {
+-        if (this.clients.length != 2) return;
+-        if (client.id() === this.clients[0].id()) {
+-            console.log('Emitting to Client ' + this.clients[1].id() + ': ' + event);
+-            this.clients[1].emitSessionEvent(event);
+-        }
+-        else {
+-            console.log('Emitting to Client ' + this.clients[0].id() + ': ' + event);
+-            this.clients[0].emitSessionEvent(event);
++    private emitToOtherSockets(client: Client, event: string) {
++        for (const other of this.clients) {
++            if (other.id() === client.id()) continue;
++            console.log('Emitting to Client ' + other.id() + ': ' + event);
++            other.emitSessionEvent(event);
+         }
+     }
+ 
+@@ -323,24 +332,30 @@ export class Session {
+     }
+ 
+     /**
+-     * Queue a command for the opposite client of the given client. Save to call when only one client is in the session.
++     * Queue a command for every other client in the session.
+      * @param client
+      * @param command
+      */
+-    private sendCommandToOppositeClient(client: Client, command: CommandType) {
+-        if (this.clients.length != 2) return;
+-        let receiverClient = this.clients[0] === client ? this.clients[1] : this.clients[0];
+-        this.sendCommand(receiverClient, command);
++    private sendCommandToOtherClients(client: Client, command: CommandType) {
++        for (const other of this.clients) {
++            if (other !== client) this.sendCommand(other, command);
++        }
+     }
+ 
+     /**
+-     * Queue data packets for the opposite client of the given client. Save to call when only one client is in the session.
++     * Queue data packets for every other client in the session, each through its own sender. With more than two
++     * players a receiver has several senders, so each packet says whose it is; a two-player session's packets
++     * are unchanged.
+      * @param client
+      * @param dataPackets
+      */
+-    private sendDataToOppositeClient(client: Client, dataPackets: DataPacket[]) {
+-        if (this.clients.length != 2 || dataPackets.length === 0) return;
+-        let receiverClient = this.clients[0] === client ? this.clients[1] : this.clients[0];
+-        this.clientState.get(receiverClient)?.dataSender.push(dataPackets);
++    private sendDataToOtherClients(client: Client, dataPackets: DataPacket[]) {
++        if (dataPackets.length === 0) return;
++        const packets = this.players > 2
++            ? dataPackets.map(p => ({sequence: p.sequence, data: p.data, from: this.slotOf(client)}))
++            : dataPackets;
++        for (const other of this.clients) {
++            if (other !== client) this.clientState.get(other)?.dataSender.push(packets);
++        }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/src/sessionManager.ts b/src/sessionManager.ts
+index 8f523f1..9634a41 100644
+--- a/src/sessionManager.ts
++++ b/src/sessionManager.ts
+@@ -14,6 +14,8 @@ export enum ErrorType {
+ interface SessionState {
+     id: string;
+     full: boolean;
++    players: number;    // the session's size, 2 to 4
++    slot: number;       // this client's place in it, 0 = the one who created it
+ }
+ 
+ export class SessionManager {
+@@ -21,7 +23,7 @@ export class SessionManager {
+     private sessions: Map<string, Session> = new Map();
+     private clientToSession: Map<Client, string> = new Map();
+ 
+-    createSession(client: Client) :  Result<SessionState, ErrorType> {
++    createSession(client: Client, players: number = 2) :  Result<SessionState, ErrorType> {
+         if (this.clientToSession.has(client)) return err(ErrorType.AlreadyExists);
+ 
+         let sessionId: string = ""
+@@ -30,7 +32,7 @@ export class SessionManager {
+             sessionId = sessionIdRaw.toString().padStart(4, "0");
+         } while (this.sessions.has(sessionId));
+ 
+-        const session = new Session(sessionId);
++        const session = new Session(sessionId, players);
+ 
+         session.close$
+             .pipe(take(1))
+@@ -54,8 +56,8 @@ export class SessionManager {
+             return err(ErrorType.SessionFull);
+         }
+         this.clientToSession.set(client, sessionId);
+-        session.enter(client);
+-        return ok({id: sessionId, full: session.isFull()});
++        const slot = session.enter(client);
++        return ok({id: sessionId, full: session.isFull(), players: session.capacity(), slot});
+     }
+ 
+     leaveSession(client: Client)  {
+diff --git a/test/session.test.ts b/test/session.test.ts
+new file mode 100644
+index 0000000..976c2fc
+--- /dev/null
++++ b/test/session.test.ts
+@@ -0,0 +1,167 @@
++import {describe, expect, test} from "vitest";
++import {Subject} from "rxjs";
++import {Session} from "../src/session.js";
++import {SessionManager} from "../src/sessionManager.js";
++import {CommandType, LinkStatus} from "../src/messages/gameboy.js";
++import {sessionCreatePlayers} from "../src/messages/validation.js";
++
++// A client as the session sees it: its emits are recorded and acked at once, and the test plays its events.
++class FakeClient {
++    sent: {event: string, data: any}[] = [];
++    sessionEvents: string[] = [];
++    private events = new Map<string, Subject<{data: unknown, ack?: (r: unknown) => void}>>();
++    private uuid = 0;
++
++    constructor(private clientId: string) {}
++
++    id() { return this.clientId; }
++    inSession(_: boolean) {}
++    emitSessionEvent(event: string) { this.sessionEvents.push(event); }
++    emitWithRetry(event: string, data?: any) {
++        this.sent.push({event, data});
++        return Promise.resolve(true);
++    }
++    fromEventWithAck(event: string) {
++        if (!this.events.has(event)) this.events.set(event, new Subject());
++        return this.events.get(event)!.asObservable();
++    }
++
++    play(event: string, data: unknown): unknown {
++        let acked: unknown;
++        this.events.get(event)?.next({data, ack: (r: unknown) => { acked = r; }});
++        return acked;
++    }
++    status(linkStatus: LinkStatus) { return this.play("deviceStatus", {uuid: this.clientId + "-" + this.uuid++, linkStatus}); }
++    data(sequence: number) { return this.play("deviceData", [{sequence, data: new Array(32).fill(sequence)}]); }
++
++    commands() { return this.sent.filter(s => s.event === "deviceCommand").map(s => s.data.command as CommandType); }
++    packets() { return this.sent.filter(s => s.event === "deviceData").flatMap(s => s.data); }
++}
++
++const flush = () => new Promise(r => setTimeout(r, 0));
++
++function sessionOf(players: number, count = players) {
++    const session = new Session("1234", players);
++    const clients = Array.from({length: count}, (_, i) => new FakeClient("c" + i));
++    for (const c of clients) session.enter(c as any);
++    return {session, clients};
++}
++
++describe("sessionCreate options", () => {
++    test("nothing, null or no players field is a two-player session", () => {
++        expect(sessionCreatePlayers(undefined)).toBe(2);
++        expect(sessionCreatePlayers(null)).toBe(2);
++        expect(sessionCreatePlayers({})).toBe(2);
++    });
++    test("2 to 4 players", () => {
++        expect(sessionCreatePlayers({players: 3})).toBe(3);
++        expect(sessionCreatePlayers({players: 4})).toBe(4);
++    });
++    test("anything else is refused", () => {
++        for (const bad of [{players: 1}, {players: 5}, {players: 2.5}, {players: "4"}, [], "4", 4])
++            expect(sessionCreatePlayers(bad)).toBeUndefined();
++    });
++});
++
++describe("a two-player session is as before", () => {
++    test("the creator is told when the partner joins", () => {
++        const {clients} = sessionOf(2);
++        expect(clients[0].sessionEvents).toEqual(["partnerJoined"]);
++        expect(clients[1].sessionEvents).toEqual([]);
++    });
++    test("data goes to the partner unchanged, with no sender field", async () => {
++        const {clients} = sessionOf(2);
++        expect(clients[0].data(0)).toBe(true);
++        await flush();
++        expect(clients[1].packets()).toEqual([{sequence: 0, data: new Array(32).fill(0)}]);
++        expect(clients[0].packets()).toEqual([]);
++    });
++});
++
++describe("a four-player session", () => {
++    test("is full at four, and a fifth is refused", () => {
++        const manager = new SessionManager();
++        const creator = new FakeClient("c0");
++        const created = manager.createSession(creator as any, 4);
++        expect(created.isOk && created.value).toMatchObject({full: false, players: 4, slot: 0});
++        const id = created.isOk ? created.value.id : "";
++        for (let i = 1; i < 4; i++) {
++            const joined = manager.enterSession(new FakeClient("c" + i) as any, id);
++            expect(joined.isOk && joined.value).toMatchObject({full: i === 3, players: 4, slot: i});
++        }
++        const fifth = manager.enterSession(new FakeClient("c4") as any, id);
++        expect(fifth.isErr && fifth.error).toBe("Session is full");
++    });
++
++    test("tells the waiting players only once the last one has joined", () => {
++        const session = new Session("1234", 4);
++        const clients = Array.from({length: 4}, (_, i) => new FakeClient("c" + i));
++        for (const c of clients.slice(0, 3)) session.enter(c as any);
++        expect(clients.slice(0, 3).map(c => c.sessionEvents)).toEqual([[], [], []]);
++        session.enter(clients[3] as any);
++        expect(clients.map(c => c.sessionEvents)).toEqual([["partnerJoined"], ["partnerJoined"], ["partnerJoined"], []]);
++    });
++
++    test("one master, three slaves", async () => {
++        const {clients} = sessionOf(4);
++        for (const c of clients) c.status(LinkStatus.AwaitMode);
++        await flush();
++        expect(clients.map(c => c.commands())).toEqual([
++            [CommandType.SetModeMaster], [CommandType.SetModeSlave], [CommandType.SetModeSlave], [CommandType.SetModeSlave]]);
++    });
++
++    test("starts the handshake only when all four have one, and for all four", async () => {
++        const {clients} = sessionOf(4);
++        for (const c of clients.slice(0, 3)) c.status(LinkStatus.HandshakeReceived);
++        await flush();
++        expect(clients.flatMap(c => c.commands())).toEqual([]);
++        clients[3].status(LinkStatus.HandshakeReceived);
++        await flush();
++        expect(clients.map(c => c.commands())).toEqual(new Array(4).fill([CommandType.StartHandshake]));
++    });
++
++    test("does not start the handshake while the session is not full", async () => {
++        const {clients} = sessionOf(4, 2);
++        for (const c of clients) c.status(LinkStatus.HandshakeReceived);
++        await flush();
++        expect(clients.flatMap(c => c.commands())).toEqual([]);
++    });
++
++    test("a player's link connecting connects the other three", async () => {
++        const {clients} = sessionOf(4);
++        clients[0].status(LinkStatus.LinkConnected);
++        await flush();
++        expect(clients.map(c => c.commands())).toEqual([[], [CommandType.ConnectLink], [CommandType.ConnectLink], [CommandType.ConnectLink]]);
++    });
++
++    test("each player's data reaches the other three once, in order, saying whose it is", async () => {
++        const {clients} = sessionOf(4);
++        for (let seq = 0; seq < 3; seq++) {
++            clients[2].data(seq);
++            clients[2].data(seq);              // a retry: dropped
++        }
++        clients[0].data(0);
++        await flush();
++        expect(clients[2].packets()).toEqual([{sequence: 0, data: new Array(32).fill(0), from: 0}]);
++        for (const i of [0, 1, 3]) {
++            const fromTwo = clients[i].packets().filter(p => p.from === 2);
++            expect(fromTwo.map(p => p.sequence)).toEqual([0, 1, 2]);
++        }
++        expect(clients[1].packets().filter(p => p.from === 0).length).toBe(1);
++    });
++
++    test("a player leaving before the link has started is reported to the others", () => {
++        const {session, clients} = sessionOf(4);
++        session.leave(clients[3] as any);
++        expect(clients.slice(0, 3).map(c => c.sessionEvents.at(-1))).toEqual(new Array(3).fill("partnerLeft"));
++        expect(session.isFull()).toBe(false);
++    });
++
++    test("a player leaving a started link ends it for everyone", () => {
++        const {session, clients} = sessionOf(4);
++        clients[0].status(LinkStatus.AwaitMode);
++        session.leave(clients[1] as any);
++        for (const i of [0, 2, 3]) expect(clients[i].sessionEvents.at(-1)).toBe("sessionClose");
++        expect(session.isEmpty()).toBe(true);
++    });
++});

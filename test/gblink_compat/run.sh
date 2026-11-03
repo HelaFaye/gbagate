@@ -75,12 +75,27 @@ fi
 make -s -C "$ROOT/test/gblink_sim"
 # Celio-Server with our backport applied: the crowd and latency tests run
 # against it too, so the patch file itself is what is tested.
+# The copy is its own repository: under build/ it is inside gbagate's, and a
+# bare `git apply` there takes the patch's paths relative to gbagate's root
+# and silently applies nothing.
 PATCHED="$BUILD/celio-server-patched"
 rm -rf "$PATCHED"; mkdir -p "$PATCHED"
 (cd "$SRC/Celio-Server" && git archive HEAD) | tar -x -C "$PATCHED"
+git -C "$PATCHED" init -q
+git -C "$PATCHED" add -A
+git -C "$PATCHED" -c user.name=gbagate -c user.email=gbagate@localhost commit -qm upstream
 for p in "$ROOT"/backport/Celio-Link-Server/*.patch; do
-    (cd "$PATCHED" && git apply "$p") || { echo "$p no longer applies to Celio-Server"; exit 1; }
+    git -C "$PATCHED" apply "$p" || { echo "$p no longer applies to Celio-Server"; exit 1; }
 done
+if git -C "$PATCHED" diff --quiet; then
+    echo "backport/Celio-Link-Server changed nothing in Celio-Server"; exit 1
+fi
+# Upstream's own tests (vitest, with the ones the patches add) and a strict
+# type-check of the patched tree, with upstream's locked dependencies.
+(cd "$PATCHED" && npm ci --silent --no-audit --no-fund >/dev/null \
+    && npm i --silent --no-save --no-audit --no-fund typescript@5.6.3 @types/node@22.10.2 >/dev/null \
+    && npx tsc --noEmit -p . && npx vitest run --reporter=dot) \
+    || { echo "Celio-Server with backport/Celio-Link-Server: its own tests or type-check FAILED"; exit 1; }
 node "$HERE/build.mjs" "$BUILD" "$SRC/gblink-netplay-bridge" "$SRC/Celio-Client" "$SRC/Celio-Server" "$PATCHED"
 
 fail=0

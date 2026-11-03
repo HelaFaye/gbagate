@@ -29,7 +29,16 @@ function rng(seed) {
 export function delayLine({ ms = 0, jitter = 0, stallEvery = 0, stallMs = 0, seed = 1 } = {}) {
   const r = rng(seed);
   const t0 = Date.now();
-  let last = 0;
+  let last = 0, timer = null;
+  /* One queue and one timer, drained in order: separate setTimeouts that
+   * come due in the same millisecond can fire in either order (Node keeps a
+   * list per delay), which a TCP connection never does. */
+  const q = [];
+  const drain = () => {
+    timer = null;
+    while (q.length && q[0].at <= Date.now()) q.shift().deliver();
+    if (q.length) timer = setTimeout(drain, Math.max(0, q[0].at - Date.now()));
+  };
   return (deliver) => {
     const now = Date.now();
     let at = now + ms + r() * jitter;
@@ -39,7 +48,9 @@ export function delayLine({ ms = 0, jitter = 0, stallEvery = 0, stallMs = 0, see
     }
     at = Math.max(at, last);                      /* never overtake */
     last = at;
-    if (at <= now) deliver(); else setTimeout(deliver, at - now);
+    if (at <= now && !q.length) { deliver(); return; }
+    q.push({ at, deliver });
+    if (!timer) timer = setTimeout(drain, Math.max(0, q[0].at - now));
   };
 }
 
@@ -252,6 +263,11 @@ export async function runCrowd(serverJs, { pairs = [{}, {}], budgetMs = 40000, s
         .catch((e) => ({ state: 'timeout', error: String(e.message || e) }));
     }
     out.pairs = await Promise.all(runs);
+    // every board its own clientId: a shared one makes the server take the
+    // second for a reconnect of the first, and drop the first's socket
+    const ids = new Set([...log.join('').matchAll(/auth received: (\S+)/g)].map((m) => m[1]));
+    out.clients = devs.flat().length;
+    out.distinctIds = ids.size;
     for (const [i, [a, b]] of devs.slice(0, pairs.length).entries()) {
       out.pairs[i].a = await view(a); out.pairs[i].b = await view(b);
     }

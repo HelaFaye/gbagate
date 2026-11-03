@@ -55,6 +55,9 @@ for (const srv of SERVERS) {
       console.log(`    ${bad ? 'FAIL' : p.ok ? 'ok  ' : 'gone'}  pair ${i + 1}  RTT ${String(rtt).padStart(4)}ms  linked ${fmt(p.linkMs).padStart(5)}  frames ${fmt(p.ok ? p.framesMs : undefined).padStart(5)}  resent ${(p.a?.resent ?? 0) + (p.b?.resent ?? 0)}` +
                   (p.ok ? '' : `   (${p.stage}: ${p.why})`));
     }
+    const uniqueIds = r.distinctIds >= r.clients;
+    if (!uniqueIds) fail++;
+    console.log(`    ${uniqueIds ? 'ok  ' : 'FAIL'}  every board has its own client ID (${r.distinctIds} for ${r.clients} boards)`);
     const intr = r.intruder;
     const refused = intr && intr.state === 'failed' && /full/i.test(intr.error);
     if (!refused) fail++;

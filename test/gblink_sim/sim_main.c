@@ -7,6 +7,7 @@
  * With a flash file, settings persist across runs the way they persist across
  * power cycles on the board.
  */
+#include <sys/random.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,16 +51,25 @@ void gblink_celio_ws_connect(bool on) {
     sim_emit('W', 1, &b, 1);
 }
 
-/* Seeded per process: two simulators sharing rand()'s default sequence
- * would share a Celio clientId, and the server would take the second for a
- * reconnect of the first. The board uses its hardware RNG. */
+/* From the kernel's entropy, as the board uses its hardware RNG. Two
+ * simulators sharing a Celio clientId would have the server take the second
+ * for a reconnect of the first and drop the first's socket. A seed of
+ * getpid() ^ time(NULL) did exactly that in CI: simulators started back to
+ * back have neighbouring PIDs, and pids p and p ^ 1 started in seconds t and
+ * t ^ 1 seed alike. */
 uint32_t gblink_celio_random(void) {
-    static bool seeded;
-    if (!seeded) {
-        srand((unsigned)getpid() ^ (unsigned)time(NULL));
-        seeded = true;
+    uint32_t v;
+    if (getrandom(&v, sizeof v, 0) == (ssize_t)sizeof v) return v;
+    static uint64_t x;                       /* fallback: splitmix64 */
+    if (!x) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        x = ((uint64_t)getpid() << 32) ^ (uint64_t)ts.tv_nsec ^ ((uint64_t)ts.tv_sec << 20);
     }
-    return (uint32_t)rand() << 16 ^ (uint32_t)rand();
+    uint64_t z = (x += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return (uint32_t)(z ^ (z >> 31));
 }
 
 void gblink_peer_observe_status(uint16_t s) {
