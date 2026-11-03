@@ -52,6 +52,10 @@ MB_OBJS := crt0_mb.o tester.o
 .PHONY: all mb agent clean fixheader fixheader-mb
 all: tester.gba
 mb: tester.mb
+# AGENT=path builds the image elsewhere: CI builds it with GCC beside the
+# committed (clang-built) one and runs both on the emulator. Set before the
+# rule below: make expands a rule's prerequisites as it reads it.
+AGENT ?= agent.mb
 agent: $(AGENT)
 
 crt0.o: crt0.s
@@ -110,9 +114,6 @@ agent.elf: crt0_mb.o agent.o multiboot.ld
 	$(CC) $(ARCH) $(LDX) -nostdlib -nostartfiles -T multiboot.ld -Wl,--gc-sections \
 	    -Wl,-Map,agent.map -o $@ crt0_mb.o agent.o
 
-# AGENT=path builds the image elsewhere: CI builds it with GCC beside the
-# committed (clang-built) one and runs both on the emulator.
-AGENT ?= agent.mb
 $(AGENT): agent.elf
 	$(OBJCOPY) -O binary $< $@
 	@python3 $(FIXHDR) --in-place $@ >/dev/null || true

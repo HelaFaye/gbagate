@@ -39,11 +39,12 @@ static const char *TAG = "mb_spi";
 #define MB_HOST SPI3_HOST
 
 /*
- * The BIOS download routine runs at 115200 during the handshake. The protocol
- * allows shifting to 2 MHz once contact is made, but GBATEK notes 2 MHz is
- * intended only for hardware attached directly to the port with no cable in
- * between -- so a cable-connected adapter should stay slow until it has been
- * measured on a scope.
+ * In Normal mode the master supplies the clock and the slave takes whatever
+ * it is given (GBATEK, SIO Normal Mode: "the transfer rate is supplied by the
+ * remote GBA (or other computer, which might supply custom transfer
+ * rates)"). GBATEK recommends 256 kHz over a cable and keeps 2 MHz for
+ * hardware with no cable in between. 115200 is slower than either, a margin
+ * until the link has been measured on a scope.
  */
 #define MB_CLOCK_HZ 115200
 
@@ -126,6 +127,31 @@ void mb_spi_deinit(void) {
         spi_bus_free(MB_HOST);
         s_bus_up = false;
     }
+}
+
+/*
+ * The memory agent's ready handshake (GBATEK, SIO Normal Mode: the master
+ * waits for SI low before it starts a transfer). Our SI is the GBA's SO, the
+ * SPI's MISO pin; the bus routes it as an input, so its level reads back
+ * through the GPIO input register. Only for the agent: the BIOS's multiboot
+ * receiver does not drive this handshake, and mb_send() keeps GBATEK's 36 us.
+ *
+ * VERIFY ON SCOPE: that MISO reads low while the agent is armed and high
+ * between words (rom/agent.c arm()).
+ */
+static bool mb_spi_ready(void *ctx, uint32_t timeout_us) {
+    (void)ctx;
+    for (uint32_t t = 0; t < timeout_us; t++) {
+        if (gpio_get_level(PIN_MISO) == 0) {
+            return true;
+        }
+        esp_rom_delay_us(1);
+    }
+    return gpio_get_level(PIN_MISO) == 0;
+}
+
+mb_ready_fn mb_spi_ready_probe(void) {
+    return mb_spi_ready;
 }
 
 /* Hand this to mb_init(), between mb_spi_acquire() and mb_spi_release(). */

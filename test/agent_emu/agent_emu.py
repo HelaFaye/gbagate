@@ -30,6 +30,8 @@ except ImportError:
 CLOCK_HZ = 16_777_216
 CYCLES_PER_INSN = 6
 GAP_US = 36                       # mb_spi_xfer()'s pause after every word
+REACT_US = 1                      # the board: SI seen low, to the first clock
+SIO_SO_HIGH = 0x08
 SIODATA32, SIOCNT, TM3CNT_L = 0x04000120, 0x04000128, 0x0400010C
 SIO_START = 0x80
 AG_IDLE = 0x454C4449
@@ -59,6 +61,19 @@ class GBA:
         self.since_transfer = None                   # instructions since the last word
         self.worst_restage = 0
         self.missed = 0                              # words clocked too soon
+        self.gap_us = GAP_US
+        # An interrupt, modelled: every stall_every-th word the CPU is away
+        # for stall_us (in a handler, a game's VBlank) while the board's
+        # clock keeps time. This is what the ready handshake is for.
+        self.stall_every = 0
+        self.stall_us = 0
+        self.stall_left = 0
+        self.transfers = 0
+        # SO, the agent's output and the board's SI (GBATEK, SIO Normal
+        # Mode): SIOCNT bit 3 drives it while Start is 0; setting Start keeps
+        # the level it had until the first clock bit; when the word completes
+        # Start clears, so bit 3 drives it again.
+        self.so_high = True
         self.trace = bool(__import__('os').environ.get('AGENT_TRACE'))
         uc.hook_add(UC_HOOK_CODE, self._count)
         uc.hook_add(UC_HOOK_MEM_WRITE, self._io_write, begin=SIOCNT, end=SIOCNT + 1)
@@ -75,6 +90,9 @@ class GBA:
             self.since_transfer += c / CYCLES_PER_INSN
 
     def _io_write(self, uc, access, addr, size, value, user):
+        if not value & SIO_START:
+            self.so_high = bool(value & SIO_SO_HIGH)
+            self.armed = False
         if value & SIO_START:
             # Armed: the next word can be clocked. Stop so the board can.
             self.armed = True
@@ -122,10 +140,35 @@ class GBA:
         uc.mem_write(SIODATA32, struct.pack('<I', word))
         cnt = struct.unpack('<H', uc.mem_read(SIOCNT, 2))[0]
         uc.mem_write(SIOCNT, struct.pack('<H', cnt & ~SIO_START))   # done: start clears
+        self.so_high = bool(cnt & SIO_SO_HIGH)       # ... and bit 3 drives SO again
         self.armed = False
         self.since_transfer = 0
-        self.run_for_us(GAP_US)                      # the gap mb_spi_xfer() leaves
+        self.transfers += 1
+        if self.stall_every and self.transfers % self.stall_every == 0:
+            self.stall_left = self.stall_us
+        self.advance(self.gap_us)                    # the gap mb_spi_xfer() leaves
         return back
+
+    def advance(self, us):
+        # The board's time passing: the agent runs, unless the CPU is away.
+        for _ in range(us):
+            if self.stall_left:
+                self.stall_left -= 1
+            else:
+                self.run_for_us(1)
+
+    def ready(self, timeout_us):
+        # The board polls its SI until it is low, then takes REACT_US to
+        # start clocking. What the agent does meanwhile is not restage time
+        # it is held to: the handshake is what makes it not matter.
+        waited = 0
+        while self.so_high and waited < timeout_us:
+            self.advance(1)
+            waited += 1
+        if self.so_high:
+            return False
+        self.advance(REACT_US)
+        return True
 
     def wait_us(self, us):
         # The board chose to wait (a FILL, a CALL, a resync): what the agent
@@ -197,10 +240,41 @@ def main(lib_path, image_path):
 
     check('no word was clocked before the agent was ready (%d were)' % gba.missed, gba.missed == 0)
     restage_us = gba.worst_restage * CYCLES_PER_INSN * 1_000_000 / CLOCK_HZ
+    words_fixed_gap = lib.t_words()
+
+    # The GBATEK handshake: the board waits for SO low before every word,
+    # the fixed gap shrinks to almost nothing, and every 7th word the CPU is
+    # away for 50 us, as in an interrupt handler. Nothing may be lost: the
+    # agent's pace, not the board's guess at it, sets the rate.
+    READY = ctypes.CFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_uint32)
+    ready = READY(lambda ctx, us: gba.ready(us))
+    lib.t_set_ready(ready)
+    gba.gap_us = 1
+    gba.stall_every, gba.stall_us = 7, 50
+    gba.missed = 0
+    check('handshake: PING', lib.t_ping(ctypes.byref(ver), ctypes.byref(free)) == MBA_OK)
+    words2 = [(0x5A000000 | i * 104729) & 0xFFFFFFFF for i in range(600)]
+    arr2 = (u32 * 600)(*words2)
+    check('handshake, 1 us gap, 50 us stalls: write 600 words', lib.t_write(0x02010000, arr2, 600) == MBA_OK)
+    back2 = (u32 * 600)()
+    check('... read them back, the same', lib.t_read(0x02010000, back2, 600) == MBA_OK and list(back2) == words2)
+    check('... SO was low before every word (%d not ready)' % lib.t_not_ready(), lib.t_not_ready() == 0)
+    check('... no word clocked while the agent was busy (%d were)' % gba.missed, gba.missed == 0)
+
+    # Without the handshake the same line loses words: the test can tell.
+    lib.t_set_ready(None)
+    gba.missed = 0
+    lib.t_write(0x02010000, arr2, 600)
+    check('without it, the same line loses words (%d did)' % gba.missed, gba.missed > 0)
+    gba.gap_us = GAP_US
+    gba.stall_every = 0
+    lib.t_init(xfer, wait)
+    check('... and PING still recovers', lib.t_ping(ctypes.byref(ver), ctypes.byref(free)) == MBA_OK)
+
     check('every word restaged within the %d us gap (worst %.1f us)' % (GAP_US, restage_us),
           restage_us < GAP_US)
-    print('agent-emu      %s (%d transfers; worst restage %.1f us of %d)' % (
-        'all checks passed' if not fails else 'FAILURES', lib.t_words(), restage_us, GAP_US))
+    print('agent-emu      %s (%d transfers; worst restage %.1f us of %d; with the SO handshake, 1 us gaps and 50 us stalls, none lost)' % (
+        'all checks passed' if not fails else 'FAILURES', words_fixed_gap, restage_us, GAP_US))
     return 1 if fails else 0
 
 

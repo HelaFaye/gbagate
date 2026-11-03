@@ -41,13 +41,18 @@
 
 /* Supplied by port/esp32s3/mb_spi_esp32s3.c on hardware. QEMU has no SPI, so
  * Send Program is a hardware-only mode and says so rather than pretending. */
+/* mb_spi_ready_probe(): the memory agent's SI-ready probe; NULL clocks on
+ * the fixed gap alone. */
 #if defined(GBAGATE_QEMU)
 static mb_xfer_fn mb_spi_transfer(void) { return NULL; }
+static mb_ready_fn mb_spi_ready_probe(void) { return NULL; }
 #else
 /* Weak, because the link image has no multiboot and does not build
  * mb_spi_esp32s3.c; NULL is Send Program's "unavailable" path. */
 mb_xfer_fn mb_spi_transfer(void);
 __attribute__((weak)) mb_xfer_fn mb_spi_transfer(void) { return NULL; }
+mb_ready_fn mb_spi_ready_probe(void);
+__attribute__((weak)) mb_ready_fn mb_spi_ready_probe(void) { return NULL; }
 #endif
 /* The port for the length of a send: mb_spi_esp32s3.c borrows the pins from
  * the link engine and sets the SPI up. Weak, for images without it. */
@@ -1144,6 +1149,7 @@ static const char *svc_agent_start(void) {
     /* The agent copies its loop to IWRAM and arms the link within a few
      * milliseconds of starting; give it half a second. */
     mba_init(&s_agent, xfer_fn, agent_wait, NULL);
+    mba_set_ready(&s_agent, mb_spi_ready_probe());   /* GBATEK's SI handshake */
     for (int tries = 0; tries < 20 && !s_agent_up; tries++) {
         s_agent_up = mba_ping(&s_agent) == MBA_OK;
         if (!s_agent_up) vTaskDelay(pdMS_TO_TICKS(25));

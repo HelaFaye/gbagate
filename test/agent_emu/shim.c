@@ -21,3 +21,5 @@ int t_call(uint32_t a, uint32_t us)                      { return mba_call(&g, a
 uint32_t t_status(void)  { return g.last_status; }
 uint32_t t_resyncs(void) { return g.resyncs; }
 uint32_t t_words(void)   { return g.words; }
+void t_set_ready(bool (*ready)(void *, uint32_t)) { mba_set_ready(&g, ready); }
+uint32_t t_not_ready(void) { return g.not_ready; }

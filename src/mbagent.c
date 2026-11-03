@@ -24,8 +24,15 @@ void mba_init(mba_client_t *c, mb_xfer_fn xfer, void (*wait_us)(void *, uint32_t
     c->retries = 3;
 }
 
+void mba_set_ready(mba_client_t *c, mb_ready_fn ready) {
+    c->ready = ready;
+}
+
 static uint32_t x(mba_client_t *c, uint32_t w) {
     c->words++;
+    if (c->ready && !c->ready(c->ctx, MBA_READY_US)) {
+        c->not_ready++;     /* clocked anyway: the checks catch what is lost */
+    }
     return c->xfer(c->ctx, w);
 }
 

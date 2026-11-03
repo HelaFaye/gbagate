@@ -73,20 +73,40 @@ arrives one transfer late. The board clocks a reply out by sending `NOP` (0).
 
 ## Timing
 
-The board's SPI leaves 36 µs between words (`mb_spi_xfer`). The agent must
-read the word, run the core and restage its reply within that gap.
+Between words the agent must read the word, run the core and stage its
+reply. Two things keep the board from clocking too soon:
 
-Its serving loop runs from IWRAM. From EWRAM (a 16-bit bus with two wait
-states, 6 cycles an ARM instruction) the worst word took 30 µs of the 36,
-too close. From IWRAM it takes 11.7 µs. A FILL takes about 0.8 µs a word,
-and the board waits twice that before it asks for the status.
+- **The ready handshake**, as GBATEK gives it for a Normal-mode slave ("SIO
+  Normal Mode", Recommended Communication Procedure for SLAVE unit). The
+  agent holds SO high while it stages the reply, drops it low when ready, and
+  sets Start with SIOCNT bit 3 set, so SO goes high again by itself the moment
+  the word completes. The board waits for its SI (that SO) to go low before
+  each word (`mba_set_ready`, `MBA_READY_US`). So the agent's pace sets the
+  rate, and an interrupt or a game running beside it only makes the board
+  wait.
+- **The fixed gap**, a fallback: the SPI layer leaves 36 µs after each word,
+  GBATEK's figure for the multiboot BIOS (which has no handshake). The agent's
+  serving loop runs from IWRAM and restages in 11.7 µs, so it meets the gap
+  even with the handshake unwired. From EWRAM (a 16-bit bus with two wait
+  states, 6 cycles an ARM instruction) the worst word took 30 µs, too close.
+
+If the ready wait runs out (no agent, a broken wire), the word is clocked
+anyway and counted in `not_ready`; the protocol's own echoes and checksums
+catch what was lost.
+
+A FILL takes about 0.8 µs a word, and the board waits twice that before it
+asks for the status.
+
+The board clocks at 115200 Hz. GBATEK recommends 256 kHz for a cable link,
+and 2 MHz only for hardware with no cable; a slave takes whatever clock the
+master gives.
 
 ## How it is tested
 
 | what | where |
 |---|---|
 | The client against the agent's core over a simulated link with the one-word lag. Every single transfer of a write is damaged going out, damaged coming back, or lost: memory is always right and the result is always true. Also a restart mid-command, protection, alignment, and a hopeless line failing honestly. | `test/test_mbagent.c` |
-| **The compiled `rom/agent.mb` on an emulated ARM7** (unicorn), from the multiboot entry point, with SIO and timer 3 modelled. The board clocks on schedule, as SPI does, and the real client drives it through ctypes. It checks ping, a 600-word write and read, poke, fill, protection, a CALL into IWRAM, recovery from a broken command, and the per-word timing above. CI runs it on the committed image and on one built with GCC. | `test/agent_emu/agent_emu.py` |
+| **The compiled `rom/agent.mb` on an emulated ARM7** (unicorn), from the multiboot entry point, with SIO and timer 3 modelled. The board clocks on schedule, as SPI does, and the real client drives it through ctypes. It checks ping, a 600-word write and read, poke, fill, protection, a CALL into IWRAM, recovery from a broken command, and the per-word timing above; then the SO ready handshake with the board's gap cut to 1 µs (nothing lost), and the same gap without it (words lost, so the test can tell). CI runs it on the committed image and on one built with GCC. | `test/agent_emu/agent_emu.py` |
 | Logo borrowing on the embedded image: the donor's logo, the complement recomputed, the program untouched; blank or short donors refused | `test/test_catalog.c` |
 | The applet: refusing without the services, *sending* shown before the slow part, a failure's reason, ping, the backdrop write landing, the 4 KB test, every line fitting the panel, the link port given back on exit | `test/test_applets.c` |
 
@@ -104,4 +124,6 @@ make agent-image TOOLCHAIN=clang    # or clang + lld
 Lint fails if the embedded array no longer matches the agent's sources.
 
 **Not yet run on a console.** Everything above runs the agent's real bytes,
-but on an emulated CPU with modelled SIO.
+but on an emulated CPU with modelled SIO, SO line included. On hardware,
+check on a scope that the board's SI reads low while the agent is armed and
+high between words.

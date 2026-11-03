@@ -46,6 +46,11 @@ typedef struct mba_client {
      * FILL or a CALL run. NULL on a host that does not need to wait. */
     void     (*wait_us)(void *ctx, uint32_t us);
     void      *ctx;
+    /* Optional: wait up to timeout_us for the agent's SO (the board's SI)
+     * to go low, its "ready" (GBATEK, SIO Normal Mode: the master waits for
+     * SI low before it sets Start). True if it did. NULL: clock on the SPI
+     * layer's fixed gap alone. See mba_set_ready(). */
+    mb_ready_fn ready;
     uint8_t    retries;      /* default 3 */
 
     /* from PING */
@@ -57,9 +62,19 @@ typedef struct mba_client {
     uint32_t   words;        /* transfers made                               */
     uint32_t   resyncs;
     uint32_t   retried;
+    uint32_t   not_ready;    /* words clocked after the ready wait ran out   */
 } mba_client_t;
 
+/* How long one word waits for the agent to be ready. Far above its restage
+ * (12 us) and far below its command timeout, so an agent that is only slow
+ * (an interrupt, a game beside it) is waited for, and one that is gone is
+ * still clocked, and caught by the protocol's own checks. */
+#define MBA_READY_US 2000u
+
 void mba_init(mba_client_t *c, mb_xfer_fn xfer, void (*wait_us)(void *, uint32_t), void *ctx);
+
+/* Use the ready handshake: before each word, wait for the agent's SO. */
+void mba_set_ready(mba_client_t *c, mb_ready_fn ready);
 
 /* Is the agent there? Fills version and free_start. */
 mba_result_t mba_ping(mba_client_t *c);

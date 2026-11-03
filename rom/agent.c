@@ -38,6 +38,7 @@
 /* SIOCNT, Normal mode: external clock (the board's), 32-bit, start. */
 #define SIO_NORMAL32   0x1000u
 #define SIO_START      0x0080u
+#define SIO_SO_HIGH    0x0008u   /* SO while Start is 0: high, "not ready" */
 
 #define RGB15(r, g, b) ((uint16_t)((r) | (g) << 5 | (b) << 10))
 
@@ -57,11 +58,26 @@ extern uint8_t __iwram_start__[], __iwram_end__[], __iwram_lma__[];
 /* No long_call: a BL reaches +-32 MB, and IWRAM is 16 MB above EWRAM. */
 #define IWRAM_CODE __attribute__((section(".iwram"), noinline))
 
-/* Stage the next reply and wait for the board's clock. */
+/*
+ * Stage the next reply and wait for the board's clock, with the ready
+ * handshake GBATEK gives for a Normal-mode slave ("SIO Normal Mode",
+ * Recommended Communication Procedure for SLAVE unit):
+ *
+ *   SO high while the reply is changed: not ready;
+ *   Start=0, SO=0: SO goes low, ready;
+ *   Start=1, SO=1: the low is kept until the first clock bit, and SO goes
+ *   high again by itself when the word completes -- so between words, while
+ *   this code runs, the board sees "not ready" without our doing anything.
+ *
+ * The board waits for its SI (our SO) to go low before it clocks a word, so
+ * it does not depend on this code meeting a fixed gap: an interrupt, or a
+ * game running beside the agent, only makes the board wait.
+ */
 static inline void arm(uint32_t reply) {
-    REG_SIOCNT = SIO_NORMAL32;          /* stop, so the data can change */
+    REG_SIOCNT = SIO_NORMAL32 | SIO_SO_HIGH;    /* stopped, not ready      */
     REG_SIODATA32 = reply;
-    REG_SIOCNT = SIO_NORMAL32 | SIO_START;
+    REG_SIOCNT = SIO_NORMAL32;                  /* ready                   */
+    REG_SIOCNT = SIO_NORMAL32 | SIO_START | SIO_SO_HIGH;
 }
 
 IWRAM_CODE static void serve(uint32_t image_end) {
