@@ -71,7 +71,7 @@ EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
           render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent
 
-.PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image
+.PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image mgba-shim mgba-emerald
 all: $(addprefix run-,$(SUITES)) gblink agent-emu
 	@./qemu/lint.sh
 
@@ -84,6 +84,15 @@ agent-emu: | $(BUILD)
 	@$(CC) -std=c11 -O1 -shared -fPIC -Isrc src/mbagent.c test/agent_emu/shim.c -o $(BUILD)/libmbagent_shim.so
 	@python3 -I test/agent_emu/agent_emu.py $(BUILD)/libmbagent_shim.so $(AGENT_IMAGE); st=$$?; \
 	 if [ $$st -eq 77 ] && [ -z "$$REQUIRE_EMU" ]; then exit 0; fi; exit $$st
+
+# Pokemon Emerald on mGBA (the distribution's libmgba-dev), for the Union
+# Room and memory-agent experiments. The ROM is the user's own, never in the
+# tree: EMERALD_ROM=/path/to/emerald.gba make mgba-emerald
+mgba-shim: | $(BUILD)
+	@$(CC) -std=gnu11 -O1 -shared -fPIC test/mgba/mgba_shim.c -o $(BUILD)/libmgba_shim.so -lmgba
+mgba-emerald: mgba-shim
+	@test/mgba/fetch_symbols.sh
+	@python3 -I test/mgba/union_room.py "$(EMERALD_ROM)" $(BUILD)/emerald
 
 # After a change to rom/agent.c or agent_proto.h: rebuild the image and the
 # C array the firmware embeds (lint checks the two are current).

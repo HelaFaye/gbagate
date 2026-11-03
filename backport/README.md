@@ -194,6 +194,30 @@ jitter on each one's socket, a whole session per row.
 | 2 s | session ended | links, 21.6 s |
 | 3 s | never connects | links, 30.4 s |
 
+**Many players at once** (`test_celio_crowd.mjs`). A Celio session is two
+players, one link cable, so many players means many sessions on one server.
+Each case runs its pairs at the same time on one server, plus a fifth device
+that tries to join a full session:
+
+| case | 8f509bd | with the patch |
+|---|---|---|
+| 4 players, two LAN pairs | both link | both link |
+| 4 players, LAN + 1.2 s | LAN links; the 1.2 s session ends | both link; LAN in 1.1 s, as alone |
+| 8 players: 4, 80, 600 ms and 2 s | the 2 s session ends | all four link |
+
+Every case also checks:
+- the intruder is refused with "Session is full";
+- no frame crosses into another session;
+- on the patched server, the LAN pair is no slower beside a slow one. The
+  round-trip estimate is per client.
+
+`run.sh` builds `celio_server_patched.mjs` from this patch file, so CI tests
+the patch itself.
+
+One run on upstream saw the LAN pair fail to link beside the 1.2 s pair.
+Seven reruns of that case passed, and the cause is not known. The test now
+prints the full log on any required failure, to catch it if it recurs.
+
 To run it against a build of the patched server:
 `CELIO_SERVER=<bundle.mjs> node test/gblink_compat/test_celio_latency.mjs build/gblink_compat`.
 

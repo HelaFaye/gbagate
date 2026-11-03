@@ -188,6 +188,7 @@ out.
 | `wifi.txt` and the form: untidy files, every field's limits, the stored blob under every single-bit flip, the setup page escaped and never echoing a password | `test/test_wificfg.c` |
 | The bounded JSON reader | `test/test_json.c` |
 | Latency on each WiFi leg, above | `test_celio_latency.mjs`, `test_peer.py`, `test_gblink.py` |
+| Many players on one server: 4 and 8 players (2 and 4 sessions) at once on mixed lines, an intruder refused, nothing crossing between sessions; upstream and patched | `test/gblink_compat/test_celio_crowd.mjs` |
 | `/gblink` as a GB-Link host: SetMode over it, replies on it and nowhere else | `wifi_host_runs_a_link_mode` in `test/gblink_sim/test_gblink.py` |
 | Every Link: Online screen state | `test/test_screens.c` |
 

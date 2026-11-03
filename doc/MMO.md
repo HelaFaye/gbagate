@@ -162,6 +162,31 @@ Celio server under delay, jitter and stalls (`test_celio_latency.mjs`) is
 how this netcode will be tested too: a scripted crowd of simulated boards
 against the server, each on its own bad line.
 
+## Tested on mGBA (Emerald)
+
+`make mgba-emerald EMERALD_ROM=...` runs `test/mgba/union_room.py`. It
+uses Ubuntu's libmgba and the user's own ROM, which must be the build pret's
+pokeemerald matches; nothing derived from it is committed. Addresses come
+from pret's symbols. It shows, from power-on:
+
+- **The game's own warp works from injected code.** A Thumb routine runs once
+  as `gMain.callback2`, calls `SetWarpDestination` and `DoWarp`, and hands
+  back to `CB2_Overworld`.
+- **The Union Room needs a Wireless Adapter.** Its on-resume script runs
+  `RunUnionRoom`, which ends in "Communication error" with none.
+- **The RAM map header can be redirected.** The game copies the header from
+  ROM into `gMapHeader`, then runs the room's scripts from that copy a few
+  frames later (`ResumeMap`). Pointing `mapScripts` at an empty table on the
+  frame of the copy gives a quiet room. The same window serves `events` (who
+  stands in the room) and `mapLayout`. The copy happens twice during a warp,
+  so the write must follow it, not lead it.
+
+Next on mGBA:
+- **A Wireless Adapter on mGBA's serial port.** Our firmware's adapter
+  emulation, paced to real time, so the real `RunUnionRoom` runs.
+- **A custom room** loaded through the header window and the IRQ-table hook.
+- **The ROM-patch route,** for a modded copy.
+
 ## Order of work
 
 1. The agent hooked into a running game, on the emulator with a scripted

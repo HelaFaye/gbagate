@@ -132,22 +132,22 @@ const frame = (tag) => [0xbb, 0xbb, tag & 0xff, tag >> 8, 0x80, 0, 0, 0, 0, 0, 0
  * frame from each GBA must reach the other. Times each stage. lat applies
  * to both boards' WiFi; budget is how long the frames may take once linked.
  */
-export async function runPair(serverJs, { lat = {}, budgetMs = 25000, seed = 1, leave = true } = {}) {
-  const log = [];
-  const server = await startServer(serverJs, log);
-  const url = 'ws://127.0.0.1:443/socket.io/?EIO=4&transport=websocket';
-  const devA = new SimDevice();
-  const devB = new SimDevice();
-  await devA.ready; await devB.ready;
-  const netA = network(devA, url, log, lat, seed);
-  const netB = network(devB, url, log, lat, seed + 100);
-  const r = { ok: false, why: '', stage: 'connect', log };
+/*
+ * One session between two devices already on a running server: A creates,
+ * B joins by the code A shows, both link, each sends its own frames (tokA,
+ * tokB) and must receive the other's, then A leaves. Several of these can
+ * run at once on one server: the tokens are per pair, so a frame crossing
+ * into another pair's link is caught (`foreign`).
+ */
+export async function playSession(devA, devB, { budgetMs = 25000, leave = true, tokA = 0xce01, tokB = 0xce02, foreign = [] } = {}) {
+  const r = { ok: false, why: '', stage: 'connect' };
   const t0 = Date.now();
   try {
     devA.send('c', 0);                                       // create
     const a = await until(async () => { const v = await view(devA); if (v.state === 'failed') throw new Error(`A failed: ${v.error}`); return v.state === 'waiting' && v; },
                           30000, 'A in a session');
     if (!/^\d{4}$/.test(a.session)) throw new Error(`session code "${a.session}"`);
+    r.session = a.session;
     r.sessionMs = Date.now() - t0;
     r.stage = 'link';
     devB.send('c', 0, Buffer.from(a.session));               // join by the code A shows
@@ -166,15 +166,17 @@ export async function runPair(serverJs, { lat = {}, budgetMs = 25000, seed = 1, 
         if (v.state === 'failed' || v.state === 'closed') throw new Error(`${n} ${v.state} mid-link: ${v.error}`);
       }
       if (!sent && devA.words.length > 50 && devB.words.length > 50) {
-        for (let i = 0; i < 6; i++) { devA.gba(0x02, ...frame(0xce01)); devB.gba(0x02, ...frame(0xce02)); }
+        for (let i = 0; i < 6; i++) { devA.gba(0x02, ...frame(tokA)); devB.gba(0x02, ...frame(tokB)); }
         sent = true;
         r.sentAt = Date.now();
       }
-      if (devA.words.some(([tx]) => tx === 0xce02) && devB.words.some(([tx]) => tx === 0xce01)) { r.ok = true; break; }
+      if (devA.words.some(([tx]) => tx === tokB) && devB.words.some(([tx]) => tx === tokA)) { r.ok = true; break; }
       await sleep(200);
     }
     r.framesMs = Date.now() - t0;
     if (!r.ok) throw new Error('frames did not cross in time');
+    const leak = [devA, devB].some((d) => d.words.some(([tx]) => foreign.includes(tx)));
+    if (leak) { r.ok = false; throw new Error('a frame from another session arrived here'); }
     if (!devA.role || !devB.role || devA.role === devB.role) { r.ok = false; throw new Error(`roles ${devA.role}/${devB.role}`); }
     if (leave) {
       r.stage = 'leave';
@@ -184,13 +186,80 @@ export async function runPair(serverJs, { lat = {}, budgetMs = 25000, seed = 1, 
   } catch (e) {
     r.ok = false;
     r.why = String(e.message || e);
+  }
+  r.roles = `${devA.role}/${devB.role}`;
+  return r;
+}
+
+const URL_ = 'ws://127.0.0.1:443/socket.io/?EIO=4&transport=websocket';
+
+export async function runPair(serverJs, { lat = {}, budgetMs = 25000, seed = 1, leave = true } = {}) {
+  const log = [];
+  const server = await startServer(serverJs, log);
+  const devA = new SimDevice();
+  const devB = new SimDevice();
+  await devA.ready; await devB.ready;
+  const netA = network(devA, URL_, log, lat, seed);
+  const netB = network(devB, URL_, log, lat, seed + 100);
+  let r;
+  try {
+    r = await playSession(devA, devB, { budgetMs, leave });
   } finally {
+    r = r || { ok: false, why: 'harness', stage: 'connect' };
+    r.log = log;
     try { r.a = await Promise.race([view(devA), sleep(1000)]); r.b = await Promise.race([view(devB), sleep(1000)]); } catch { /* gone */ }
     netA.close(); netB.close();
     devA.kill(); devB.kill();
     server.kill();
-    r.roles = `${devA.role}/${devB.role}`;
     await sleep(500);   // the port, freed
   }
   return r;
+}
+
+/*
+ * Several sessions at once on one server: pairs[i] is that pair's latency.
+ * With `intruder`, one more device tries to join pair 0's session once it is
+ * full, and must be refused while pair 0 plays on.
+ */
+export async function runCrowd(serverJs, { pairs = [{}, {}], budgetMs = 40000, seed = 1, intruder = true } = {}) {
+  const log = [];
+  const server = await startServer(serverJs, log);
+  const devs = [], nets = [];
+  const out = { log, pairs: [], intruder: null };
+  try {
+    for (const [i, lat] of pairs.entries()) {
+      const a = new SimDevice(), b = new SimDevice();
+      await a.ready; await b.ready;
+      nets.push(network(a, URL_, log, lat, seed + 10 * i), network(b, URL_, log, lat, seed + 10 * i + 5));
+      devs.push([a, b]);
+    }
+    const toks = pairs.map((_, i) => [0xc100 + 2 * i, 0xc101 + 2 * i]);
+    const runs = devs.map(([a, b], i) => playSession(a, b, {
+      budgetMs, leave: false, tokA: toks[i][0], tokB: toks[i][1],
+      foreign: toks.filter((_, j) => j !== i).flat(),
+    }));
+    let intr;
+    if (intruder) {
+      intr = new SimDevice();
+      await intr.ready;
+      nets.push(network(intr, URL_, log, {}, seed + 999));
+      devs.push([intr]);
+      // once pair 0 is linked, try to take its place
+      await until(async () => (await view(devs[0][0])).state === 'linked' || null, 60000, 'pair 0 linked').catch(() => {});
+      const code = (await view(devs[0][0])).session;
+      intr.send('c', 0, Buffer.from(code));
+      out.intruder = await until(async () => { const v = await view(intr); return ['failed', 'linked', 'closed'].includes(v.state) && v; }, 30000, 'intruder answered')
+        .catch((e) => ({ state: 'timeout', error: String(e.message || e) }));
+    }
+    out.pairs = await Promise.all(runs);
+    for (const [i, [a, b]] of devs.slice(0, pairs.length).entries()) {
+      out.pairs[i].a = await view(a); out.pairs[i].b = await view(b);
+    }
+  } finally {
+    for (const n of nets) n.close();
+    for (const d of devs.flat()) d.kill();
+    server.kill();
+    await sleep(500);
+  }
+  return out;
 }

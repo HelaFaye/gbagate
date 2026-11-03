@@ -73,7 +73,15 @@ fi
 
 "$ROOT/test/gblink_sim/fetch_librfu.sh" || { echo "librfu: not fetched; the Wireless Adapter parts will skip"; [ -z "${GBLINK_NO_SKIP:-}" ]; }
 make -s -C "$ROOT/test/gblink_sim"
-node "$HERE/build.mjs" "$BUILD" "$SRC/gblink-netplay-bridge" "$SRC/Celio-Client" "$SRC/Celio-Server"
+# Celio-Server with our backport applied: the crowd and latency tests run
+# against it too, so the patch file itself is what is tested.
+PATCHED="$BUILD/celio-server-patched"
+rm -rf "$PATCHED"; mkdir -p "$PATCHED"
+(cd "$SRC/Celio-Server" && git archive HEAD) | tar -x -C "$PATCHED"
+for p in "$ROOT"/backport/Celio-Link-Server/*.patch; do
+    (cd "$PATCHED" && git apply "$p") || { echo "$p no longer applies to Celio-Server"; exit 1; }
+done
+node "$HERE/build.mjs" "$BUILD" "$SRC/gblink-netplay-bridge" "$SRC/Celio-Client" "$SRC/Celio-Server" "$PATCHED"
 
 fail=0
 for t in "$HERE"/test_*.mjs; do
