@@ -104,6 +104,9 @@ def main(rom, out):
           not any(status(m.core(i))['errors'] for i in range(N)))
     for i in range(N):
         m.core(i).shot(os.path.join(out, 'link4-%d.png' % i))
+    with open(os.path.join(out, 'link4-trace.txt'), 'w') as f:   # the cable, word by word
+        for k, w in enumerate(m.trace()):
+            f.write('%5d  %s\n' % (k, ' '.join('%04x' % x for x in w)))
     print('emerald link, four players  %s' % ('all checks passed' if not fails else 'FAILURES'))
     return 1 if fails else 0
 

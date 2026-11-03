@@ -79,6 +79,8 @@ static int      g_quanta_left;
 static uint16_t g_words[MAXC];
 static uint32_t g_transfers;
 static uint16_t g_last[MAXC];
+#define TRACE_MAX 65536
+static uint16_t g_trace[TRACE_MAX][MAXC];   /* every transfer's four words, in order */
 
 static void quiet(struct mLogger *l, int c, enum mLogLevel lv, const char *f, va_list a) {
     (void)l; (void)c; (void)lv; (void)f; (void)a;
@@ -115,6 +117,7 @@ static void bus_step(void) {
         g_quanta_left = (k_cycles[baud][units ? units - 1 : 0] + QUANTUM - 1) / QUANTUM;
     } else if (g_busy && --g_quanta_left <= 0) {
         g_busy = false;
+        if (g_transfers < TRACE_MAX) memcpy(g_trace[g_transfers], g_words, sizeof g_words);
         g_transfers++;
         memcpy(g_last, g_words, sizeof g_last);
         for (int i = 0; i < N; i++) {
@@ -236,5 +239,13 @@ int m_load_state(int i, const void *b) { return U[i].core->loadState(U[i].core, 
 /* transfers completed, and the last four words */
 uint32_t m_bus_transfers(uint16_t last[MAXC]) {
     memcpy(last, g_last, sizeof g_last);
+    return g_transfers;
+}
+
+/* Copy up to max traced transfers (four words each) into out; returns how
+ * many there are in all. */
+uint32_t m_trace(uint16_t *out, uint32_t max) {
+    const uint32_t n = g_transfers < TRACE_MAX ? g_transfers : TRACE_MAX;
+    memcpy(out, g_trace, (n < max ? n : max) * sizeof g_trace[0]);
     return g_transfers;
 }

@@ -200,6 +200,13 @@ class Multi:
             self.lib.m_keys(i, k)
         self.lib.m_run(frames)
 
+    def trace(self, max_n=65536):
+        """Every transfer so far: a list of (w0, w1, w2, w3)."""
+        buf = (ctypes.c_uint16 * (4 * max_n))()
+        self.lib.m_trace.restype = ctypes.c_uint32
+        n = min(self.lib.m_trace(buf, max_n), max_n)
+        return [tuple(buf[4 * i:4 * i + 4]) for i in range(n)]
+
     def transfers(self):
         last = (ctypes.c_uint16 * 4)()
         n = self.lib.m_bus_transfers(last)
