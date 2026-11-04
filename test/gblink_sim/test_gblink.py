@@ -574,6 +574,84 @@ def printer_stream():
         s.close()
 
 
+def gb_band(seed):
+    """640 bytes of tile data, and the colour index of each of its 160 x 16
+    pixels, as gbprinter.c lays a band out."""
+    r = random.Random(seed)
+    data = bytes(r.randrange(256) for _ in range(640))
+    px = [[0] * 160 for _ in range(16)]
+    for t in range(40):
+        tx, ty = (t % 20) * 8, (t // 20) * 8
+        for y in range(8):
+            lo, hi = data[16 * t + 2 * y], data[16 * t + 2 * y + 1]
+            for x in range(8):
+                px[ty + y][tx + x] = ((lo >> (7 - x)) & 1) | (((hi >> (7 - x)) & 1) << 1)
+    return data, px
+
+
+def rle(data):
+    """The printer's compression, as games write it: runs of 2+, literals."""
+    out, i = bytearray(), 0
+    while i < len(data):
+        j = i
+        while j < len(data) and data[j] == data[i] and j - i < 129:
+            j += 1
+        if j - i >= 2:
+            out += bytes([0x80 | (j - i - 2), data[i]])
+            i = j
+        else:
+            k = i
+            while k < len(data) and k - i < 128 and not (k + 1 < len(data) and data[k + 1] == data[k]):
+                k += 1
+            k = max(k, i + 1)
+            out += bytes([k - i - 1]) + data[i:k]
+            i = k
+    return bytes(out)
+
+
+@test
+def board_printer():
+    """The board as a Game Boy Printer (printer_glue.cpp): it takes the
+    adapter as its local host, a Game Boy prints a 160 x 144 picture over the
+    bit-banged pins, one band compressed, in two parts (no margin after the
+    first), and the board's decoder ends with the picture, shade for shade
+    through each part's palette."""
+    s = Sim()
+    try:
+        s.printer(0)
+        # the mode's status goes to its host, the board, not to USB
+        eventually(lambda: s.printer(2)['status'] == ST['GBPrinterModeActive'], 5, 'printer mode')
+        s.wait_event(EV_VCC, lambda b: b[:1] == b'\x01')
+        bands = [gb_band(i) for i in range(9)]
+        part1, part2 = bands[:4], bands[4:]
+        script = printer_packet(0x01) + printer_packet(0x0F)
+        for i, (data, _) in enumerate(part1):
+            script += printer_packet(0x04, rle(data), 1) if i == 2 else printer_packet(0x04, data)
+        script += printer_packet(0x04) + printer_packet(0x02, b'\x01\x10\xe4\x40')
+        s.gba(0x05, *script)
+        eventually(lambda: s.printer(2)['rows'] == 64, 30, 'the first part arrives')
+        v = s.printer(2)
+        check(v['pictures'] == 0, 'no margin after the first part: not finished')
+        script = printer_packet(0x01)
+        for data, _ in part2:
+            script += printer_packet(0x04, data)
+        script += printer_packet(0x04) + printer_packet(0x02, b'\x01\x03\x1b\x40')
+        s.gba(0x05, *script)
+        eventually(lambda: s.printer(2)['pictures'] == 1, 30, 'the picture finishes')
+        v = s.printer(2)
+        want = sum(sum(c for c in row) for _, px in part1 for row in px)
+        want += sum(sum((0x1B >> (2 * c)) & 3 for c in row) for _, px in part2 for row in px)
+        check(v['rows'] == 144, '160 x 144: %r' % v)
+        check(v['shades'] == want, 'every shade: %d, want %d' % (v['shades'], want))
+        check(v['lost'] == 0 and v['aborts'] == 0, 'nothing lost: %r' % v)
+        check(v['packets'] == 8 + 8, 'every packet: %r' % v)
+        s.printer(1)
+        eventually(lambda: s.state()['status'] == ST['GBSessionFinished'], 30, lambda: 'left: %r' % s.state())
+        s.wait_event(EV_VCC, lambda b: b[:1] == b'\x00')
+    finally:
+        s.close()
+
+
 # ---- mode 4: Advance Wars ------------------------------------------------------
 
 @test

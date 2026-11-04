@@ -24,10 +24,13 @@ enum {
     SIM_EV_STATE       = 12, /* gblink_state(), on an 'I' record: [configured,
                               * mode i8, owner, status lo hi, u32 statuses,
                               * u32 frames x4]                              */
-    SIM_EV_CELIO       = 13  /* gblink_celio_view(), on a 'K' record: [state,
+    SIM_EV_CELIO       = 13, /* gblink_celio_view(), on a 'K' record: [state,
                               * status lo hi, u32 up down lost reconnects
                               * resent given_up max_rtt_ms,
                               * session NUL, error NUL]                     */
+    SIM_EV_PRINTER     = 14  /* the board's printer, on a 'p' ep 2 record:
+                              * [u32 packets rows pictures aborts lost,
+                              * u16 status, u32 sum of the shades]          */
 };
 
 void sim_emit(char kind, uint8_t ep, const uint8_t *data, size_t len);

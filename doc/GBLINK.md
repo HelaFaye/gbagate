@@ -42,7 +42,7 @@ also checks the descriptors.
 | 0x00 | Trade emulator (Pokemon Gen 3) | |
 | 0x01 | GBA link relay (Celio, netplay bridge) | |
 | 0x02 | GB/GBC SPI link | needs a 5 V level shifter, see Wiring |
-| 0x03 | GB printer | likewise |
+| 0x03 | GB printer | likewise; the board's own GB Printer mode runs it too (README, Mode shell) |
 | 0x04 | Advance Wars 1/2 (variant 1/2) | |
 | 0x05 | e-Reader (variants 1-13, including Emerald US/JP/FR/DE) | |
 | 0x06 | Battle Chip Gate (upstream's, as megaman.gblink.io drives it) | |

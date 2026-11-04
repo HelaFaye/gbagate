@@ -169,6 +169,7 @@ app_route_t app_mode_route(app_mode_t mode) {
     case APP_MODE_LINK_ONLINE:
     case APP_MODE_USB_STORAGE:
     case APP_MODE_INFRARED:
+    case APP_MODE_PRINTER:
     case APP_MODE_SELFTEST:
     case APP_MODE_DIAGNOSTICS:   return APP_ROUTE_PAGE;
     default:                     return APP_ROUTE_NONE;

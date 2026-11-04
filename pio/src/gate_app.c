@@ -28,6 +28,7 @@
 #include "ui_list.h"
 #include "ui_render.h"
 #include "ui_screens.h"
+#include "printer_mode.h"
 #include "ui_event.h"
 #include "controls.h"
 #include "ir_cdz.h"
@@ -764,6 +765,94 @@ static void render_settings(const ui_event_t *e, bool have_event)
     st7735_flush();
 }
 
+/* ---- GB Printer ------------------------------------------------------------- */
+
+/*
+ * The board as a Game Boy Printer: GB-Link's printer mode as the local host
+ * (port/gblink/printer_glue.cpp); src/printer_mode.c decodes what it sends
+ * and stores each print as a PNG under PRINTS/ on the SD card, or on the
+ * board's own drive when there is no card (port/esp32s3/print_store_esp32s3.c).
+ * The page shows the print, the encoder scrolls a long one.
+ */
+static printer_mode_t *s_printer;   /* ~60 KB, only while the mode runs */
+static int             s_print_scroll;
+
+/* Weak: images (QEMU) with no drive to store prints on. */
+bool print_store_save(const uint8_t *png, size_t n, char *name, size_t cap);
+__attribute__((weak)) bool print_store_save(const uint8_t *png, size_t n, char *name, size_t cap) {
+    (void)png; (void)n; (void)name; (void)cap;
+    return false;
+}
+
+static size_t printer_read(void *ctx, uint8_t *out, size_t cap) {
+    (void)ctx;
+#if defined(GBAGATE_QEMU)
+    (void)out; (void)cap;
+    return 0;                  /* no adapter in the emulated board */
+#else
+    return gblink_printer_read(out, cap);
+#endif
+}
+
+static bool printer_save(void *ctx, const uint8_t *png, size_t n, char *name, size_t cap) {
+    (void)ctx;
+    return print_store_save(png, n, name, cap);
+}
+
+static void render_printer(const ui_event_t *e, bool have_event)
+{
+    const char *title = shell_chosen_name(&s_shell);
+    ui_keys_t   keys  = page_keys();
+    const gbp_t *pic  = s_printer ? &s_printer->gbp : NULL;
+    const char *note  = s_printer && s_printer->note[0] ? s_printer->note : NULL;
+    if (have_event && e && e->type == UI_EVENT_ENCODER && pic) {
+        const int max = ui_print_scroll_max(pic, note);
+        s_print_scroll += e->a > 0 ? 8 : -8;
+        s_print_scroll = s_print_scroll < 0 ? 0 : s_print_scroll > max ? max : s_print_scroll;
+    }
+    uint16_t *fb = st7735_framebuffer();
+    if (!fb) {
+        return;
+    }
+    ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
+    ui_render_print(&canvas, title, &keys, pic, s_print_scroll, note);
+    st7735_mark_all_dirty();
+    st7735_flush();
+}
+
+static bool mode_enter_printer(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    const printer_io_t io = { printer_read, printer_save, NULL };
+    /* PSRAM when the board has it: nothing here is timing-critical */
+    if (!s_printer) s_printer = heap_caps_malloc(sizeof *s_printer, MALLOC_CAP_SPIRAM);
+    if (!s_printer) s_printer = heap_caps_malloc(sizeof *s_printer, MALLOC_CAP_8BIT);
+    if (!s_printer) {
+        return false;          /* the menu says the mode did not start */
+    }
+    printer_mode_init(s_printer, &io, (uint32_t)(esp_timer_get_time() / 1000));
+    s_print_scroll = 0;
+#if !defined(GBAGATE_QEMU)
+    gblink_printer_start();
+#endif
+    return true;
+}
+
+static void mode_exit_printer(void *ctx) {
+    (void)ctx;
+#if !defined(GBAGATE_QEMU)
+    gblink_printer_stop();
+#endif
+    heap_caps_free(s_printer);
+    s_printer = NULL;
+}
+
+static void mode_tick_printer(void *ctx) {
+    (void)ctx;
+    if (s_printer && printer_mode_tick(s_printer, (uint32_t)(esp_timer_get_time() / 1000))) {
+        s_print_scroll = 0;    /* a new print: from its top */
+    }
+}
+
 static void render_simple_mode(const ui_event_t *e, bool have_event)
 {
     const char *title = shell_chosen_name(&s_shell);
@@ -1334,6 +1423,8 @@ void ui_service(const ui_event_t *e, bool have_event) {
         }
         if (route == APP_ROUTE_SETTINGS) {
             render_settings(e, have_event);
+        } else if (s_shell.chosen_mode == APP_MODE_PRINTER) {
+            render_printer(e, have_event);
         } else {
             render_simple_mode(e, have_event);
         }
@@ -1715,6 +1806,7 @@ static const app_mode_handler_t k_handlers[] = {
     { .mode = APP_MODE_MULTIBOOT, .enter = mode_enter_multiboot, .exit = mode_exit_multiboot, .tick = NULL },
     { .mode = APP_MODE_USB_STORAGE, .enter = mode_enter_usb_storage, .exit = mode_exit_usb_storage, .tick = NULL },
     { .mode = APP_MODE_INFRARED, .enter = mode_enter_infrared, .exit = NULL, .tick = NULL },
+    { .mode = APP_MODE_PRINTER, .enter = mode_enter_printer, .exit = mode_exit_printer, .tick = mode_tick_printer },
     { .mode = APP_MODE_SELFTEST, .enter = mode_enter_selftest, .exit = mode_exit_selftest, .tick = NULL },
     { .mode = APP_MODE_SETTINGS, .enter = mode_enter_settings, .exit = mode_exit_settings, .tick = NULL },
     { .mode = APP_MODE_DIAGNOSTICS, .enter = mode_enter_diagnostics, .exit = NULL, .tick = NULL },

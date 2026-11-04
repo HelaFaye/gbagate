@@ -10,8 +10,16 @@ void gbp_init(gbp_t *p) {
     p->palette = 0xE4;                         /* colour c -> shade c */
 }
 
+/* Drop the picture: the next band is its first row. */
+static void new_picture(gbp_t *p) {
+    p->bands = 0;
+    p->committed = 0;
+    p->finished = false;
+}
+
 /* One band of 20 x 2 tiles, 16 bytes a tile (two bitplanes a row). */
 static void put_band(gbp_t *p, const uint8_t *band) {
+    if (p->finished) new_picture(p);
     if (p->bands >= GBP_MAX_BANDS) {
         p->dropped_bands++;
         return;
@@ -52,13 +60,38 @@ static bool band_bytes(const gbp_t *p, uint8_t out[GBP_BAND_BYTES]) {
     return o == GBP_BAND_BYTES;
 }
 
+/* The paper feeds out: what was printed is the picture. */
+static bool finish(gbp_t *p) {
+    if (p->finished || p->committed == 0) return false;
+    p->bands = (uint8_t)(p->committed / GBP_BAND_ROWS);   /* unprinted bands go */
+    p->finished = true;
+    p->pictures++;
+    return true;
+}
+
+bool gbp_finish(gbp_t *p) { return finish(p); }
+
+static void print(gbp_t *p) {
+    p->sheets = p->data[0];
+    p->margins = p->data[1];
+    p->palette = p->data[2] ? p->data[2] : 0xE4;          /* 00 means the default */
+    p->exposure = p->data[3];
+    p->printed = true;
+    p->prints++;
+    if (p->finished) return;                  /* nothing new to print */
+    for (int r = p->committed; r < gbp_rows(p); r++)
+        for (int x = 0; x < GBP_WIDTH; x++)
+            p->pixels[r][x] = (uint8_t)((p->palette >> (2 * p->pixels[r][x])) & 3);
+    p->committed = (uint16_t)gbp_rows(p);
+    if (p->margins & 0x0F) finish(p);          /* a margin after: the paper feeds */
+}
+
 static void packet(gbp_t *p) {
     p->packets++;
     switch (p->cmd) {
-    case 0x01:                                 /* INIT: a new picture */
-        p->bands = 0;
-        p->printed = false;
-        p->palette = 0xE4;
+    case 0x01:                                 /* INIT */
+        if (p->finished) new_picture(p);
+        else p->bands = (uint8_t)(p->committed / GBP_BAND_ROWS);   /* the unprinted go */
         break;
     case 0x04:                                 /* DATA: a band, or the end of them */
         if (p->len) {
@@ -68,14 +101,7 @@ static void packet(gbp_t *p) {
         }
         break;
     case 0x02:                                 /* PRINT */
-        if (p->len >= 4) {
-            p->sheets = p->data[0];
-            p->margins = p->data[1];
-            p->palette = p->data[2] ? p->data[2] : 0xE4;   /* 00 means the default */
-            p->exposure = p->data[3];
-            p->printed = true;
-            p->prints++;
-        }
+        if (p->len >= 4) print(p);
         break;
     default:                                   /* STATUS and the rest */
         break;
@@ -109,6 +135,47 @@ void gbp_feed(gbp_t *p, const uint8_t *b, size_t n) {
             if (p->want == p->sum) packet(p);
             else p->bad_checksums++;
             p->state = GBP_SEEK_88;            /* the printer's 81 + status follow */
+            break;
+        }
+    }
+}
+
+/* gbp_feed_stream's states */
+enum { S_PACKET, S_COMP, S_LEN0, S_LEN1, S_DATA, S_ABORT };
+static const char k_abort[] = "ABORTPRINT";
+
+void gbp_feed_stream(gbp_t *p, const uint8_t *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        const uint8_t c = b[i];
+        switch (p->sstate) {
+        case S_PACKET:                         /* between packets: a command or a marker */
+            if (c == 0xFF || c == 0xFE) break; /* the mode started; a PRINT was answered */
+            if (c == (uint8_t)k_abort[0]) { p->sstate = S_ABORT; p->abort_at = 1; break; }
+            p->cmd = c;
+            p->sstate = S_COMP;
+            break;
+        case S_COMP: p->comp = c; p->sstate = S_LEN0; break;
+        case S_LEN0: p->len = c;  p->sstate = S_LEN1; break;
+        case S_LEN1:
+            p->len = (uint16_t)(p->len | (c << 8));
+            p->got = 0;
+            if (p->len > GBP_MAX_DATA) {       /* not a packet: lost our place */
+                p->bad_checksums++;
+                p->sstate = S_PACKET;
+            } else if (p->len) {
+                p->sstate = S_DATA;
+            } else {
+                packet(p);
+                p->sstate = S_PACKET;
+            }
+            break;
+        case S_DATA:
+            p->data[p->got++] = c;
+            if (p->got == p->len) { packet(p); p->sstate = S_PACKET; }
+            break;
+        case S_ABORT:
+            if (c != (uint8_t)k_abort[p->abort_at]) { p->sstate = S_PACKET; break; }
+            if (++p->abort_at == sizeof k_abort - 1) { p->aborts++; p->sstate = S_PACKET; }
             break;
         }
     }

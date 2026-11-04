@@ -27,6 +27,7 @@
 #include "ui_font.h"
 #include "ui_romview.h"
 #include "ui_screens.h"
+#include "gbprinter.h"
 #include "ui_settings.h"
 #include "ui_shell.h"
 
@@ -591,9 +592,33 @@ static void test_pages(void) {
     for (int i = 0; i < p.count; i++)
         check("online: the setting is gone once linked", strncmp(p.line[i], "Local", 5) != 0, 1);
     check("online: default is what was found", ui_online_local_default(3), 3);
+
     check("online: none found: one", ui_online_local_default(0), 1);
     check("online: not probed: one", ui_online_local_default(-1), 1);
     check("online: never past three", ui_online_local_default(5), 3);
+
+    /* Printer */
+    static gbp_t pr;
+    gbp_init(&pr);
+    ui_render_print(&g_canvas, "GB Printer", foot, &pr, 0, NULL);
+    check_frame("printer-waiting", true);
+    shot("printer-waiting");
+    pr.bands = 2;                                         /* 160 x 32: a one-pixel line at x 80 */
+    for (int y = 0; y < 32; y++) pr.pixels[y][80] = 3;
+    ui_render_print(&g_canvas, "GB Printer", foot, &pr, 0, NULL);
+    shot("printer-print");
+    check("printer: the one-pixel line survives the 4:5 scale", px(64, UI_HEADER_H + 5) != 0xFFFF, 1);
+    check("printer: paper stays white", px(20, UI_HEADER_H + 5), 0xFFFF);
+    check("printer: a short print does not scroll", ui_print_scroll_max(&pr, NULL), 0);
+    ui_render_print(&g_canvas, "GB Printer", foot, &pr, 0, "saved PRNT0001.PNG");
+    check_frame("printer-saved", true);
+    shot("printer-saved");
+    check("printer: the note's line is above the picture", px(20, UI_HEADER_H + 2), COL_BG);
+    check("printer: ... which starts under it", px(20, UI_HEADER_H + 12), 0xFFFF);
+    pr.bands = GBP_MAX_BANDS;
+    check("printer: a long print scrolls to its end", ui_print_scroll_max(&pr, NULL),
+          GBP_MAX_BANDS * GBP_BAND_ROWS * 4 / 5 - (UI_SCREEN_H - UI_HEADER_H - UI_FOOTER_H));
+    check("printer: ... ten rows further with a note", ui_print_scroll_max(&pr, "x") - ui_print_scroll_max(&pr, NULL), 10);
     on.celio = 6;
     ui_page_online(&p, "Link: Online", foot, &on);
     lead("online-closed", &p, "session over", COL_TEXT);

@@ -51,7 +51,8 @@ HW_FILES="pio/src/gate_app.c
           port/esp32s3/input_esp32s3.c
           port/esp32s3/transport_esp32s3.c
           port/esp32s3/i2c_esp32s3.c
-          port/esp32s3/mb_spi_esp32s3.c"
+          port/esp32s3/mb_spi_esp32s3.c
+          port/esp32s3/print_store_esp32s3.c"
 
 fail=0
 

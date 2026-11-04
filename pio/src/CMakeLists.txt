@@ -123,6 +123,8 @@ else()
         ../../port/gblink/gbagate_ext.cpp
         ../../port/gblink/peer_glue.cpp
         ../../port/gblink/celio_glue.cpp
+        ../../port/gblink/printer_glue.cpp
+        ../../port/esp32s3/print_store_esp32s3.c
         ../../port/esp32s3/net_esp32s3.c
         ../../port/esp32s3/peer_espnow_esp32s3.c
         ../../port/esp32s3/usb_gblink_esp32s3.c

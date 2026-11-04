@@ -10,6 +10,7 @@
 #include "hw_caps.h"
 #include "ir_cdz.h"
 #include "ui_font.h"
+#include "gbprinter.h"
 #include "ui_screens.h"
 
 #define TEXT_X     2
@@ -708,4 +709,58 @@ void ui_render_no_interface(const ui_canvas_t *c) {
     ui_text(c, 4, UI_LIST_Y + 32, "gate_shell_start()", COL_TEXT_DIM);
     ui_text(c, 4, UI_LIST_Y + 52, "display+uart are OK", COL_TEXT_DIM);
     ui_text(c, 4, UI_LIST_Y + 64, "if you can read this", COL_TEXT_DIM);
+}
+
+/* ---- Printer ------------------------------------------------------------------ */
+
+/* The view under the header, less the note's line when there is one. */
+#define PRINT_NOTE_H 10
+static int print_top(const char *note)  { return UI_HEADER_H + (note ? PRINT_NOTE_H : 0); }
+static int print_view(const char *note) { return UI_SCREEN_H - UI_FOOTER_H - print_top(note); }
+/* shades 0 (white) .. 3 (black), as the printer's paper and ink */
+static const uint16_t k_shade[4] = { 0xFFFF, 0xAD55, 0x52AA, 0x0000 };
+
+static int print_h(const gbp_t *p) { return gbp_rows(p) * 4 / 5; }
+
+int ui_print_scroll_max(const gbp_t *p, const char *note) {
+    const int extra = print_h(p) - print_view(note);
+    return extra > 0 ? extra : 0;
+}
+
+void ui_render_print(const ui_canvas_t *c, const char *title, const ui_keys_t *keys,
+                     const gbp_t *p, int scroll, const char *note) {
+    ui_page_t page;
+    begin(&page, title, keys, NULL);
+    if (!p || gbp_rows(p) == 0) {
+        ui_page_add(&page, COL_WARN, "waiting for a print");
+        ui_page_add(&page, COL_TEXT_DIM, "print from the game");
+        if (note) ui_page_add(&page, COL_TEXT_DIM, "%s", note);
+        ui_render_page(c, &page);
+        return;
+    }
+    ui_render_page(c, &page);                 /* the title and the footer */
+    const int top = print_top(note), view = print_view(note);
+    if (note) {
+        ui_fill(c, 0, UI_HEADER_H, UI_SCREEN_W, PRINT_NOTE_H, COL_BG);
+        ui_text(c, TEXT_X, UI_HEADER_H + (PRINT_NOTE_H - UI_FONT_H) / 2, note, COL_TEXT_DIM);
+    }
+    const int max = ui_print_scroll_max(p, note);
+    if (scroll > max) scroll = max;
+    if (scroll < 0) scroll = 0;
+    const int rows = gbp_rows(p);
+    for (int y = 0; y < view; y++) {
+        const int dy = y + scroll;
+        const int sy0 = dy * 5 / 4, sy1 = (dy + 1) * 5 / 4;
+        for (int x = 0; x < UI_SCREEN_W; x++) {
+            uint16_t colour = COL_BG;
+            if (sy0 < rows) {
+                const int sx0 = x * 5 / 4, sx1 = (x + 1) * 5 / 4;
+                int sum = 0, n = 0;
+                for (int sy = sy0; sy < sy1 && sy < rows; sy++)
+                    for (int sx = sx0; sx < sx1 && sx < GBP_WIDTH; sx++) { sum += gbp_shade(p, sy, sx); n++; }
+                colour = k_shade[n ? (sum + n / 2) / n : 0];
+            }
+            ui_fill(c, x, top + y, 1, 1, colour);
+        }
+    }
 }

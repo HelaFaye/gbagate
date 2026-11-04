@@ -135,6 +135,23 @@ typedef struct {
 /* For the UI, from any task. */
 void gblink_celio_view(gblink_celio_view_t *out);
 
+/* ---- the board's Game Boy Printer (port/gblink/printer_glue.cpp) ------------ */
+
+/* Put the adapter in printer mode (0x03, at 5 V) as the local host, and back
+ * out of it. From the UI's thread. */
+void gblink_printer_start(void);
+void gblink_printer_stop(void);
+/* What the mode has sent since (src/gbprinter.h, gbp_feed_stream): up to cap
+ * bytes, 0 when there is nothing new. One reader. */
+size_t gblink_printer_read(uint8_t *out, size_t cap);
+
+typedef struct {
+    bool     running;
+    uint16_t status;             /* the adapter's last status word (0xFF0B: printer ready) */
+    uint32_t lost;               /* bytes the UI did not drain in time       */
+} gblink_printer_view_t;
+void gblink_printer_view(gblink_printer_view_t *out);
+
 /* ---- what the adapter is doing (PATCHES.md P14) ------------------------------- */
 
 /* The hosts that can drive it, as Transport::Id numbers them. */

@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "gblink_port.h"
+#include "gbprinter.h"
 #include "sim.h"
 #include "sim_rfu.h"
 #include "zshim.h"
@@ -139,6 +140,30 @@ int main(int argc, char **argv) {
                 gblink_celio_start(sid);
             }
             break;
+        case 'p': {
+            /* the board's printer (printer_glue.cpp): ep 0 start, 1 stop,
+             * 2 drain what it sent into the decoder the UI uses and report */
+            static gbp_t pr;
+            if (hdr[1] == 0) { gbp_init(&pr); gblink_printer_start(); }
+            else if (hdr[1] == 1) gblink_printer_stop();
+            else {
+                uint8_t chunk[256];
+                size_t got;
+                while ((got = gblink_printer_read(chunk, sizeof chunk)) > 0) gbp_feed_stream(&pr, chunk, got);
+                gblink_printer_view_t v;
+                gblink_printer_view(&v);
+                uint32_t sum = 0;
+                for (int r = 0; r < gbp_rows(&pr); r++)
+                    for (int x = 0; x < GBP_WIDTH; x++) sum += gbp_shade(&pr, r, x);
+                const uint32_t f[5] = { pr.packets, (uint32_t)gbp_rows(&pr), pr.pictures, pr.aborts, v.lost };
+                uint8_t b[sizeof f + 2 + 4];
+                memcpy(b, f, sizeof f);
+                b[20] = (uint8_t)v.status; b[21] = (uint8_t)(v.status >> 8);
+                memcpy(b + 22, &sum, 4);
+                sim_event(SIM_EV_PRINTER, b, sizeof b);
+            }
+            break;
+        }
         case 'K': {
             gblink_celio_view_t v;
             gblink_celio_view(&v);

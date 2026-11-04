@@ -161,6 +161,21 @@ typedef struct {
  * font is proportional). */
 void ui_online_under(char *out, size_t n, const char *line, const char *word);
 
+/*
+ * Printer: the picture a Game Boy game sent to the emulated Game Boy
+ * Printer (src/gbprinter.h), drawn on the panel. The print is 160 pixels
+ * wide and the panel 128, so it is scaled 4:5 both ways, each panel pixel
+ * the average shade of the print pixels it covers (a one-pixel line stays
+ * visible); `scroll` is the first panel row shown, for a print taller than
+ * the screen. `note`, when not NULL, is a line above the picture: where the
+ * print was saved (src/printer_mode.h). No picture yet: the page says so.
+ */
+struct gbp;
+void ui_render_print(const ui_canvas_t *c, const char *title, const ui_keys_t *keys,
+                     const struct gbp *p, int scroll, const char *note);
+/* How far a print can scroll: its height on the panel past the view. */
+int ui_print_scroll_max(const struct gbp *p, const char *note);
+
 /* What the local-players setting starts at: the GBAs found, or 1. */
 int ui_online_local_default(int found);
 /* The four-player relay is offered only with three GBAs found. */

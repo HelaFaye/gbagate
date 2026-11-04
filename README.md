@@ -554,9 +554,9 @@ overlap nor overrun the scrollbar.
 
 ### Mode shell
 
-`Link · Send Program · Infrared · USB Storage · Self Test · (applets:
-Battle Chip · Test Pattern · Chip Dice) · Settings · Diagnostics`, filtered by
-`hw_caps`.
+`Link · Send Program · Infrared · GB Printer · USB Storage · Self Test ·
+(applets: Battle Chip · Test Pattern · Chip Dice) · Settings · Diagnostics`,
+filtered by `hw_caps`.
 
 **Battle Chip** is an applet (`applets/battle_chip.c`) and includes what
 used to be Read Chip. Choose a chip and send it, or put a real one in the
@@ -572,6 +572,18 @@ choice. Online plays a partner anywhere through a Celio server with no PC:
 the board joins your WiFi (set it up from its hotspot page or a `wifi.txt`
 on the USB drive) and is its own Celio client. On the same WiFi it is also a
 GB-Link adapter at `ws://<board>/gblink`. See `doc/ONLINE.md`.
+
+**GB Printer** makes the board a Game Boy Printer that keeps every print.
+A Game Boy game (or a GBA running one) prints to it over the link cable;
+the panel shows the picture (scaled to fit, the encoder scrolls a long one)
+and the board saves it as `PRINTS/PRNT0001.PNG`, `PRNT0002.PNG`, ... on the
+SD card, or on its own USB drive when there is no card. The PNGs are 2-bit
+greyscale, the printer's four shades exactly. A long picture a game prints
+in parts is joined into one file, as the paper would be. It runs GB-Link's
+printer mode (0x03) as the board's own host (`port/gblink/printer_glue.cpp`);
+`src/gbprinter.c` decodes, `src/gbp_png.c` writes the file and
+`src/printer_mode.c` ties them together. Game Boy links are 5 V: the board
+needs a level shifter (`doc/GBLINK.md`, Wiring).
 
 **Applets** are modes added without touching the core: one C file in
 `applets/` and a line in `applets/applets.def`. Battle Chip, Test

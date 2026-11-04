@@ -37,6 +37,9 @@ static bool dice_enter(const applet_env_t *env) {
 
 static void roll(const applet_env_t *env) {
     uint16_t n = chipdb_count(&s_db);
+    if (n == 0) {
+        return;   /* no database: input can still arrive before a refusal is shown */
+    }
     /* A bounded search, so a database with few showable chips cannot hang
      * the UI task. */
     for (int tries = 0; tries < 64; tries++) {
@@ -52,6 +55,9 @@ static void roll(const applet_env_t *env) {
 
 static void walk(int32_t by) {
     uint16_t n = chipdb_count(&s_db);
+    if (n == 0) {
+        return;
+    }
     for (uint16_t i = 0; i < n; i++) {
         int32_t next = ((int32_t)s_slot + (by > 0 ? 1 : -1)) % n;
         s_slot = (uint16_t)(next < 0 ? next + n : next);

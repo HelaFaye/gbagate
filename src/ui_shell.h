@@ -35,6 +35,7 @@ typedef enum {
     APP_MODE_USB_STORAGE,   /* hand the drive to a PC, and take it back  */
     APP_MODE_INFRARED,      /* Cyber Drive Zoids IR, via the link port   */
     APP_MODE_SELFTEST,      /* run the tester ROM's checks and show them */
+    APP_MODE_PRINTER,       /* a Game Boy game prints; the panel shows it */
     APP_MODE_SETTINGS,
     APP_MODE_DIAGNOSTICS,
     APP_MODE_COUNT

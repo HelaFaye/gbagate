@@ -50,6 +50,13 @@ static const menu_entry_t k_modes[APP_MODE_COUNT] = {
      */
     { APP_MODE_SELFTEST, "Self Test",
       HW_CAP_DISPLAY | HW_CAP_LINK_PORT, "connect the link cable" },
+    /*
+     * GB Printer: the board answers a Game Boy game (or a GBA running one)
+     * as a Game Boy Printer and shows the picture (src/gbprinter.c). Game
+     * Boy links are 5 V: the board needs its level shifter (doc/GBLINK.md).
+     */
+    { APP_MODE_PRINTER, "GB Printer",
+      HW_CAP_DISPLAY | HW_CAP_LINK_PORT, "connect the link cable" },
     { APP_MODE_SETTINGS, "Settings", HW_CAP_DISPLAY, NULL },
     { APP_MODE_DIAGNOSTICS, "Diagnostics", 0, NULL },
 };
@@ -82,7 +89,8 @@ static const menu_entry_t k_link = {
 };
 
 static const int k_head[] = {
-    SHELL_ITEM_LINK, APP_MODE_MULTIBOOT, APP_MODE_INFRARED, APP_MODE_USB_STORAGE, APP_MODE_SELFTEST,
+    SHELL_ITEM_LINK, APP_MODE_MULTIBOOT, APP_MODE_INFRARED, APP_MODE_PRINTER, APP_MODE_USB_STORAGE,
+    APP_MODE_SELFTEST,
 };
 static const int k_tail[] = { APP_MODE_SETTINGS, APP_MODE_DIAGNOSTICS };
 

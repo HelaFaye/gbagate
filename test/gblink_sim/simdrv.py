@@ -19,6 +19,7 @@ SIM = os.environ.get('GBLINK_SIM') or os.path.join(ROOT, 'build', 'gblink_sim', 
 
 EV_VCC, EV_LED, EV_REBOOT, EV_BOOTLOADER, EV_FLASH, EV_PHY, EV_WORD, EV_GB, EV_READY = range(1, 10)
 EV_STATE = 12
+EV_PRINTER = 14
 
 ST = dict(AwaitMode=0xFF02, HandshakeReceived=0xFF03, LinkConnected=0xFF05,
           LinkReconnecting=0xFF06, LinkClosed=0xFF07, DeviceReady=0xFF08,
@@ -306,6 +307,19 @@ class Sim:
         frames = struct.unpack('<5I', b[9:29])
         return dict(configured=bool(conf), mode=mode, owner=owner, status=status,
                     statuses=statuses, frames=frames)
+
+    def printer(self, ep, timeout=3.0):
+        """The board's own printer (printer_glue.cpp): ep 0 start, 1 stop,
+        2 the decoder's view of what it has sent (src/gbprinter.h)."""
+        with self.cv:
+            mark = len(self.events)
+        self._send('p', ep)
+        if ep != 2:
+            return None
+        b = self.wait_event(EV_PRINTER, timeout=timeout, start=mark)
+        packets, rows, pictures, aborts, lost, status, shades = struct.unpack('<5IHI', b[:26])
+        return dict(packets=packets, rows=rows, pictures=pictures, aborts=aborts, lost=lost,
+                    status=status, shades=shades)
 
     # -- waiting ---------------------------------------------------------
     def _wait(self, pred, timeout):

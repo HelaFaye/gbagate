@@ -233,10 +233,10 @@ static void test_shell(void) {
     /* A bare board: display and link port, no USB, no WiFi, no reader. */
     ui_shell_t s;
     shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
-    /* Send Program, Infrared, Self Test, Settings, Diagnostics. Link needs
-     * USB or WiFi, and Battle Chip is an applet now (applets/), which the
-     * firmware adds after shell_init. */
-    check("modes offered", shell_item_count(&s), 5);
+    /* Send Program, Infrared, GB Printer, Self Test, Settings, Diagnostics.
+     * Link needs USB or WiFi, and Battle Chip is an applet now (applets/),
+     * which the firmware adds after shell_init. */
+    check("modes offered", shell_item_count(&s), 6);
     check_str("first is Send Program", shell_label_at(&s, 0), "Send Program");
 
     for (uint8_t i = 0; i < shell_item_count(&s); i++) {
