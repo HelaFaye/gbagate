@@ -149,7 +149,22 @@ typedef struct {
      * slowest ack. Shown only when has_stats. */
     bool        has_stats;
     uint32_t    up, down, resent, lost, max_rtt_ms;
+    /* GBAs on this board's own cable (doc/MULTIPLAY.md): how many the
+     * player says (1-3; 0 hides the line) and how many answered on the
+     * cable (-1: not probed). Three local GBAs and the board make four:
+     * only then is the four-player relay offered. */
+    int         local_players;
+    int         local_found;
 } ui_online_t;
+
+/* `word` padded to sit centred under `line`'s last character (the panel's
+ * font is proportional). */
+void ui_online_under(char *out, size_t n, const char *line, const char *word);
+
+/* What the local-players setting starts at: the GBAs found, or 1. */
+int ui_online_local_default(int found);
+/* The four-player relay is offered only with three GBAs found. */
+bool ui_online_four_player(const ui_online_t *o);
 
 void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
                     const ui_online_t *o);

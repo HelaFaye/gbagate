@@ -439,9 +439,11 @@ int t_mp_attach(const char *path) {
     return 0;
 }
 
-/* transfers, unanswered, not in Multi-Player mode, the most the emulator fell behind (us) */
-void t_mp_counters(uint32_t out[4]) {
+/* transfers, unanswered, not in Multi-Player mode, the most the emulator
+ * fell behind (us), the board's mode, the cable busy */
+void t_mp_counters(uint32_t out[6]) {
     mp_wire_lock(MPW);
     out[0] = MPW->transfers; out[1] = MPW->unanswered; out[2] = MPW->not_multi; out[3] = g_mp_late_max;
+    out[4] = MPW->mode; out[5] = g_mp_busy;
     mp_wire_unlock(MPW);
 }

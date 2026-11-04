@@ -123,6 +123,7 @@ static bool gblink_page_state(ui_gblink_t *g) {
 #endif
 static void online_gather(ui_online_t *o);
 static void online_retry(void);
+static int  s_local_players;   /* GBAs on this board's cable, as set (Link: Online) */
 
 #if !defined(GBAGATE_QEMU)
 #include "gbl_peer.h"
@@ -789,6 +790,12 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
         online_gather(&on);
         if (have_event && e && e->type == UI_EVENT_CHIP_SENT) {
             online_retry();
+        }
+        /* before the session links: turning sets the local players, 1-3 */
+        if (have_event && e && e->type == UI_EVENT_ENCODER && on.net == UI_NET_UP && !on.has_stats) {
+            int n = s_local_players + (e->a > 0 ? 1 : -1);
+            s_local_players = n < 1 ? 1 : n > 3 ? 3 : n;
+            on.local_players = s_local_players;
         }
         ui_page_online(&page, title, footer, &on);
         break;
@@ -1519,6 +1526,11 @@ static void mode_exit_selftest(void *ctx) {
 /* ---- Link: Online ------------------------------------------------------------ */
 
 static bool s_online;          /* the mode is up                       */
+
+/* How many GBAs answer on this board's own cable, or -1 while nothing can
+ * probe it: the four-player PHY (doc/MULTIPLAY.md) supplies it. */
+int gblink_cable_gbas(void);
+__attribute__((weak)) int gblink_cable_gbas(void) { return -1; }
 static bool s_celio_started;   /* ... and the client has been started  */
 
 static void online_gather(ui_online_t *o) {
@@ -1545,6 +1557,14 @@ static void online_gather(ui_online_t *o) {
     o->session     = cv.session[0] ? cv.session : NULL;
     o->error       = cv.error;
     o->link_status = cv.link_status;
+    o->has_stats   = cv.state == CELIO_LINKED;
+    o->up          = cv.up;
+    o->down        = cv.down;
+    o->resent      = cv.resent;
+    o->lost        = cv.lost + cv.given_up;
+    o->max_rtt_ms  = cv.max_rtt_ms;
+    o->local_found   = gblink_cable_gbas();
+    o->local_players = s_local_players;
 #endif
 }
 
@@ -1572,6 +1592,7 @@ static void online_retry(void) {
 static bool mode_enter_online(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
     s_online = true;
+    s_local_players = ui_online_local_default(gblink_cable_gbas());
     s_celio_started = false;
 #if !defined(GBAGATE_QEMU)
     if (s_shell.caps & HW_CAP_WIFI) {

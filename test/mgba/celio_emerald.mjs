@@ -73,8 +73,10 @@ try {
     console.log(`    game ${'AB'[n]}: ${JSON.stringify(r)}`);
     console.log(`    board ${'AB'[n]}: ${JSON.stringify(views[n])}`);
   }
-  check('both games counted two players', res.every((r) => r.status?.count === 2));
-  check('exactly one is the parent', res.filter((r) => r.status?.master).length === 1);
+  check('both games counted two players', res.every((r) => r.at_count?.count === 2));
+  check(`exactly one is the parent (link IDs ${res.map((r) => r.at_count?.local)})`,
+        res.filter((r) => r.at_count?.master).length === 1 &&
+        res.map((r) => r.at_count?.local).sort().join() === '0,1');
   check('both received the other\'s link player record', res.every((r) => r.received));
   const order = res[0].players;
   check(`each holds both trainers, the same link order on both (${order})`,

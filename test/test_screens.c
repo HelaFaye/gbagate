@@ -553,6 +553,47 @@ static void test_pages(void) {
     ui_page_online(&p, "Link: Online", foot, &on);
     check("online: lost packets warn", p.colour[3] == COL_WARN, 1);
     on.has_stats = false; on.lost = 0;
+
+    /* local players, before the session */
+    ui_online_t lp = { .net = UI_NET_UP, .ip = "192.168.1.5", .celio = 3, .session = "1234",
+                       .local_players = 3, .local_found = 3 };
+    ui_page_online(&p, "Link: Online", foot, &lp);
+    check("online: the local players setting", strcmp(p.line[3], "Local Players: 3"), 0);
+    {
+        /* "found", centred under the number, in the font's own widths */
+        const char *u = p.line[4];
+        int lead_px = 0, pad = 0;
+        while (u[pad] == ' ') pad++;
+        char spaces[UI_PAGE_TEXT];
+        snprintf(spaces, sizeof spaces, "%.*s", pad, u);
+        lead_px = ui_font_width(spaces);
+        const int word_mid = lead_px + ui_font_width(u + pad) / 2;
+        const int digit_mid = ui_font_width("Local Players: ") + ui_font_width("3") / 2;
+        check("online: \"found\" under the number", strcmp(u + pad, "found") == 0 && p.colour[4] == COL_TEXT_DIM, 1);
+        check("online: ... centred to within a space", abs(word_mid - digit_mid) <= ui_font_width(" ") + 1, 1);
+    }
+    check("online: three found and three chosen: the 4-player link", strcmp(p.line[5], "4-player link"), 0);
+    check("online: offered", ui_online_four_player(&lp), 1);
+    page("online-local-players", &p);
+    lp.local_players = 2;
+    ui_page_online(&p, "Link: Online", foot, &lp);
+    check("online: a different number set: the setting", strcmp(p.line[3], "Local Players: 2"), 0);
+    check("online: ... and what was found, as a warning", strstr(p.line[4], "found 3") != NULL && p.colour[4] == COL_WARN, 1);
+    page("online-local-players-differ", &p);
+    check("online: not three: no 4-player link", ui_online_four_player(&lp), 0);
+    lp.local_players = 3; lp.local_found = 2;
+    check("online: three chosen but two found: not offered", ui_online_four_player(&lp), 0);
+    lp.local_found = -1; lp.local_players = 1;
+    ui_page_online(&p, "Link: Online", foot, &lp);
+    check("online: not probed: just the setting", strcmp(p.line[3], "Local Players: 1"), 0);
+    lp.celio = 5;
+    ui_page_online(&p, "Link: Online", foot, &lp);
+    for (int i = 0; i < p.count; i++)
+        check("online: the setting is gone once linked", strncmp(p.line[i], "Local", 5) != 0, 1);
+    check("online: default is what was found", ui_online_local_default(3), 3);
+    check("online: none found: one", ui_online_local_default(0), 1);
+    check("online: not probed: one", ui_online_local_default(-1), 1);
+    check("online: never past three", ui_online_local_default(5), 3);
     on.celio = 6;
     ui_page_online(&p, "Link: Online", foot, &on);
     lead("online-closed", &p, "session over", COL_TEXT);

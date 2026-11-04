@@ -383,6 +383,8 @@ void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
     default:
         break;
     }
+    const bool before = o->celio == C_IDLE || o->celio == C_CONNECTING || o->celio == C_ENTERING ||
+                        o->celio == C_WAITING;
     switch (o->celio) {
     case C_IDLE:
     case C_CONNECTING:
@@ -428,9 +430,52 @@ void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
         ui_page_add_wrapped(p, COL_TEXT_DIM, o->error && *o->error ? o->error : "no reason given");
         break;
     }
+    if (before && o->local_players > 0) {
+        /* "Local Players: 3 found" is wider than the panel, so "found" goes
+         * centred under the number (or "found 2" when the setting is not
+         * what is on the cable). */
+        char setting[UI_PAGE_TEXT], under[UI_PAGE_TEXT];
+        snprintf(setting, sizeof setting, "Local Players: %d", o->local_players);
+        ui_page_add(p, COL_TEXT, "%s", setting);
+        if (o->local_found >= 0) {
+            const bool same = o->local_found == o->local_players;
+            char word[24];                 /* "found " and any int */
+            snprintf(word, sizeof word, same ? "found" : "found %d", o->local_found);
+            ui_online_under(under, sizeof under, setting, word);
+            ui_page_add(p, same ? COL_TEXT_DIM : COL_WARN, "%s", under);
+        }
+        if (ui_online_four_player(o)) ui_page_add(p, COL_GOOD, "4-player link");
+    }
     if (o->ip) {
         ui_page_add(p, COL_TEXT_DIM, "IP %s", o->ip);
     }
+}
+
+/* `word`, padded with spaces so that, in the panel's proportional font, its
+ * middle is under the middle of `line`'s last character (the number). */
+void ui_online_under(char *out, size_t n, const char *line, const char *word) {
+    const size_t len = strlen(line);
+    char head[UI_PAGE_TEXT];
+    snprintf(head, sizeof head, "%.*s", (int)(len ? len - 1 : 0), line);
+    const int centre = ui_font_width(head) + (ui_font_width(line + (len ? len - 1 : 0)) + 1) / 2;
+    const int start = centre - (ui_font_width(word) + 1) / 2;
+    size_t k = 0;
+    char pad[UI_PAGE_TEXT] = "";
+    while (k + 1 < sizeof pad) {          /* the most spaces that do not pass start */
+        pad[k] = ' ';
+        pad[k + 1] = '\0';
+        if (ui_font_width(pad) > start) { pad[k] = '\0'; break; }
+        k++;
+    }
+    snprintf(out, n, "%s%s", pad, word);
+}
+
+int ui_online_local_default(int found) {
+    return found < 1 ? 1 : found > 3 ? 3 : found;
+}
+
+bool ui_online_four_player(const ui_online_t *o) {
+    return o && o->local_found == 3 && o->local_players == 3;
 }
 
 /*

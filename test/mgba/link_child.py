@@ -47,14 +47,28 @@ def main(rom, wire, delay, seconds, shot):
     print(json.dumps({'ready': True, 'trainer_id': tid}), flush=True)
     e.run(30)
     e.call_once(CALL % 'OpenLink')
-    advanced, got, t_count, t_done = False, False, None, None
+    advanced, got, t_count, t_done, at_count = False, False, None, None, None
+    trace = []                                 # (s, transfers, board mode, busy, SIOCNT, gLinkStatus)
+    first_error = None
     t0 = time.time()
     end = t0 + seconds
     while time.time() < end:
-        e.run(15)
+        # every frame once two are counted: the game raises the received flag
+        # and can close the link again (a bare overworld does) within frames
+        e.run(1 if t_count is not None else 15)
         st = status(e)
+        raw = e.r32(e.sym['gLinkStatus'])
+        if raw & 0x7F000 and not first_error:   # an error, before CloseLink clears the status
+            first_error = {'s': round(time.time() - t0, 2), 'status': '%08x' % raw,
+                           'errors': (raw >> 12) & 0x7F, 'callback2': e.name_of(e.callback2())}
+        cc = (ctypes.c_uint32 * 6)()
+        e.lib.t_mp_counters(cc)
+        if not trace or trace[-1][1:] != (cc[0], cc[4], cc[5], '%04x' % e.r16(0x04000128), '%08x' % e.r32(e.sym['gLinkStatus'])):
+            trace.append((round(time.time() - t0, 2), cc[0], cc[4], cc[5], '%04x' % e.r16(0x04000128),
+                          '%08x' % e.r32(e.sym['gLinkStatus'])))
         if st['count'] == 2 and t_count is None:
             t_count = time.time() - t0
+            at_count = st                      # roles as the game had them then
         if st['count'] == 2 and st['master'] and not advanced:
             e.call_once(CALL % 'CheckShouldAdvanceLinkState')
             advanced = True
@@ -65,12 +79,14 @@ def main(rom, wire, delay, seconds, shot):
             break
     base = e.sym['gLinkPlayers']
     players = [struct.unpack_from('<I', e.read(base + 28 * i, 28), 4)[0] for i in range(2)]
-    c = (ctypes.c_uint32 * 4)()
+    c = (ctypes.c_uint32 * 6)()
     e.lib.t_mp_counters(c)
     e.shot(shot)
-    print(json.dumps({'trainer_id': tid, 'status': status(e), 'received': got, 'players': players,
+    print(json.dumps({'trainer_id': tid, 'status': status(e), 'at_count': at_count, 'first_error': first_error,
+                      'error_occurred': e.r8(e.sym['gLinkErrorOccurred']), 'received': got, 'players': players,
                       'count_s': t_count, 'done_s': t_done,
-                      'cable': dict(zip(('transfers', 'unanswered', 'not_multi', 'late_us_max'), list(c)))}),
+                      'cable': dict(zip(('transfers', 'unanswered', 'not_multi', 'late_us_max', 'mode', 'busy'), list(c))),
+                      'trace': trace[:40]}),
           flush=True)
 
 

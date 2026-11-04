@@ -201,10 +201,11 @@ static void relay_step(void) {
     for (int i = 0; i < N; i++) relay_cable(i);
     /* each relay's local commands into the line, due a network's delay later */
     uint16_t cmd[MP_CMD_WORDS];
+    uint8_t from;
     for (int i = 0; i < N; i++)
-        while (g_line_n < NET_LINE_MAX && mp_pop(&R[i], cmd)) {
+        while (g_line_n < NET_LINE_MAX && mp_pop(&R[i], &from, cmd)) {
             g_line[g_line_n].due = g_quantum + g_delay_q;
-            g_line[g_line_n].from = (uint8_t)i;
+            g_line[g_line_n].from = from;
             memcpy(g_line[g_line_n].cmd, cmd, sizeof cmd);
             g_line_n++;
         }
@@ -365,7 +366,7 @@ uint32_t m_trace_quantum(uint32_t k) { return k < TRACE_MAX ? g_trace_q[k] : 0; 
 void m_relay_mode(uint32_t delay_quanta) {
     g_relay = true;
     g_delay_q = delay_quanta;
-    for (int i = 0; i < N; i++) mp_init(&R[i], (uint8_t)N, (uint8_t)i);
+    for (int i = 0; i < N; i++) mp_init(&R[i], (uint8_t)N, (uint8_t)(1u << i));
 }
 
 /* A relay's counters: frames, relayed, received, idle_given, dropped,
