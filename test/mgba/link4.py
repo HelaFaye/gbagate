@@ -14,6 +14,7 @@ overworld. Then, with the game's own link code:
   - every game then holds all four players -- the same four trainer IDs,
     in link order, on all four.
 """
+import ctypes
 import os
 import struct
 import sys
@@ -58,27 +59,48 @@ def players(c):
     return out
 
 
-def main(rom, out):
-    os.makedirs(out, exist_ok=True)
-    print('emerald link, four players on one cable')
+TOPOLOGIES = (
+    ('one cable', None),                       # the four GBAs on one cable
+    ('relayed, no delay', 0),                  # each on its own cable, mp_relay answering the rest
+    ('relayed, 50 ms each way', 820),          # ... the relays' commands 820 quanta (~50 ms) late
+)
+
+
+def make_states(rom, out):
+    """Each player's game, alone, to the overworld; cached in out."""
     states, ids = [], []
-    for d in DELAYS:                           # each player's game, alone
+    for k, d in enumerate(DELAYS):
+        path = os.path.join(out, 'link4-player%d.state' % k)
+        if not os.path.exists(path):
+            e = E.Emu(rom)
+            e.run(d)
+            U.new_game(e)
+            open(path, 'wb').write(e.save_state())
+        data = open(path, 'rb').read()
         e = E.Emu(rom)
-        e.run(d)
-        U.new_game(e)
+        e.load_state(data)
         sb = e.r32(e.sym['gSaveBlock2Ptr'])
         ids.append(struct.unpack('<I', e.read(sb + 0x0A, 4))[0])
-        states.append(e.save_state())
+        states.append(data)
+    return states, ids
+
+
+def main(rom, out, name, delay):
+    os.makedirs(out, exist_ok=True)
+    print('emerald link, four players: %s' % name)
+    states, ids = make_states(rom, out)
     check('four different trainers (%s)' % ids, len(set(ids)) == N)
 
     m = E.Multi(rom, N)
     for i, st in enumerate(states):
         m.core(i).load_state(st)
+    if delay is not None:
+        m.lib.m_relay_mode(delay)
     m.attach()
     m.run(30)
     for i in range(N):
         m.core(i).call_once(CALL % 'OpenLink')
-    for _ in range(40):
+    for _ in range(80):
         m.run(15)
         if all(status(m.core(i))['count'] == N for i in range(N)):
             break
@@ -91,7 +113,7 @@ def main(rom, out):
     check('each game knows its own link ID (%s)' % [s['local'] for s in st], [s['local'] for s in st] == list(range(N)))
 
     m.core(0).call_once(CALL % 'CheckShouldAdvanceLinkState')
-    for _ in range(80):
+    for _ in range(160):
         m.run(15)
         if all(m.core(i).r8(m.sym['gReceivedRemoteLinkPlayers']) for i in range(N)):
             break
@@ -102,12 +124,26 @@ def main(rom, out):
         check('game %d holds all four, in link order: %s' % (i, seen[i]), seen[i] == ids)
     check('no link errors (%s)' % [status(m.core(i))['errors'] for i in range(N)],
           not any(status(m.core(i))['errors'] for i in range(N)))
+    if delay is not None:
+        stats = []
+        for i in range(N):
+            v = (ctypes.c_uint32 * 9)()
+            m.lib.m_relay_stats(i, v)
+            stats.append(dict(zip(('frames', 'relayed', 'received', 'idle', 'dropped', 'bad_checksums',
+                                   'phase', 'connected', 'transfers'), list(v))))
+        for i, st_ in enumerate(stats):
+            print('    relay %d: %s' % (i, st_))
+        check('no relay saw a bad checksum from its GBA', not any(x['bad_checksums'] for x in stats))
+        check('every relay passed its GBA\'s commands on and got the others\'',
+              all(x['relayed'] > 0 and x['received'] > 0 and not x['dropped'] for x in stats))
+    tag = 'cable' if delay is None else 'relay%d' % delay
     for i in range(N):
-        m.core(i).shot(os.path.join(out, 'link4-%d.png' % i))
-    with open(os.path.join(out, 'link4-trace.txt'), 'w') as f:   # the cable, word by word
+        m.core(i).shot(os.path.join(out, 'link4-%s-%d.png' % (tag, i)))
+    with open(os.path.join(out, 'link4-%s-trace.txt' % tag), 'w') as f:   # cable 0, word by word
+        m.lib.m_trace_quantum.restype = ctypes.c_uint32
         for k, w in enumerate(m.trace()):
-            f.write('%5d  %s\n' % (k, ' '.join('%04x' % x for x in w)))
-    print('emerald link, four players  %s' % ('all checks passed' if not fails else 'FAILURES'))
+            f.write('%5d  q%-7d %s\n' % (k, m.lib.m_trace_quantum(k), ' '.join('%04x' % x for x in w)))
+    print("emerald link, four players: %s  %s" % (name, "all checks passed" if not fails else "FAILURES"))
     return 1 if fails else 0
 
 
@@ -116,4 +152,12 @@ if __name__ == '__main__':
     if not rom or not os.path.exists(rom):
         print('emerald link, four players  skipped: no ROM')
         sys.exit(77)
-    sys.exit(main(rom, sys.argv[2] if len(sys.argv) > 2 else os.path.join(E.ROOT, 'build/emerald')))
+    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(E.ROOT, 'build/emerald')
+    if len(sys.argv) > 3:                      # one topology, in this process
+        k = int(sys.argv[3])
+        sys.exit(main(rom, out, *TOPOLOGIES[k]))
+    import subprocess                          # each in its own: the cable is per process
+    rc = 0
+    for k in range(len(TOPOLOGIES)):
+        rc |= subprocess.call([sys.executable, '-I', os.path.abspath(__file__), rom, out, str(k)])
+    sys.exit(rc)

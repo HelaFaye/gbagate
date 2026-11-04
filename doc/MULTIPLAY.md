@@ -70,12 +70,31 @@ games keep a queue per player, which the trace shows. Activities that send
 held keys every frame (minigames) see the latency as lag, as they do over
 the 2-player relay.
 
+## Status
+
+The relay's logic is built and proven under real games:
+- `src/mp_relay.c` is the frame builder above, with no I/O;
+  `test/test_mprelay.c` checks each rule.
+- In `test/mgba/link4.py`, four Emeralds each sit on their own cable. On
+  each cable an `mp_relay` answers the other three slots, driving the cable
+  at the parent's measured cadence where its GBA is a child. The relays
+  pass commands to each other through a delay line, and a stand-in for the
+  server sends StartHandshake and ConnectLink.
+- Results: with no delay and with 50 ms each way, every check that passes on
+  one shared cable passes the same way. The games see four players, the
+  parent alone is master, and each knows its ID. Every game holds the same
+  four trainer IDs in link order, with no link errors. No relay sees a bad
+  checksum from its GBA, and each relays its GBA's commands and receives
+  the others'.
+
+What remains is putting it on the board, in the table below.
+
 ## What has to be built
 
 | piece | where |
 |---|---|
 | A PHY mode that answers in up to three slots, and one that drives slot 0 and answers for the other children | `port/gblink/link_phy.h`; the ESP32-S3 driver; the simulator |
-| The 4-player frame builder above | a new section beside the vendored `UsbSection`, under gbagate's extension mode numbers |
+| The 4-player frame builder above | done: `src/mp_relay.c`; to be driven by a new section beside the vendored `UsbSection`, under gbagate's extension mode numbers |
 | Per-sender queues and four-player sessions in the board's Celio client | `src/celio.c` |
 | A cable between mGBA's Multi-Player hardware and the simulator's board, as `rfu_wire.h` is for the Wireless Adapter | `test/mgba`, `test/gblink_sim` |
 | The end-to-end test: four mGBA Emeralds, four simulated boards, one four-player Celio session; `link4.py`'s checks must pass unchanged | `test/mgba` |

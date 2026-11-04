@@ -56,6 +56,7 @@ DEPS_wificfg   = wifi_cfg.c settings.c chipgate.c ui_input.c
 DEPS_json      = json_lite.c
 DEPS_celio     = celio.c json_lite.c
 DEPS_mbagent   = mbagent.c
+DEPS_mprelay   = mp_relay.c
 DEPS_applets   = applet.c app_modes.c ui_shell.c hw_caps.c chipgate.c chipdb.c \
                  ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c \
                  ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c mbagent.c
@@ -69,7 +70,7 @@ DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_
 EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay
 
 .PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image mgba-shim mgba-emerald
 all: $(addprefix run-,$(SUITES)) gblink agent-emu
@@ -90,7 +91,7 @@ agent-emu: | $(BUILD)
 # tree: EMERALD_ROM=/path/to/emerald.gba make mgba-emerald
 mgba-shim: | $(BUILD)
 	@$(CC) -std=gnu11 -O1 -shared -fPIC test/mgba/mgba_shim.c -o $(BUILD)/libmgba_shim.so -lmgba
-	@$(CC) -std=gnu11 -O1 -shared -fPIC test/mgba/mgba_multi.c -o $(BUILD)/libmgba_multi.so -lmgba -lpthread
+	@$(CC) -std=gnu11 -O1 -shared -fPIC test/mgba/mgba_multi.c src/mp_relay.c -o $(BUILD)/libmgba_multi.so -lmgba -lpthread
 mgba-emerald: mgba-shim
 	@test/mgba/fetch_symbols.sh
 	@$(MAKE) -s -C test/gblink_sim
