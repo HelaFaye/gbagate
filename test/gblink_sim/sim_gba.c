@@ -286,13 +286,16 @@ static void *bus_thread(void *arg) {
             if (mode == GBL_PHY_MASTER) {
                 uint32_t gap = 0;
                 uint16_t tx = gbl_phy_next_tx(&gap);
-                uint16_t rx = wire_ok() ? wire_master_word(tx) : 0xFFFF;
+                /* no SD pin to get wrong on this cable: whichever path the
+                 * firmware chose (its cable setting may say GBC), the word
+                 * reaches the GBA */
+                uint16_t rx = wire_master_word(tx);
                 report_word(tx, rx);
                 gbl_phy_word_done(rx);
                 sleep_ns(gbl_phy_loops_to_ns(gap ? gap : 1000));
             } else if (mode == GBL_PHY_SLAVE) {
                 uint16_t tx = gbl_phy_next_tx(NULL), rx;
-                if (wire_ok() && wire_slave_word(tx, &rx)) {
+                if (wire_slave_word(tx, &rx)) {
                     report_word(tx, rx);
                     gbl_phy_word_done(rx);
                 }
