@@ -402,6 +402,18 @@ static uint16_t mp_write(struct GBASIODriver *d, uint32_t address, uint16_t valu
     mp_wire_lock(MPW);
     const uint16_t keep = g->sio.siocnt & (0x0004 | 0x0008 | 0x0030);
     const bool parent = MPW->mode != MP_WIRE_MASTER;
+    if (parent && (value & 0x0080) && !g_mp_busy && MPW->mode == MP_WIRE_SLAVE && !MPW->staged_valid) {
+        /* A real board stages its answer before the parent's next word (the
+         * PHY asks for it right after the last one). Here the emulator can
+         * run ahead of real time in a burst while catching up, faster than
+         * the simulator's thread stages: give it the moment a real board
+         * would have had, up to 5 ms, rather than answer FFFF. */
+        const int64_t give_up = mono_us() + 5000;
+        do {
+            mp_wire_unlock(MPW);
+            mp_wire_lock(MPW);
+        } while (!MPW->staged_valid && MPW->mode == MP_WIRE_SLAVE && mono_us() < give_up);
+    }
     if (parent && (value & 0x0080) && !g_mp_busy) {
         uint16_t answer = 0xFFFF;                  /* nobody answered */
         if (MPW->mode == MP_WIRE_SLAVE && MPW->staged_valid) {
