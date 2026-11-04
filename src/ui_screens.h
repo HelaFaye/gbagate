@@ -144,6 +144,11 @@ typedef struct {
     const char *session;     /* the session id: what the partner enters  */
     const char *error;       /* why Celio failed                         */
     uint16_t    link_status; /* the adapter's last word                  */
+    /* The link's counters, while it runs (celio_t's): packets up and down,
+     * resent for want of an ack, lost (given up, or dropped), and the
+     * slowest ack. Shown only when has_stats. */
+    bool        has_stats;
+    uint32_t    up, down, resent, lost, max_rtt_ms;
 } ui_online_t;
 
 void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,

@@ -292,3 +292,156 @@ void t_rfu_counters(uint32_t out[8]) {
 uint32_t t_rfu_cmd_count(int id) { return g_cmds[id & 0xFF]; }
 uint32_t t_rfu_ack_words_max(int aa) { return g_ack_words_max[aa & 0xFF]; }
 uint32_t t_rfu_scans(int hits) { return hits ? g_scan_hits : g_scans; }
+
+/* ---- a board on the Multi-Player cable ---------------------------------------
+ *
+ * t_mp_attach(path) puts the simulator's board (gblink_sim with
+ * GBLINK_MP_WIRE=path, running the firmware's link mode) on this GBA's
+ * cable, through test/gblink_sim/mp_wire.h. This side is the GBA's
+ * Multi-Player hardware (GBATEK): the SI terminal says child when the board
+ * drives the clock and parent when it does not; the SD terminal says ready
+ * while the board's link mode is on; a transfer leaves SIOMULTI0-1 holding
+ * the parent's and the child's words, 2-3 FFFF, sets the ID and raises the
+ * serial IRQ. Paced to real time, as the adapter's firmware is.
+ */
+#include "../gblink_sim/mp_wire.h"
+
+static const int k_mp_cycles[4] = { 73003, 18251, 12167, 6075 };   /* two units, per baud (mGBA) */
+
+static struct mp_wire *MPW;
+static struct GBASIODriver g_mp_drv;
+static struct mTimingEvent g_mp_sync_ev, g_mp_done_ev;
+static bool     g_mp_busy, g_mp_board_clocked;
+static uint16_t g_mp_words[2];
+static int64_t  g_mp_anchor = -1;
+static double   g_mp_emu_us;
+static uint32_t g_mp_late_max;
+
+static bool mp_gba_multi(struct GBA *g) { return g->sio.mode == SIO_MULTI; }
+
+/* SI terminal and SD terminal, from what the board is doing (under lock). */
+static void mp_terminals(struct GBA *g) {
+    if (!mp_gba_multi(g)) return;
+    const bool child = MPW->mode == MP_WIRE_MASTER;
+    const bool ready = MPW->mode != MP_WIRE_OFF;
+    g->sio.siocnt = (uint16_t)((g->sio.siocnt & ~0x000C) | (child ? 0x0004 : 0) | (ready ? 0x0008 : 0));
+}
+
+static void mp_begin(struct GBA *g, uint16_t parent, uint16_t child, bool board_clocked) {
+    g_mp_words[0] = parent;
+    g_mp_words[1] = child;
+    g_mp_busy = true;
+    g_mp_board_clocked = board_clocked;
+    g->sio.siocnt |= 0x0080;
+    for (int k = 0; k < 4; k++) g->memory.io[(REG_SIOMULTI0 >> 1) + k] = 0xFFFF;
+    mTimingDeschedule(&g->timing, &g_mp_done_ev);
+    mTimingSchedule(&g->timing, &g_mp_done_ev, k_mp_cycles[g->sio.siocnt & 3]);
+}
+
+static void mp_done_cb(struct mTiming *t, void *ctx, uint32_t late) {
+    (void)t; (void)ctx;
+    struct GBA *g = gba();
+    mp_wire_lock(MPW);
+    g->memory.io[(REG_SIOMULTI0 >> 1) + 0] = g_mp_words[0];
+    g->memory.io[(REG_SIOMULTI0 >> 1) + 1] = g_mp_words[1];
+    g->memory.io[(REG_SIOMULTI0 >> 1) + 2] = 0xFFFF;
+    g->memory.io[(REG_SIOMULTI0 >> 1) + 3] = 0xFFFF;
+    const int id = g_mp_board_clocked ? 1 : 0;
+    g->sio.siocnt = (uint16_t)((g->sio.siocnt & ~(0x0080 | 0x0030 | 0x0040)) | (id << 4));
+    if (g->sio.siocnt & 0x4000) GBARaiseIRQ(g, GBA_IRQ_SIO, late);
+    if (g_mp_board_clocked) {                      /* the board's master word: the GBA's answer back */
+        MPW->rx_word = g_mp_words[1];
+        MPW->rx_ready = true;
+    } else {                                       /* the GBA's parent word, for the board */
+        MPW->ring[MPW->ring_head % MP_WIRE_RING] = g_mp_words[0];
+        MPW->ring_head++;
+    }
+    MPW->transfers++;
+    g_mp_busy = false;
+    mp_terminals(g);
+    mp_wire_unlock(MPW);
+}
+
+static void mp_sync_cb(struct mTiming *t, void *ctx, uint32_t late) {
+    (void)ctx;
+    struct GBA *g = gba();
+    const int64_t now = mono_us();
+    g_mp_emu_us += (SYNC_CYCLES + late) * 1e6 / GBA_HZ;
+    mp_wire_lock(MPW);
+    MPW->gba_multi = mp_gba_multi(g);
+    mp_terminals(g);
+    if (MPW->mode == MP_WIRE_MASTER && MPW->req_pending && !g_mp_busy) {
+        MPW->req_pending = false;
+        if (mp_gba_multi(g)) {
+            mp_begin(g, MPW->req_word, g->memory.io[REG_SIOMLT_SEND >> 1], true);
+        } else {                                   /* nobody on the cable in Multi-Player mode */
+            MPW->rx_word = 0xFFFF;
+            MPW->rx_ready = true;
+            MPW->not_multi++;
+        }
+    }
+    MPW->gba_us = (int64_t)g_mp_emu_us;
+    mp_wire_unlock(MPW);
+
+    if (g_mp_anchor < 0) g_mp_anchor = now - (int64_t)g_mp_emu_us;
+    const int64_t target = g_mp_anchor + (int64_t)g_mp_emu_us;
+    if (now > target + 20000) {
+        if ((uint32_t)(now - target) > g_mp_late_max) g_mp_late_max = (uint32_t)(now - target);
+        g_mp_anchor = now - (int64_t)g_mp_emu_us;
+    } else {
+        while (mono_us() < target) { }
+    }
+    mTimingSchedule(t, &g_mp_sync_ev, SYNC_CYCLES);
+}
+
+/* The GBA as parent: its Start runs a transfer with the board's staged word. */
+static uint16_t mp_write(struct GBASIODriver *d, uint32_t address, uint16_t value) {
+    (void)d;
+    struct GBA *g = gba();
+    if (address != REG_SIOCNT) return value;
+    mp_wire_lock(MPW);
+    const uint16_t keep = g->sio.siocnt & (0x0004 | 0x0008 | 0x0030);
+    const bool parent = MPW->mode != MP_WIRE_MASTER;
+    if (parent && (value & 0x0080) && !g_mp_busy) {
+        uint16_t answer = 0xFFFF;                  /* nobody answered */
+        if (MPW->mode == MP_WIRE_SLAVE && MPW->staged_valid) {
+            answer = MPW->staged;
+            MPW->staged_valid = false;
+        } else {
+            MPW->unanswered++;
+        }
+        mp_begin(g, g->memory.io[REG_SIOMLT_SEND >> 1], answer, false);
+    }
+    value = (uint16_t)((value & ~(0x0080 | 0x000C | 0x0030)) | keep | (g_mp_busy ? 0x0080 : 0));
+    mp_wire_unlock(MPW);
+    return value;
+}
+
+int t_mp_attach(const char *path) {
+    const int fd = open(path, O_RDWR | O_CREAT, 0600);
+    if (fd < 0 || ftruncate(fd, sizeof *MPW) != 0) return -1;
+    MPW = mmap(NULL, sizeof *MPW, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (MPW == MAP_FAILED) return -2;
+    if (MPW->magic != MP_WIRE_MAGIC) {
+        memset(MPW, 0, sizeof *MPW);
+        atomic_flag_clear(&MPW->lock);
+        MPW->version = MP_WIRE_VERSION;
+        MPW->magic = MP_WIRE_MAGIC;
+    }
+    struct GBA *g = gba();
+    memset(&g_mp_drv, 0, sizeof g_mp_drv);
+    g_mp_drv.writeRegister = mp_write;
+    GBASIOSetDriver(&g->sio, &g_mp_drv, SIO_MULTI);
+    g_mp_sync_ev = (struct mTimingEvent){ .context = NULL, .callback = mp_sync_cb, .name = "mp wire sync", .priority = 0x90 };
+    g_mp_done_ev = (struct mTimingEvent){ .context = NULL, .callback = mp_done_cb, .name = "mp wire done", .priority = 0x91 };
+    mTimingSchedule(&g->timing, &g_mp_sync_ev, SYNC_CYCLES);
+    return 0;
+}
+
+/* transfers, unanswered, not in Multi-Player mode, the most the emulator fell behind (us) */
+void t_mp_counters(uint32_t out[4]) {
+    mp_wire_lock(MPW);
+    out[0] = MPW->transfers; out[1] = MPW->unanswered; out[2] = MPW->not_multi; out[3] = g_mp_late_max;
+    mp_wire_unlock(MPW);
+}

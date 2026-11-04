@@ -412,6 +412,12 @@ void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
         if (st) {
             ui_page_add(p, o->link_status == 0xFF06 ? COL_WARN : COL_TEXT, "%s", st);
         }
+        if (o->has_stats) {
+            ui_page_add(p, COL_TEXT_DIM, "up %lu  down %lu", (unsigned long)o->up, (unsigned long)o->down);
+            ui_page_add(p, o->lost ? COL_WARN : COL_TEXT_DIM, "resent %lu  lost %lu",
+                        (unsigned long)o->resent, (unsigned long)o->lost);
+            ui_page_add(p, COL_TEXT_DIM, "slowest ack %lu ms", (unsigned long)o->max_rtt_ms);
+        }
         break;
     }
     case C_CLOSED:

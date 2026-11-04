@@ -86,6 +86,12 @@ agent-emu: | $(BUILD)
 	@python3 -I test/agent_emu/agent_emu.py $(BUILD)/libmbagent_shim.so $(AGENT_IMAGE); st=$$?; \
 	 if [ $$st -eq 77 ] && [ -z "$$REQUIRE_EMU" ]; then exit 0; fi; exit $$st
 
+# The board's Link: Online page from live values (tools/online_screen.c),
+# with the device's renderer: the mGBA link tests draw it from a simulated
+# board's counters.
+$(BUILD)/online_screen: tools/online_screen.c $(addprefix src/,$(DEPS_screens)) $(wildcard applets/*.c) | $(BUILD)
+	@$(CC) $(CFLAGS) $(EXTRA_screens) -o $@ tools/online_screen.c $(addprefix src/,$(DEPS_screens))
+
 # Pokemon Emerald on mGBA (the distribution's libmgba-dev), for the Union
 # Room and memory-agent experiments. The ROM is the user's own, never in the
 # tree: EMERALD_ROM=/path/to/emerald.gba make mgba-emerald
