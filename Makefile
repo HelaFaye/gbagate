@@ -57,6 +57,7 @@ DEPS_json      = json_lite.c
 DEPS_celio     = celio.c json_lite.c
 DEPS_mbagent   = mbagent.c
 DEPS_mprelay   = mp_relay.c
+DEPS_gbprinter = gbprinter.c
 DEPS_applets   = applet.c app_modes.c ui_shell.c hw_caps.c chipgate.c chipdb.c \
                  ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c \
                  ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c mbagent.c
@@ -70,7 +71,7 @@ DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_
 EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay gbprinter
 
 .PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image mgba-shim mgba-emerald
 all: $(addprefix run-,$(SUITES)) gblink agent-emu
