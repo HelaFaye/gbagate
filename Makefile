@@ -33,7 +33,7 @@ DEPS_ir        = ir_cdz.c
 # The pin map lives in port/esp32s3/board.h and the two boards are checked in
 # separate translation units, so both sets of macros can exist in one run.
 DEPS_board     =
-EXTRA_board    = -Iport/esp32s3 test/test_board_supermini.c
+EXTRA_board    = -Iport/esp32s3 test/test_board_supermini.c test/test_board_carrier_touch.c test/test_board_carrier_knob.c
 DEPS_controls  = controls.c ui_input.c
 DEPS_input     = ui_input.c
 DEPS_uiset     = ui_theme.c ui_settings.c settings.c chipgate.c ui_input.c
@@ -170,7 +170,10 @@ define SUITE_rule
 # Headers are dependencies too: without them a header-only change (a constant,
 # a struct layout) leaves every test binary stale, and a suite reports on code
 # that no longer exists. Found when a corrected descriptor length kept failing.
-$(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) $(wildcard src/*.h) $(wildcard applets/*) | $(BUILD)
+# The port headers and a suite's own extra files (test_board_*.c) too: a pin
+# map changed in board.h left test_board passing on the old one.
+$(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) $(wildcard src/*.h) $(wildcard applets/*) \
+                    $(wildcard port/esp32s3/*.h) $(wildcard test/test_$(1)_*.c) | $(BUILD)
 	@$$(CC) $$(CFLAGS) $$(EXTRA_$(1)) -o $$@ $$< $$(addprefix src/,$$(DEPS_$(1))) -lm
 run-$(1): $(BUILD)/test_$(1)
 	@printf '%-14s ' $(1); \

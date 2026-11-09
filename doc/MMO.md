@@ -239,3 +239,37 @@ Next on mGBA:
 4. The step protocol and server, two boards, then a simulated crowd.
 5. Commands: interact, trainer card, battle through the existing link relay.
 6. Custom maps from existing tilesets.
+7. Packet inspection on the board (below), before anything is opened to
+   players who do not know each other.
+
+## Packet inspection: the board as the GBA's firewall
+
+Over a cable, a GBA trusts its partner, because the partner is another
+cartridge. Over the network, the partner is whatever the other end sends.
+The Gen 3 games accept link data that can crash them or run code: a
+malformed Pokémon, an over-long mail or a record mixing block. On an open
+server, one player could reach everyone's GBA.
+
+The board is the last hop before the GBA and the only one the player owns,
+so it checks there. The server checks too, but a GBA should not depend on
+a server it does not run.
+
+- **Positive validation, per game and per activity.** Know the shape of
+  every block the activity sends (`BBBB size id`, then `8888` continuations,
+  as `src/mp_relay.c` sees them), reassemble it, and pass it only if it
+  parses:
+  - Pokémon: checksum, species, moves, item and ability in range, no Bad
+    Egg flags, and strings terminated. The PKHeX port's legality checks are
+    the natural source.
+  - Mail: terminated text, a valid item.
+  - Link player records, trainer cards, record mixing blocks: fixed sizes
+    and value ranges.
+- **Anything it cannot parse is dropped**, not passed: the session ends
+  cleanly on that board, and its page says why.
+- **The same for the Wireless Adapter stream** (Union Room, trading over
+  RFU). There the blocks arrive inside librfu's frames.
+- **Tests:** every captured session from the mGBA suites must pass
+  unchanged, and a corpus of crafted bad blocks must all be stopped.
+
+This comes after the 250-player tests and the audit, which will show which
+activities players actually use, so those are covered first.

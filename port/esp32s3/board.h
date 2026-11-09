@@ -34,7 +34,8 @@
 #ifndef BOARD_H
 #define BOARD_H
 
-#if !defined(BOARD_DEVKIT) && !defined(BOARD_SUPERMINI)
+#if !defined(BOARD_DEVKIT) && !defined(BOARD_SUPERMINI) && \
+    !defined(BOARD_CARRIER_TOUCH) && !defined(BOARD_CARRIER_KNOB)
 #define BOARD_DEVKIT 1
 #endif
 
@@ -248,7 +249,122 @@
 #define EXP_BTN_R      8
 #define EXP_BTN_START  9
 
+#elif defined(BOARD_CARRIER_TOUCH) || defined(BOARD_CARRIER_KNOB)
+
+/*
+ * The DIY carrier boards (doc/CARRIER.md): a Supermini, up to three GBA
+ * link ports on one Multi-Play chain, the Battle Chip board on I2C, and
+ * either a 320x240 touch panel (ILI9341 or ST7789 with an XPT2046) or a
+ * 2" ST7789V with a rotary encoder and buttons. Planned: the panels' and the
+ * touch controller's drivers and the three-port PHY are not written yet.
+ *
+ * The Supermini's header brings out GPIO 1-13, 43 (TX) and 44 (RX): fifteen
+ * pins, and this map uses all of them. GPIO 48 is the board's own RGB LED,
+ * not a header pin (the Supermini map above puts the display's DC on it).
+ * 43 and 44 are UART0, so the console moves to USB. The ROM still prints its
+ * boot banner on 43, so 43 is always a chip select (nothing is clocked under
+ * it then, and nothing else drives it), and 44 is an input.
+ *
+ * The link ports: port 1 is wired as the single port always was (SI from
+ * its GBA's SO, SO to its SI), so every one-cable mode runs on it unchanged.
+ * Ports 2 and 3 share SC and SD and continue the chain -- port 1's SO is
+ * port 2's SI, port 2's SO port 3's -- and the board reads each GBA's SO
+ * (SI1..SI3), so it can take any slot after the last local GBA, or slot 0
+ * before them. Fill the ports in order.
+ */
+#if defined(BOARD_CARRIER_TOUCH)
+#define BOARD_NAME "carrier-touch"
+#else
+#define BOARD_NAME "carrier-knob"
 #endif
+
+#define PIN_LINK_SC   4
+#define PIN_LINK_SD   5
+#define PIN_LINK_SI   6           /* port 1's GBA's SO                    */
+#define PIN_LINK_SO   7           /* to port 1's GBA's SI                 */
+#define PIN_LINK_SI2  8           /* port 2's GBA's SO                    */
+#define PIN_LINK_SI3  44          /* port 3's GBA's SO (U0RXD: an input)  */
+#define BOARD_LINK_PORTS 3
+
+#define PIN_SPI_SCK   12
+#define PIN_SPI_MOSI  11
+#define PIN_SPI_MISO  13          /* card and touch; the panel's SDO is left off */
+#if defined(BOARD_CARRIER_TOUCH)
+#define PIN_LCD_CS    10
+#else
+#define PIN_LCD_CS    43          /* a CS on 43: see below                */
+#endif
+#define PIN_LCD_DC    9
+#define PIN_SD_CS     3           /* strapping, see BOARD_STRAP_OK_CS     */
+
+#define PIN_I2C_SDA   1           /* the Battle Chip board, the button expander */
+#define PIN_I2C_SCL   2
+
+#if defined(BOARD_CARRIER_TOUCH)
+#define PIN_TOUCH_CS  43          /* XPT2046; polled, so no IRQ pin       */
+#define BOARD_HAS_TOUCH 1
+#define BOARD_HAS_ENCODER 0
+#define BOARD_BUTTONS_ON_EXPANDER 0
+#ifndef BOARD_HAS_BUTTONS
+#define BOARD_HAS_BUTTONS 0       /* touch is the input                   */
+#endif
+#else
+/* The encoder and the keys are on an MCP23017 (0x21) beside the panel; its
+ * interrupt says when to read them, and INTCAP holds the state that raised
+ * it, so no step is lost between the edge and the read. Not on 43: the
+ * expander drives INT from power-on, and would fight the ROM's banner. */
+#define PIN_EXP_INT   10
+/* On the expander (0x21, as buttons_mcp.c addresses it): the encoder, then
+ * the panel module's two keys, then the face and shoulder buttons the Battle
+ * Chip board's connector will later carry. */
+#define EXP_ENC_A      0
+#define EXP_ENC_B      1
+#define EXP_ENC_SW     2
+#define EXP_BTN_A      3          /* the module's confirm key             */
+#define EXP_BTN_B      4          /* its back key                         */
+#define BOARD_HAS_TOUCH 0
+#define BOARD_HAS_ENCODER 1
+#define BOARD_ENCODER_ON_EXPANDER 1
+#define BOARD_BUTTONS_ON_EXPANDER 1
+#ifndef BOARD_HAS_BUTTONS
+#define BOARD_HAS_BUTTONS 1
+#endif
+#endif
+
+#define PIN_LINK_SD_ALT (-1)
+#define BOARD_HAS_SD_ALT 0
+#define PIN_RGB_LED 48            /* the Supermini's own WS2812           */
+#define BOARD_HAS_RGB_LED 1
+#define BOARD_HAS_VCC_SWITCH 0
+#define PIN_BRIDGE_TX (-1)
+#define PIN_BRIDGE_RX (-1)
+#define BOARD_HAS_BRIDGE 0
+
+#ifndef BOARD_HAS_DISPLAY
+#define BOARD_HAS_DISPLAY 1
+#endif
+#ifndef BOARD_HAS_LINK
+#define BOARD_HAS_LINK    1
+#endif
+#ifndef BOARD_HAS_SD
+#define BOARD_HAS_SD      1
+#endif
+#ifndef BOARD_HAS_IR
+#define BOARD_HAS_IR      0       /* no pin                               */
+#endif
+#ifndef BOARD_HAS_READER
+#define BOARD_HAS_READER  1       /* the Battle Chip board, on I2C        */
+#endif
+
+#endif
+
+/*
+ * GPIO 3 selects the JTAG source at reset only when an eFuse
+ * (STRAP_JTAG_SEL) says to, which no gbagate image burns; a chip select
+ * with its module's pull-up on it is high at reset either way. Allowed for
+ * that, and nothing else.
+ */
+#define BOARD_STRAP_OK_CS 3
 
 /*
  * Strapping pins. A switch or a bus line on one of these gives a board that

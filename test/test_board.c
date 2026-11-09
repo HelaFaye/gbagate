@@ -111,6 +111,9 @@ static const claim_t k_devkit[] = {
 /* The Supermini map, checked in a second translation unit so both sets of
  * macros can exist at once. */
 extern void check_supermini(int *fail);
+/* The DIY carriers (doc/CARRIER.md). */
+extern void check_carrier_touch(int *fail);
+extern void check_carrier_knob(int *fail);
 
 int main(void) {
     printf("pin maps\n");
@@ -167,6 +170,8 @@ int main(void) {
            BOARD_HAS_BUTTONS, BOARD_HAS_IR, BOARD_HAS_READER);
 
     check_supermini(&g_fail);
+    check_carrier_touch(&g_fail);
+    check_carrier_knob(&g_fail);
 
     printf("\n%s\n", g_fail ? "FAILURES" : "all checks passed");
     return g_fail != 0;
