@@ -63,7 +63,7 @@ static uint32_t rnd(void *ctx) {
     return g_rand;
 }
 
-static const celio_io_t k_io = { ws_send, gbl_command, gbl_data, rnd, NULL };
+static const celio_io_t k_io = { ws_send, gbl_command, gbl_data, rnd, NULL, NULL, NULL };
 
 static void reset(void) {
     g_nout = g_ncmd = g_ndata = 0;
@@ -551,8 +551,98 @@ static void test_rto(void) {
     check("a hopeless line: never over CELIO_ACK_MAX_MS", c.rto_ms, CELIO_ACK_MAX_MS);
 }
 
+/* ---- Multi-Play sessions ------------------------------------------------- */
+
+static uint8_t g_mp_cmd[16];
+static int     g_mp_id[16], g_nmp;
+static uint8_t g_mp_from[64];
+static uint16_t g_mp_word0[64];
+static int     g_nmpd;
+
+static void mp_command(void *ctx, uint8_t cmd, int id) {
+    (void)ctx;
+    if (g_nmp < 16) { g_mp_cmd[g_nmp] = cmd; g_mp_id[g_nmp] = id; g_nmp++; }
+}
+static void mp_data(void *ctx, uint8_t from, const uint8_t d[64]) {
+    (void)ctx;
+    if (g_nmpd < 64) { g_mp_from[g_nmpd] = from; g_mp_word0[g_nmpd] = (uint16_t)(d[0] | d[1] << 8); g_nmpd++; }
+}
+static const celio_io_t k_mp_io = { ws_send, gbl_command, gbl_data, rnd, NULL, mp_command, mp_data };
+
+/* A packet from `from`, its sequence in every word. */
+static void rx_from(celio_t *c, uint32_t seq, int from) {
+    char f[1024];
+    int l = snprintf(f, sizeof f, "42[\"deviceData\",[{\"sequence\":%u,\"data\":[", (unsigned)seq);
+    for (int i = 0; i < 32; i++) l += snprintf(f + l, sizeof f - (size_t)l, i ? ",%u" : "%u", (unsigned)seq);
+    if (from >= 0) snprintf(f + l, sizeof f - (size_t)l, "],\"from\":%d}]]", from);
+    else snprintf(f + l, sizeof f - (size_t)l, "]}]]");
+    rx(c, f, 900);
+}
+
+static void test_multi(void) {
+    static celio_t c;
+    reset();
+    g_nmp = g_nmpd = 0;
+    celio_start_multi(&c, &k_mp_io, NULL, 4, 3, 0);
+    celio_on_open(&c, 1);
+    rx(&c, OPEN, 2);
+    rx(&c, "40{\"sid\":\"x\"}", 3);
+    check("multi: create asks for four GBAs, three of them ours",
+          strstr(last(), "[\"sessionCreate\",{\"players\":4,\"gbas\":3}]") != NULL, 1);
+    rx(&c, "430[{\"variant\":\"Ok\",\"value\":{\"id\":\"1234\",\"full\":false,\"players\":4,\"slot\":0,\"gbas\":3}}]", 4);
+    check("multi: waiting for the fourth", c.state, CELIO_WAITING);
+    rx(&c, "42[\"partnerJoined\"]", 5);
+    check("multi: complete: linked at once, no firmware to start", c.state, CELIO_LINKED);
+    check("... nothing sent to the GB-Link firmware", g_ncmd, 0);
+    check("... the relay told to stand down first", g_nmp == 1 && g_mp_cmd[0] == 0x01, 1);
+    check("... and AwaitMode asked for, for a role", strstr(last(), "\"linkStatus\":65282") != NULL, 1);
+
+    rx(&c, "4210[\"deviceCommand\",{\"uuid\":\"u1\",\"command\":17,\"id\":0}]", 10);
+    check("multi: SetModeSlave goes to the relay with link ID 0", g_nmp == 2 && g_mp_cmd[1] == 0x11 && g_mp_id[1] == 0, 1);
+    rx(&c, "4211[\"deviceCommand\",{\"uuid\":\"u2\",\"command\":18}]", 11);
+    check("... a command with no ID: -1", g_nmp == 3 && g_mp_cmd[2] == 0x12 && g_mp_id[2] == -1, 1);
+    rx(&c, "4212[\"deviceCommand\",{\"uuid\":\"u2\",\"command\":18}]", 12);
+    check("... a duplicate is not passed on twice", g_nmp, 3);
+
+    rx_from(&c, 0, 3);
+    rx_from(&c, 2, 3);
+    rx_from(&c, 0, 1);       /* another sender's own sequence 0 */
+    rx_from(&c, 1, 3);
+    check("multi: each sender's data in its own order", g_nmpd, 4);
+    check("... 3:0, then 1:0 (not held behind 3's gap)", g_mp_from[0] == 3 && g_mp_word0[0] == 0 &&
+                                                          g_mp_from[1] == 1 && g_mp_word0[1] == 0, 1);
+    check("... then 3:1 and the held 3:2", g_mp_word0[2] == 1 && g_mp_word0[3] == 2 && g_mp_from[3] == 3, 1);
+    rx_from(&c, 3, -1);
+    check("multi: a packet with no sender is dropped", g_nmpd, 4);
+    check("... and none reaches the firmware", g_ndata, 0);
+
+    /* the joiner learns the size from the reply */
+    reset();
+    g_nmp = 0;
+    celio_start_multi(&c, &k_mp_io, "1234", 2, 1, 0);
+    celio_on_open(&c, 1);
+    rx(&c, OPEN, 2);
+    rx(&c, "40{\"sid\":\"x\"}", 3);
+    check("multi: a one-GBA join sends the bare id, as always", strstr(last(), "[\"sessionJoin\",\"1234\"]") != NULL, 1);
+    rx(&c, "430[{\"variant\":\"Ok\",\"value\":{\"id\":\"1234\",\"full\":true,\"players\":4,\"slot\":1,\"gbas\":1}}]", 4);
+    check("... a four-player reply makes it multi", c.multi, 1);
+    check("... and it starts as one", c.state == CELIO_LINKED && g_ncmd == 0, 1);
+
+    reset();
+    celio_start_multi(&c, &k_mp_io, "1234", 2, 2, 0);
+    celio_on_open(&c, 1);
+    rx(&c, OPEN, 2);
+    rx(&c, "40{\"sid\":\"x\"}", 3);
+    check("multi: a two-GBA board's join says so", strstr(last(), "[\"sessionJoin\",{\"id\":\"1234\",\"gbas\":2}]") != NULL, 1);
+
+    reset();
+    celio_start(&c, &k_io, NULL, 0);
+    check("a plain start is not multi", c.multi, 0);
+}
+
 int main(void) {
     test_framing();
+    test_multi();
     test_create_and_wait();
     test_join();
     test_commands_and_data();

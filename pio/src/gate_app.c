@@ -124,6 +124,7 @@ static bool gblink_page_state(ui_gblink_t *g) {
 #endif
 static void online_gather(ui_online_t *o);
 static void online_retry(void);
+static void online_restart(void);
 static int  s_local_players;   /* GBAs on this board's cable, as set (Link: Online) */
 
 #if !defined(GBAGATE_QEMU)
@@ -880,10 +881,16 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
         if (have_event && e && e->type == UI_EVENT_CHIP_SENT) {
             online_retry();
         }
-        /* before the session links: turning sets the local players, 1-3 */
+        /* before the session links: turning sets the local players, 1-3,
+         * and a session not yet linked starts again for the new number (a
+         * Multi-Play link is created differently from a one-cable one) */
         if (have_event && e && e->type == UI_EVENT_ENCODER && on.net == UI_NET_UP && !on.has_stats) {
             int n = s_local_players + (e->a > 0 ? 1 : -1);
-            s_local_players = n < 1 ? 1 : n > 3 ? 3 : n;
+            n = n < 1 ? 1 : n > 3 ? 3 : n;
+            if (n != s_local_players) {
+                s_local_players = n;
+                online_restart();
+            }
             on.local_players = s_local_players;
         }
         ui_page_online(&page, title, footer, &on);
@@ -1622,6 +1629,15 @@ static bool s_online;          /* the mode is up                       */
  * probe it: the four-player PHY (doc/MULTIPLAY.md) supplies it. */
 int gblink_cable_gbas(void);
 __attribute__((weak)) int gblink_cable_gbas(void) { return -1; }
+
+/* The last count the chain gave: while a link has the port it cannot be
+ * probed (-1), and the count from just before still holds. */
+static int s_local_found = -1;
+static int local_found(void) {
+    const int n = gblink_cable_gbas();
+    if (n >= 0) s_local_found = n;
+    return s_local_found;
+}
 static bool s_celio_started;   /* ... and the client has been started  */
 
 static void online_gather(ui_online_t *o) {
@@ -1654,7 +1670,7 @@ static void online_gather(ui_online_t *o) {
     o->resent      = cv.resent;
     o->lost        = cv.lost + cv.given_up;
     o->max_rtt_ms  = cv.max_rtt_ms;
-    o->local_found   = gblink_cable_gbas();
+    o->local_found   = local_found();
     o->local_players = s_local_players;
 #endif
 }
@@ -1663,10 +1679,28 @@ static void online_gather(ui_online_t *o) {
 static void online_begin(void) {
     char session[40];
     net_session(session, sizeof session);
-    gblink_celio_start(session);
+    ui_online_t on = { 0 };
+    on.local_players = s_local_players;
+    on.local_found = local_found();
+    if (ui_online_four_player(&on)) {
+        /* a Multi-Play link: src/mp_online.c, the relay on the chain */
+        gblink_celio_start_multi(session, (uint8_t)ui_online_players(&on), (uint8_t)s_local_players);
+    } else {
+        gblink_celio_start(session);
+    }
     s_celio_started = true;
 }
 #endif
+
+/* The local players changed before the link: the session starts again. */
+static void online_restart(void) {
+#if !defined(GBAGATE_QEMU)
+    if (s_celio_started) {
+        gblink_celio_stop();
+        online_begin();
+    }
+#endif
+}
 
 /* Confirm on a failed or finished session: start a new one. */
 static void online_retry(void) {
@@ -1683,7 +1717,8 @@ static void online_retry(void) {
 static bool mode_enter_online(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
     s_online = true;
-    s_local_players = ui_online_local_default(gblink_cable_gbas());
+    s_local_found = -1;
+    s_local_players = ui_online_local_default(local_found());
     s_celio_started = false;
 #if !defined(GBAGATE_QEMU)
     if (s_shell.caps & HW_CAP_WIFI) {

@@ -271,10 +271,17 @@ opposite client".
   receiver's own sender. With more than two players each packet carries
   `from`, the sender's link ID, so a receiver can put each word in its
   Multi-Play slot and keep each sender's order.
+- **Boards with several GBAs:** a gbagate carrier board has up to three
+  GBAs on its own cable (`doc/CARRIER.md`). `sessionCreate` and
+  `sessionJoin` take `gbas` (`sessionJoin` as `{id, gbas}`; a bare id, as
+  today, is one GBA). `players` counts GBAs, and a session is full when its
+  clients' GBAs fill it; a join that does not fit is refused. Such a board's
+  link ID is the first of its slots, and its slots follow in a row: a
+  three-GBA board ready first has 0–2, and the fourth player gets 3.
 
 **Tested.**
 
-*`test/session.test.ts`*, upstream's vitest style, 16 tests:
+*`test/session.test.ts`*, upstream's vitest style, 24 tests:
 - the options;
 - a pair, as before: roles, no link IDs, packets unchanged;
 - four players:
@@ -285,11 +292,22 @@ opposite client".
   - ConnectLink to the other three;
   - each player's data reaches the others once and in order, with its
     sender;
-  - leaving before and after the start.
+  - leaving before and after the start;
+- boards with several GBAs: the options, room counted in GBAs, a join that
+  does not fit refused, link IDs as first slots (3 + 1, 1 + 2 + 1), data
+  marked with them, the handshake waiting for every board.
 
-The three pair tests pass with and without the patch, and the other 13 fail
-without it. All 22 of the server's tests pass with it, and `tsc --noEmit` is
+The three pair tests pass with and without the patch, and the other 21 fail
+without it. All 30 of the server's tests pass with it, and `tsc --noEmit` is
 clean.
+
+*`test/gblink_compat/test_celio_mp4.mjs`*, end to end with the board's own
+client: two simulated boards, one with three GBAs and one with one, through
+the real server. The board's Celio client, `src/mp_online.c` and the relay
+run for real, and the GBAs on each board's cable are simulated at the
+games' protocol. The three-GBA board gets link ID 0, the other 3; every GBA
+reaches frames, hears every other GBA's command and sees no checksum it
+disagrees with.
 
 *`test/gblink_compat/test_celio_4p.mjs`*, end to end: four socket.io clients
 against the real server bundle, on 2, 40, 150 and 600 ms lines.
@@ -319,15 +337,17 @@ they took 3 s each and passed only because vitest does not type-check.
 > (link ID 0) and the others the children's (1-3) with the ID on every
 > command, starts the handshake only when all have one, relays each player's
 > data to all the others marked with the sender's link ID, and ends for all
-> if anyone leaves a started link. New `test/session.test.ts` (16 tests; 13
-> fail without the change) and an end to end run with four clients on
-> 2-600 ms lines.
+> if anyone leaves a started link. A client may bring several GBAs (one
+> board with up to three on its cable): `players` counts GBAs, and such a
+> client's link ID is the first of its slots. New `test/session.test.ts`
+> (24 tests; 21 fail without the change) and an end to end run with four
+> clients on 2-600 ms lines.
 
 **What clients need.** A client that wants four players must:
-- create with `{players: 4}`;
+- create with `{players: 4}` (and `gbas` if it brings more than one);
 - keep per-sender order by `from`;
-- show its GBA the other three. On our board that is a Multi-Play relay in
-  the firmware, the next step.
+- show its GBAs the others. On the board that is the Multi-Play relay
+  (`src/mp_online.c`, `doc/MULTIPLAY.md`).
 
 ## Not patches: things worth knowing upstream
 

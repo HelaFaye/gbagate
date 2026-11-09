@@ -15,6 +15,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mp_link.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -108,6 +110,14 @@ void gblink_peer_observe_status(uint16_t status);
  * carried out on the client's own thread and return once it has. */
 void gblink_celio_start(const char *session);
 void gblink_celio_stop(void);
+/* A Multi-Play session (src/mp_online.h): `players` GBAs in all when
+ * creating, `gbas` of them on this board's chain (doc/MULTIPLAY.md). */
+void gblink_celio_start_multi(const char *session, uint8_t players, uint8_t gbas);
+
+/* The link port as the Multi-Play bus, from the board's link driver; weak
+ * false where there is none. */
+bool gblink_mp4_bus_start(const mp_bus_layout_t *l, mp_link_t *link);
+void gblink_mp4_bus_stop(void);
 
 /* Supplied by the port's network layer. connect(true): open a WebSocket to
  * <celio>/socket.io/?EIO=4&transport=websocket, and keep reopening it after a

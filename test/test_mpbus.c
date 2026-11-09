@@ -215,7 +215,7 @@ static void model_setup(const mp_bus_layout_t *l, int present) {
     M.sd_prev = M.sc_prev = true;
     for (int i = 0; i < M.n; i++) {
         M.g[i].port = i + 1;
-        M.g[i].parent = !l->parent && i == 0;
+        M.g[i].parent = !mp_bus_is_parent(l) && i == 0;
         M.g[i].so = true;
     }
     mp_bus_idle(&HAL, l);
@@ -232,7 +232,7 @@ static void link_transfer(mp_link_t *m, const uint16_t gba[3]) {
     uint16_t tx[4], rx[4];
     uint32_t gap = 0;
     mp_link_next(m, tx, &gap);
-    if (l->parent) {
+    if (mp_bus_is_parent(l)) {
         mp_bus_parent(&HAL, l, tx, rx, NULL);
     } else {
         M.sc_low_by_parent = true;
@@ -244,14 +244,14 @@ static void link_transfer(mp_link_t *m, const uint16_t gba[3]) {
     }
     advance(M.vt + 400000);
     mp_link_done(m, rx);
-    advance(M.vt + (l->parent ? gap * 1000u : 1000000u));
+    advance(M.vt + (mp_bus_is_parent(l) ? gap * 1000u : 1000000u));
 }
 
 /* Three GBAs and the board on the chain, through the games' own handshake
  * and a frame: what the relay answers, as the GBAs hear it. */
 static void test_with_the_relay(void) {
     static mp_link_t m;
-    const mp_bus_layout_t l = { 4, 3, false };
+    const mp_bus_layout_t l = { 4, 3, 0 };
     mp_link_init(&m, &l, NULL, NULL, NULL);
     model_setup(&l, 3);
     check("the relay's local slots are the chain's: 0-2", m.relay.local_mask, 0x7);
@@ -310,7 +310,7 @@ static result_t run(const mp_bus_layout_t *l, int present, int transfers, uint32
         for (int i = 0; i < M.n; i++) M.g[i].tok_delay = rnd(tok_lo, tok_hi);
         const uint32_t c0 = M.contention;
 
-        if (l->parent) {
+        if (mp_bus_is_parent(l)) {
             mp_bus_parent(&HAL, l, tx, rx, &st);
         } else {
             /* the parent GBA starts; the board's interrupt runs a little after */
@@ -339,10 +339,10 @@ static result_t run(const mp_bus_layout_t *l, int present, int transfers, uint32
     return r;
 }
 
-static void layout(int players, int locals, bool parent) {
+static void layout(int players, int locals, int first) {
     char what[96];
-    const mp_bus_layout_t l = { (uint8_t)players, (uint8_t)locals, parent };
-    snprintf(what, sizeof what, "%dP, %d on the chain, %s parent", players, locals, parent ? "board" : "GBA");
+    const mp_bus_layout_t l = { (uint8_t)players, (uint8_t)locals, (uint8_t)first };
+    snprintf(what, sizeof what, "%dP, %d on the chain from slot %d", players, locals, first);
     /* turn delays 1-12 us, interrupt latency 0.6-1.5 us, estimated as 1 us */
     result_t r = run(&l, locals, 300, 1000, 12000, 600, 1500, -1000);
     char w[160];
@@ -355,30 +355,31 @@ int main(void) {
     srand(1234);
 
     /* the layouts */
-    const mp_bus_layout_t ok[] = { { 2, 1, false }, { 2, 1, true }, { 4, 3, false }, { 4, 1, true } };
+    const mp_bus_layout_t ok[] = { { 2, 1, 0 }, { 2, 1, 1 }, { 4, 3, 0 }, { 4, 1, 1 }, { 4, 1, 3 }, { 4, 3, 1 } };
     for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++) check("layouts the chain carries", mp_bus_layout_ok(&ok[i]), 1);
-    const mp_bus_layout_t bad[] = { { 4, 4, false }, { 1, 1, false }, { 5, 3, false }, { 3, 0, true } };
+    const mp_bus_layout_t bad[] = { { 4, 4, 0 }, { 1, 1, 0 }, { 5, 3, 0 }, { 3, 0, 1 }, { 4, 2, 3 }, { 3, 1, 3 } };
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) check("and ones it cannot", mp_bus_layout_ok(&bad[i]), 0);
-    const mp_bus_layout_t a = { 4, 3, false }, b = { 4, 1, true }, c = { 3, 2, true };
+    const mp_bus_layout_t a = { 4, 3, 0 }, b = { 4, 1, 1 }, c = { 3, 2, 1 }, d = { 4, 1, 3 };
     check("3 GBAs, GBA parent: the board is slot 3", mp_bus_board_slots(&a), 0x8);
     check("1 GBA, board parent: slots 0, 2, 3", mp_bus_board_slots(&b), 0xD);
     check("... the GBA is slot 1, on port 1", mp_bus_port_of(&b, 1), 1);
     check("2 GBAs of 3, board parent: slot 0 only", mp_bus_board_slots(&c), 0x1);
+    check("1 GBA, the fourth player: the board is 0-2", mp_bus_board_slots(&d), 0x7);
+    check("... and its GBA is slot 3, on port 1", mp_bus_port_of(&d, 3), 1);
 
     /* every layout */
     for (int players = 2; players <= 4; players++)
-        for (int locals = 1; locals < players && locals <= 3; locals++) {
-            layout(players, locals, false);
-            layout(players, locals, true);
-        }
+        for (int locals = 1; locals < players && locals <= 3; locals++)
+            for (int first = 0; first + locals <= players; first++)
+                layout(players, locals, first);
 
     /* the margins: an interrupt estimate 2 us off either way, slow GBAs */
-    const mp_bus_layout_t four = { 4, 1, false };
+    const mp_bus_layout_t four = { 4, 1, 0 };
     result_t r = run(&four, 1, 200, 1000, 12000, 600, 1500, -3000);
     check("the edge estimated 2 us early: still every word", r.bad_words + r.contention, 0);
     r = run(&four, 1, 200, 1000, 12000, 600, 1500, +1000);
     check("... 2 us late", r.bad_words + r.contention, 0);
-    const mp_bus_layout_t chain = { 4, 3, true };
+    const mp_bus_layout_t chain = { 4, 3, 1 };
     r = run(&chain, 3, 200, 30000, 60000, 600, 1500, -1000);
     check("GBAs slow to take their turn (30-60 us)", r.bad_words + r.contention + r.missed + r.late, 0);
 
@@ -386,7 +387,7 @@ int main(void) {
 
     /* a GBA missing from the chain: the board gives up on that turn, never
      * drives over anyone, and the next transfer still goes */
-    const mp_bus_layout_t gone = { 4, 3, false };
+    const mp_bus_layout_t gone = { 4, 3, 0 };
     r = run(&gone, 2, 20, 1000, 12000, 600, 1500, -1000);
     check("port 3 empty: its slot is missed", r.missed > 0 || r.late > 0, 1);
     check("... and nothing drives SD twice", r.contention, 0);

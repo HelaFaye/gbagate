@@ -21,6 +21,8 @@
 #define CMD_SETMODE 0x00
 #define CMD_CANCEL  0x01
 
+#define ST_AWAIT_MODE 0xFF02
+
 static bool due(uint32_t now, uint32_t when) {
     return (int32_t)(now - when) >= 0;
 }
@@ -44,6 +46,10 @@ static void command(celio_t *c, const uint8_t *cmd, size_t len) {
 }
 
 static void cancel_adapter(celio_t *c) {
+    if (c->multi) {
+        if (c->io.mp_command) c->io.mp_command(c->io.ctx, CMD_CANCEL, -1);
+        return;
+    }
     const uint8_t cmd = CMD_CANCEL;
     command(c, &cmd, 1);
 }
@@ -78,7 +84,15 @@ static void fail(celio_t *c, const char *why) {
 }
 
 void celio_start(celio_t *c, const celio_io_t *io, const char *session, uint32_t now_ms) {
+    celio_start_multi(c, io, session, 2, 1, now_ms);
+}
+
+void celio_start_multi(celio_t *c, const celio_io_t *io, const char *session,
+                       uint8_t players, uint8_t gbas, uint32_t now_ms) {
     memset(c, 0, sizeof *c);
+    c->players = players < 2 ? 2 : players > 4 ? 4 : players;
+    c->gbas = gbas < 1 ? 1 : gbas > 3 ? 3 : gbas;
+    c->multi = c->players > 2 || c->gbas > 1;
     c->io = *io;
     make_uuid(c, c->client_id);
     if (session && *session) {
@@ -182,7 +196,15 @@ static void enter_session(celio_t *c, uint32_t now) {
     if (c->joining) {
         char q[CELIO_SESSION_MAX * 6 + 3];
         json_quote(q, sizeof q, c->session);
-        l = snprintf(f, sizeof f, "42%lu[\"sessionJoin\",%s]", (unsigned long)c->enter_ack, q);
+        if (c->gbas > 1) {   /* only a board with several GBAs says so */
+            l = snprintf(f, sizeof f, "42%lu[\"sessionJoin\",{\"id\":%s,\"gbas\":%u}]",
+                         (unsigned long)c->enter_ack, q, (unsigned)c->gbas);
+        } else {
+            l = snprintf(f, sizeof f, "42%lu[\"sessionJoin\",%s]", (unsigned long)c->enter_ack, q);
+        }
+    } else if (c->multi) {
+        l = snprintf(f, sizeof f, "42%lu[\"sessionCreate\",{\"players\":%u,\"gbas\":%u}]",
+                     (unsigned long)c->enter_ack, (unsigned)c->players, (unsigned)c->gbas);
     } else {
         /* Celio-Client emits ("sessionCreate", undefined, cb): undefined is
          * serialised as null */
@@ -199,12 +221,16 @@ static void begin_link(celio_t *c, uint32_t now) {
     c->step = 0;
     c->deadline = now + CANCEL_MS;
     c->tx_seq = 0;
-    c->rx_seq = 0;
-    memset(c->held, 0, sizeof c->held);
+    memset(c->rx, 0, sizeof c->rx);
     memset(c->data_out, 0, sizeof c->data_out);
     c->status_head = c->status_count = 0;
     c->status_inflight = false;
     c->status_tries = 0;
+    if (c->multi) {
+        /* no firmware to start: ask for a role, as it would on SetMode */
+        c->state = CELIO_LINKED;
+        celio_on_status(c, ST_AWAIT_MODE, now);
+    }
 }
 
 static void on_enter_reply(celio_t *c, json_t args, uint32_t now) {
@@ -222,6 +248,12 @@ static void on_enter_reply(celio_t *c, json_t args, uint32_t now) {
             return;
         }
         strcpy(c->session, sid);
+        json_t pl;
+        int64_t n;
+        if (json_get(val, "players", &pl) && json_int(pl, &n) && n >= 2 && n <= 4) {
+            c->players = (uint8_t)n;   /* the joiner learns it here */
+        }
+        c->multi = c->players > 2 || c->gbas > 1;
         bool is_full = json_get(val, "full", &full) && json_type(full) == JSON_TRUE;
         if (c->joining || is_full) {
             begin_link(c, now);   /* the partner is already in */
@@ -265,25 +297,35 @@ static void on_command(celio_t *c, json_t arg) {
         return;
     }
     const uint8_t cmd = (uint8_t)v;
+    if (c->multi) {
+        json_t idv;
+        int64_t id = -1;
+        if (!json_get(arg, "id", &idv) || !json_int(idv, &id) || id < 0 || id > 3) id = -1;
+        if (c->io.mp_command) c->io.mp_command(c->io.ctx, cmd, (int)id);
+        return;
+    }
     command(c, &cmd, 1);
 }
 
-static void to_adapter(celio_t *c, const uint8_t data[64]) {
-    if (c->io.gbl_data) {
+static void to_adapter(celio_t *c, uint8_t from, const uint8_t data[64]) {
+    if (c->multi) {
+        if (c->io.mp_data) c->io.mp_data(c->io.ctx, from, data);
+    } else if (c->io.gbl_data) {
         c->io.gbl_data(c->io.ctx, data);
     }
     c->received++;
 }
 
-static void flush_held(celio_t *c) {
+static void flush_held(celio_t *c, uint8_t from) {
+    struct celio_rx *r = &c->rx[from];
     for (;;) {
-        int slot = (int)(c->rx_seq % CELIO_REORDER);
-        if (!c->held[slot] || c->held_seq[slot] != c->rx_seq) {
+        int slot = (int)(r->rx_seq % CELIO_REORDER);
+        if (!r->held[slot] || r->held_seq[slot] != r->rx_seq) {
             return;
         }
-        c->held[slot] = false;
-        to_adapter(c, c->held_data[slot]);
-        c->rx_seq++;
+        r->held[slot] = false;
+        to_adapter(c, from, r->held_data[slot]);
+        r->rx_seq++;
     }
 }
 
@@ -292,22 +334,23 @@ static void flush_held(celio_t *c) {
  * Held packets always lie in [rx_seq, rx_seq + CELIO_REORDER), so each has a
  * slot of its own.
  */
-static void deliver(celio_t *c, uint32_t seq, const uint8_t data[64]) {
-    uint32_t ahead = seq - c->rx_seq;
+static void deliver(celio_t *c, uint8_t from, uint32_t seq, const uint8_t data[64]) {
+    struct celio_rx *r = &c->rx[from];
+    uint32_t ahead = seq - r->rx_seq;
     if ((int32_t)ahead < 0) {
         c->duplicates++;
         return;
     }
     int slot = (int)(seq % CELIO_REORDER);
-    if (ahead && c->held[slot] && c->held_seq[slot] == seq) {
+    if (ahead && r->held[slot] && r->held_seq[slot] == seq) {
         c->duplicates++;
         return;
     }
     if (ahead >= 2 * CELIO_REORDER) {
         /* Far ahead: everything between is gone. Start again from here. */
         c->dropped += ahead;
-        memset(c->held, 0, sizeof c->held);
-        c->rx_seq = seq;
+        memset(r->held, 0, sizeof r->held);
+        r->rx_seq = seq;
         ahead = 0;
     }
     while (ahead >= CELIO_REORDER) {
@@ -318,19 +361,19 @@ static void deliver(celio_t *c, uint32_t seq, const uint8_t data[64]) {
          * seq itself is not held, so this stops at or before it.
          */
         c->dropped++;
-        c->rx_seq++;
-        flush_held(c);
-        ahead = seq - c->rx_seq;
+        r->rx_seq++;
+        flush_held(c, from);
+        ahead = seq - r->rx_seq;
     }
     if (ahead == 0) {
-        to_adapter(c, data);
-        c->rx_seq++;
-        flush_held(c);
+        to_adapter(c, from, data);
+        r->rx_seq++;
+        flush_held(c, from);
         return;
     }
-    c->held[slot] = true;
-    c->held_seq[slot] = seq;
-    memcpy(c->held_data[slot], data, 64);
+    r->held[slot] = true;
+    r->held_seq[slot] = seq;
+    memcpy(r->held_data[slot], data, 64);
 }
 
 static void on_data_packet(celio_t *c, json_t pkt) {
@@ -348,8 +391,19 @@ static void on_data_packet(celio_t *c, json_t pkt) {
         out[i * 2] = (uint8_t)v;          /* words are & 0xFFFF'd by the sender */
         out[i * 2 + 1] = (uint8_t)(v >> 8);
     }
+    /* a Multi-Play session's packets say whose they are; each sender keeps
+     * its own order */
+    uint8_t from = 0;
+    json_t fr;
+    int64_t f;
+    if (c->multi) {
+        if (!json_get(pkt, "from", &fr) || !json_int(fr, &f) || f < 0 || f >= CELIO_SENDERS) {
+            return;   /* whose? it cannot go in a slot */
+        }
+        from = (uint8_t)f;
+    }
     if (c->state == CELIO_LINKED) {
-        deliver(c, (uint32_t)seq, out);
+        deliver(c, from, (uint32_t)seq, out);
     }
 }
 

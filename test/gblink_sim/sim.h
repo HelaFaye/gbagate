@@ -28,13 +28,15 @@ enum {
                               * status lo hi, u32 up down lost reconnects
                               * resent given_up max_rtt_ms,
                               * session NUL, error NUL]                     */
-    SIM_EV_PRINTER     = 14  /* the board's printer, on a 'p' ep 2 record:
+    SIM_EV_PRINTER     = 14, /* the board's printer, on a 'p' ep 2 record:
                               * [u32 packets rows pictures aborts lost,
                               * u16 status, u32 sum of the shades]          */
+    SIM_EV_MP4         = 15  /* the Multi-Play bus, on an 'm' record (sim_mp4.c) */
 };
 
 void sim_emit(char kind, uint8_t ep, const uint8_t *data, size_t len);
 void sim_event(uint8_t code, const void *data, size_t len);
+void sim_mp4_report(void);
 void sim_storage_init(const char *path);
 
 /* sim_gba.c */

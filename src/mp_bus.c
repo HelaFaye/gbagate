@@ -5,7 +5,8 @@
 
 bool mp_bus_layout_ok(const mp_bus_layout_t *l) {
     return l->players >= 2 && l->players <= 4 &&
-           l->locals >= 1 && l->locals <= MPB_MAX_PORTS && l->locals < l->players;
+           l->locals >= 1 && l->locals <= MPB_MAX_PORTS && l->locals < l->players &&
+           l->first + l->locals <= l->players;
 }
 
 uint8_t mp_bus_board_slots(const mp_bus_layout_t *l) {
@@ -16,8 +17,7 @@ uint8_t mp_bus_board_slots(const mp_bus_layout_t *l) {
 }
 
 int mp_bus_port_of(const mp_bus_layout_t *l, int slot) {
-    if (l->parent) return slot >= 1 && slot <= l->locals ? slot : 0;
-    return slot < l->locals ? slot + 1 : 0;
+    return slot >= l->first && slot < l->first + l->locals ? slot - l->first + 1 : 0;
 }
 
 static bool before(uint32_t a, uint32_t b) { return (int32_t)(a - b) < 0; }
@@ -101,6 +101,7 @@ static void rest_of_transfer(const mp_bus_hal_t *h, const mp_bus_layout_t *l, in
             rx[k] = tx[k];
         } else {                                       /* a GBA on the chain */
             uint32_t te;
+            if (!prev_port) h->so_out(h->ctx, false);  /* after ours: its turn */
             if (!wait_start(h, t_end + T(h, MPB_NS_SLOT_TIMEOUT), &te)) {
                 if (st) st->missed_slots++;
                 return;                                /* it holds the turn: the rest cannot go */
@@ -130,7 +131,8 @@ void mp_bus_parent(const mp_bus_hal_t *h, const mp_bus_layout_t *l,
     h->sc_out(h->ctx, true);                           /* busy */
     const uint32_t t_end = send_word(h, tx[0], t0);
     rx[0] = tx[0];
-    h->so_out(h->ctx, false);                          /* port 1's turn */
+    /* our other slots before the GBAs back to back; the turn passes to
+     * port 1 just before its GBA's slot */
     rest_of_transfer(h, l, 1, 0, t_end, tx, rx, st);
     h->so_out(h->ctx, true);
     h->wait_until(h->ctx, h->now(h->ctx) + T(h, MPB_NS_MASTER_HOLD));
@@ -140,7 +142,7 @@ void mp_bus_parent(const mp_bus_hal_t *h, const mp_bus_layout_t *l,
 
 void mp_bus_idle(const mp_bus_hal_t *h, const mp_bus_layout_t *l) {
     h->sd_out(h->ctx, false, true);
-    if (l->parent) {
+    if (mp_bus_is_parent(l)) {
         h->so_out(h->ctx, true);
         h->sc_out(h->ctx, false);
     } else {

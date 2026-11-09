@@ -26,23 +26,33 @@ leaves a two-player session exactly as it was on the wire.
   a player carries its `id`. A board asking again keeps its ID.
 - The handshake starts only when the session is full and every player has
   one, and for all of them; ConnectLink goes to all the others.
+- A board may bring several GBAs (up to three on one cable): sessionCreate
+  and sessionJoin take `gbas` (sessionJoin as {id, gbas}; a bare id, as
+  today, is one). `players` counts GBAs, a session is full when its
+  clients' GBAs fill it, and a join that does not fit is refused. Such a
+  board's link ID is the first of its slots, which follow in a row: a
+  three-GBA board ready first has 0-2 and the fourth player gets 3. The
+  reply to create and join says `gbas` too.
 - Each player's data goes to every other player, through each receiver's
   own PipelinedSender, deduplicated by sequence per sender as before. In a
   session of more than two each packet carries `from`, the sender's link
   ID, so a receiver can put each word in its Multi-Play slot and keep each
   sender's order; a two-player session's packets are unchanged.
 
-test/session.test.ts (new, 16 tests): the options; a two-player session as
+test/session.test.ts (new, 24 tests): the options; a two-player session as
 before (roles, no link IDs, packets unchanged); a four-player session: full
 at four and a fifth refused, told only when complete, one parent and three
 children with their link IDs (kept on a repeat), no handshake until all
 four, ConnectLink to the other three, every player's data to the other
 three once and in order marked with the sender's link ID, a leave before
-and after the start. The three two-player tests pass with and without the
-change; the other 13 fail without it.
+and after the start; boards with several GBAs: the options, room counted in
+GBAs, a join that does not fit refused, link IDs as first slots (3 + 1,
+1 + 2 + 1), data marked with them, the handshake waiting for every board.
+The three two-player tests pass with and without the change; the other 21
+fail without it.
 
 diff --git a/src/client.ts b/src/client.ts
-index 2747e56..ab47290 100644
+index 2747e56..731fa98 100644
 --- a/src/client.ts
 +++ b/src/client.ts
 @@ -3,7 +3,7 @@ import {ErrorType, SessionManager} from "./sessionManager.js";
@@ -50,7 +60,7 @@ index 2747e56..ab47290 100644
  import {v4 as uuidv4} from 'uuid';
  import {err} from 'true-myth/result';
 -import {AckFn, isAckFn, isSessionId} from "./messages/validation.js";
-+import {AckFn, isAckFn, isSessionId, sessionCreatePlayers } from "./messages/validation.js";
++import {AckFn, isAckFn, sessionCreateOptions, sessionJoinRequest } from "./messages/validation.js";
  
  /**
   * An emit ran out of retries because the client is disconnected. Removing the client is up to the disconnect
@@ -65,45 +75,93 @@ index 2747e56..ab47290 100644
                  return;
              }
 -            const sessionState = this.sessionManager.createSession(this);
-+            const players = sessionCreatePlayers(options);
-+            if (players === undefined) {
++            const create = sessionCreateOptions(options);
++            if (create === undefined) {
 +                console.warn('Client ' + this.clientId + ' sent sessionCreate with invalid options');
 +                responseHandler(err(ErrorType.InvalidRequest));
 +                return;
 +            }
-+            const sessionState = this.sessionManager.createSession(this, players);
++            const sessionState = this.sessionManager.createSession(this, create.players, create.gbas);
              if (sessionState.isOk) console.log('Client ' + this.clientId + ` created session with id ` + sessionState.value.id);
              responseHandler(sessionState);
          },
+@@ -45,13 +51,14 @@ export class Client {
+                 console.warn('Client ' + this.clientId + ' sent sessionJoin without ack callback');
+                 return;
+             }
+-            if (!isSessionId(sessionId)) {
++            const join = sessionJoinRequest(sessionId);
++            if (join === undefined) {
+                 console.warn('Client ' + this.clientId + ' sent sessionJoin with invalid session id');
+                 responseHandler(err(ErrorType.InvalidRequest));
+                 return;
+             }
+-            console.log(this.clientId + ` Client wants to join session ` + sessionId);
+-            const sessionState = this.sessionManager.enterSession(this, sessionId);
++            console.log(this.clientId + ` Client wants to join session ` + join.id);
++            const sessionState = this.sessionManager.enterSession(this, join.id, join.gbas);
+             responseHandler(sessionState);
+         },
+ 
 diff --git a/src/messages/validation.ts b/src/messages/validation.ts
-index 24c0a8d..e86037d 100644
+index 24c0a8d..dd8723a 100644
 --- a/src/messages/validation.ts
 +++ b/src/messages/validation.ts
-@@ -28,6 +28,22 @@ export function isSessionId(value: unknown): value is string {
+@@ -28,6 +28,52 @@ export function isSessionId(value: unknown): value is string {
      return typeof value === "string" && /^\d{4}$/.test(value);
  }
  
 +export const MIN_PLAYERS = 2;
 +export const MAX_PLAYERS = 4;
 +
++/** How many GBAs a client brings: one, or up to three on one board's cable. */
++function gbasOf(value: Record<string, unknown>): number | undefined {
++    if (value.gbas === undefined) return 1;
++    const gbas = value.gbas;
++    if (!Number.isInteger(gbas) || (gbas as number) < 1 || (gbas as number) > MAX_PLAYERS - 1) return undefined;
++    return gbas as number;
++}
++
 +/**
-+ * The options a client may pass with sessionCreate. Older clients pass nothing (or null): a two-player session.
-+ * Returns the player count, or undefined if the options are invalid.
++ * The options a client may pass with sessionCreate: {players: 2..4, gbas: 1..3}. `players` counts GBAs, the
++ * link's units; `gbas` is how many of them this client brings (one board with up to three on its cable). Older
++ * clients pass nothing (or null): two players, one GBA each. Returns undefined if the options are invalid.
 + */
-+export function sessionCreatePlayers(value: unknown): number | undefined {
-+    if (value === undefined || value === null) return MIN_PLAYERS;
++export function sessionCreateOptions(value: unknown): { players: number, gbas: number } | undefined {
++    if (value === undefined || value === null) return { players: MIN_PLAYERS, gbas: 1 };
 +    if (!isRecord(value)) return undefined;
-+    if (value.players === undefined) return MIN_PLAYERS;
-+    const players = value.players;
-+    if (!Number.isInteger(players) || (players as number) < MIN_PLAYERS || (players as number) > MAX_PLAYERS) return undefined;
-+    return players as number;
++    let players = MIN_PLAYERS;
++    if (value.players !== undefined) {
++        if (!Number.isInteger(value.players) || (value.players as number) < MIN_PLAYERS
++            || (value.players as number) > MAX_PLAYERS) return undefined;
++        players = value.players as number;
++    }
++    const gbas = gbasOf(value);
++    if (gbas === undefined || gbas >= players) return undefined;   // someone else must be able to join
++    return { players, gbas };
++}
++
++/** The players a session is created for (sessionCreateOptions without the GBAs). */
++export function sessionCreatePlayers(value: unknown): number | undefined {
++    return sessionCreateOptions(value)?.players;
++}
++
++/**
++ * What a client may pass with sessionJoin: the session's id, as clients always have, or {id, gbas} from a client
++ * bringing several GBAs. Returns undefined if it is invalid.
++ */
++export function sessionJoinRequest(value: unknown): { id: string, gbas: number } | undefined {
++    if (isSessionId(value)) return { id: value, gbas: 1 };
++    if (!isRecord(value) || !isSessionId(value.id)) return undefined;
++    const gbas = gbasOf(value);
++    return gbas === undefined ? undefined : { id: value.id, gbas };
 +}
 +
  export function isClientId(value: unknown): value is string {
      return typeof value === "string" && value.length > 0 && value.length <= 64;
  }
 diff --git a/src/session.ts b/src/session.ts
-index c83ac79..f8e2c00 100644
+index c83ac79..72deead 100644
 --- a/src/session.ts
 +++ b/src/session.ts
 @@ -16,11 +16,13 @@ type DataArray = [
@@ -124,11 +182,20 @@ index c83ac79..f8e2c00 100644
  
  class ClientState {
      public status: LinkStatus = LinkStatus.Empty;
-+    // Multi-Play link ID, in sessions of more than two: 0 for the parent GBA, 1-3 for the children
++    // Multi-Play link ID, in sessions of more than two: the first slot of this client's GBAs (0 for the parent's)
 +    public linkId?: number;
      public subscription: Subscription = new Subscription();
      // Sequence numbers of data packets received from this client, to drop duplicates from retries
      public receivedSequences: Set<number> = new Set();
+@@ -37,7 +41,7 @@ class ClientState {
+     public commands$: Subject<CommandPacket> = new Subject<CommandPacket>();
+ 
+     // Data packets to this client, one emit per item. Each receiver has its own sender, so a slow client only delays itself.
+-    constructor(public dataSender: PipelinedSender<DataPacket[]>) {}
++    constructor(public dataSender: PipelinedSender<DataPacket[]>, public gbas: number = 1) {}
+ }
+ 
+ export class Session {
 @@ -46,6 +50,8 @@ export class Session {
  
      private masterSelected: boolean = false;
@@ -138,7 +205,7 @@ index c83ac79..f8e2c00 100644
      private receivedStati: Set<string> = new Set();
  
      private clients: Client[] = [];
-@@ -105,12 +111,15 @@ export class Session {
+@@ -105,12 +111,25 @@ export class Session {
                  receivedSequences.add(dataPacket.sequence);
                  newPackets.push(dataPacket);
              }
@@ -151,12 +218,22 @@ index c83ac79..f8e2c00 100644
 -    constructor(private sessionId: string) {}
 +    constructor(private sessionId: string, private players: number = 2) {}
 +
-+    /** How many players the session is for: 2 (one link cable) to 4 (a Multi-Play link). */
++    /** How many players the session is for, counted in GBAs: 2 (one link cable) to 4 (a Multi-Play link). */
 +    capacity(): number { return this.players; }
++
++    /** The GBAs its clients bring so far. */
++    private taken(): number {
++        let n = 0;
++        for (const state of this.clientState.values()) n += state.gbas;
++        return n;
++    }
++
++    /** Can a client with this many GBAs join? */
++    hasRoomFor(gbas: number): boolean { return this.taken() + gbas <= this.players; }
  
      /**
       * Check if the session has started, meaning the first status packet has been received.
-@@ -118,8 +127,8 @@ export class Session {
+@@ -118,8 +137,8 @@ export class Session {
       */
      hasStarted(): boolean { return this.started; }
  
@@ -167,7 +244,7 @@ index c83ac79..f8e2c00 100644
      }
  
      private handleStatusMessage(client: Client, statusPacket: StatusPacket): void {
-@@ -130,7 +139,16 @@ export class Session {
+@@ -130,7 +149,19 @@ export class Session {
  
          switch (statusPacket.linkStatus) {
              case LinkStatus.AwaitMode:
@@ -176,8 +253,11 @@ index c83ac79..f8e2c00 100644
 +                    // A Multi-Play link has one parent GBA and up to three children. In GB-Link's terms the board
 +                    // of the parent answers as the children (SetModeSlave) and each child's board drives the
 +                    // link as the parent (SetModeMaster). The first ready is the parent; a board asking again
-+                    // keeps its ID.
-+                    if (clientState.linkId === undefined) clientState.linkId = this.nextLinkId++;
++                    // keeps its ID. A board with several GBAs takes as many slots, in a row: its ID is the first.
++                    if (clientState.linkId === undefined) {
++                        clientState.linkId = this.nextLinkId;
++                        this.nextLinkId += clientState.gbas;
++                    }
 +                    this.sendCommand(client, clientState.linkId === 0 ? CommandType.SetModeSlave : CommandType.SetModeMaster,
 +                                     clientState.linkId);
 +                }
@@ -185,7 +265,7 @@ index c83ac79..f8e2c00 100644
                      this.sendCommand(client, CommandType.SetModeMaster);
                      this.masterSelected = true;
                  }
-@@ -146,12 +164,14 @@ export class Session {
+@@ -146,12 +177,14 @@ export class Session {
              case LinkStatus.HandshakeReceived:
                  clientState.status = LinkStatus.HandshakeReceived;
  
@@ -203,7 +283,7 @@ index c83ac79..f8e2c00 100644
                  }
                  break
  
-@@ -161,7 +181,7 @@ export class Session {
+@@ -161,7 +194,7 @@ export class Session {
  
              case LinkStatus.LinkConnected:
                  clientState.status = LinkStatus.LinkConnected;
@@ -212,16 +292,16 @@ index c83ac79..f8e2c00 100644
                  break;
  
              case LinkStatus.LinkReconnecting:
-@@ -196,7 +216,7 @@ export class Session {
+@@ -196,7 +229,7 @@ export class Session {
       * @returns {boolean} - true if the session is full, false otherwise.
       */
      isFull(): boolean {
 -        return this.clients.length >= 2;
-+        return this.clients.length >= this.players;
++        return this.taken() >= this.players;
      }
  
      /**
-@@ -208,13 +228,15 @@ export class Session {
+@@ -208,13 +241,15 @@ export class Session {
      }
  
      /**
@@ -232,15 +312,25 @@ index c83ac79..f8e2c00 100644
 +     * @returns the client's slot, or -1 if the session is full
       */
 -    enter(client: Client) : boolean {
-+    enter(client: Client) : number {
-         if (this.isFull()) {
+-        if (this.isFull()) {
++    enter(client: Client, gbas: number = 1) : number {
++        if (!this.hasRoomFor(gbas)) {
              console.warn("Session is full");
 -            return false;
 +            return -1;
          }
          this.clients.push(client);
          const clientState = new ClientState(new PipelinedSender<DataPacket[]>(dataPackets =>
-@@ -246,9 +268,14 @@ export class Session {
+@@ -224,7 +259,7 @@ export class Session {
+                     console.error("Ack failed after retries:", err);
+                     this.evict();
+                 })
+-        ));
++        ), gbas);
+         this.clientState.set(client, clientState);
+         clientState.subscription.add(() => clientState.dataSender.close());
+         clientState.subscription.add(clientState.commands$.pipe(
+@@ -246,9 +281,14 @@ export class Session {
                  }
              }));
          });
@@ -257,7 +347,7 @@ index c83ac79..f8e2c00 100644
      }
  
      /**
-@@ -266,7 +293,7 @@ export class Session {
+@@ -266,7 +306,7 @@ export class Session {
              this.removeClient(client);
              this.evict();
          } else {
@@ -266,7 +356,7 @@ index c83ac79..f8e2c00 100644
              this.removeClient(client);
          }
      }
-@@ -296,19 +323,15 @@ export class Session {
+@@ -296,19 +336,15 @@ export class Session {
      }
  
      /**
@@ -292,7 +382,7 @@ index c83ac79..f8e2c00 100644
          }
      }
  
-@@ -317,30 +340,37 @@ export class Session {
+@@ -317,30 +353,37 @@ export class Session {
       * @param client
       * @param command
       */
@@ -346,28 +436,29 @@ index c83ac79..f8e2c00 100644
 \ No newline at end of file
 +}
 diff --git a/src/sessionManager.ts b/src/sessionManager.ts
-index 8f523f1..9634a41 100644
+index 8f523f1..3d29a78 100644
 --- a/src/sessionManager.ts
 +++ b/src/sessionManager.ts
-@@ -14,6 +14,8 @@ export enum ErrorType {
+@@ -14,6 +14,9 @@ export enum ErrorType {
  interface SessionState {
      id: string;
      full: boolean;
-+    players: number;    // the session's size, 2 to 4
++    players: number;    // the session's size in GBAs, 2 to 4
 +    slot: number;       // this client's place in it, 0 = the one who created it
++    gbas: number;       // the GBAs this client brings
  }
  
  export class SessionManager {
-@@ -21,7 +23,7 @@ export class SessionManager {
+@@ -21,7 +24,7 @@ export class SessionManager {
      private sessions: Map<string, Session> = new Map();
      private clientToSession: Map<Client, string> = new Map();
  
 -    createSession(client: Client) :  Result<SessionState, ErrorType> {
-+    createSession(client: Client, players: number = 2) :  Result<SessionState, ErrorType> {
++    createSession(client: Client, players: number = 2, gbas: number = 1) :  Result<SessionState, ErrorType> {
          if (this.clientToSession.has(client)) return err(ErrorType.AlreadyExists);
  
          let sessionId: string = ""
-@@ -30,7 +32,7 @@ export class SessionManager {
+@@ -30,7 +33,7 @@ export class SessionManager {
              sessionId = sessionIdRaw.toString().padStart(4, "0");
          } while (this.sessions.has(sessionId));
  
@@ -376,29 +467,46 @@ index 8f523f1..9634a41 100644
  
          session.close$
              .pipe(take(1))
-@@ -54,8 +56,8 @@ export class SessionManager {
+@@ -40,22 +43,22 @@ export class SessionManager {
+             });
+ 
+         this.sessions.set(sessionId, session);
+-        return this.enterSession(client, sessionId);
++        return this.enterSession(client, sessionId, gbas);
+     }
+ 
+-    enterSession(client: Client, sessionId: string) : Result<SessionState, ErrorType> {
++    enterSession(client: Client, sessionId: string, gbas: number = 1) : Result<SessionState, ErrorType> {
+         const session = this.findSession(sessionId)
+         if (!session) {
+             console.warn('Client ' + client.id() + ' tried to join session with id ' + sessionId + ' which does not exist');
+             return err(ErrorType.NotFound);
+         }
+-        if (session.isFull()) {
++        if (!session.hasRoomFor(gbas)) {
+             console.warn('Client ' + client.id() + ' tried to join session with id ' + sessionId + ' which is full');
              return err(ErrorType.SessionFull);
          }
          this.clientToSession.set(client, sessionId);
 -        session.enter(client);
 -        return ok({id: sessionId, full: session.isFull()});
-+        const slot = session.enter(client);
-+        return ok({id: sessionId, full: session.isFull(), players: session.capacity(), slot});
++        const slot = session.enter(client, gbas);
++        return ok({id: sessionId, full: session.isFull(), players: session.capacity(), slot, gbas});
      }
  
      leaveSession(client: Client)  {
 diff --git a/test/session.test.ts b/test/session.test.ts
 new file mode 100644
-index 0000000..1345de6
+index 0000000..4d97abd
 --- /dev/null
 +++ b/test/session.test.ts
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,276 @@
 +import {describe, expect, test} from "vitest";
 +import {Subject} from "rxjs";
 +import {Session} from "../src/session.js";
 +import {SessionManager} from "../src/sessionManager.js";
 +import {CommandType, LinkStatus} from "../src/messages/gameboy.js";
-+import {sessionCreatePlayers} from "../src/messages/validation.js";
++import {sessionCreateOptions, sessionCreatePlayers, sessionJoinRequest} from "../src/messages/validation.js";
 +
 +// A client as the session sees it: its emits are recorded and acked at once, and the test plays its events.
 +class FakeClient {
@@ -582,5 +690,90 @@ index 0000000..1345de6
 +        session.leave(clients[1] as any);
 +        for (const i of [0, 2, 3]) expect(clients[i].sessionEvents.at(-1)).toBe("sessionClose");
 +        expect(session.isEmpty()).toBe(true);
++    });
++});
++
++describe("a board bringing several GBAs", () => {
++    test("create and join take how many GBAs a client brings", () => {
++        expect(sessionCreateOptions({players: 4, gbas: 3})).toEqual({players: 4, gbas: 3});
++        expect(sessionCreateOptions({players: 4})).toEqual({players: 4, gbas: 1});
++        expect(sessionCreateOptions(null)).toEqual({players: 2, gbas: 1});
++        expect(sessionJoinRequest("1234")).toEqual({id: "1234", gbas: 1});
++        expect(sessionJoinRequest({id: "1234", gbas: 2})).toEqual({id: "1234", gbas: 2});
++    });
++    test("a creator must leave room for someone else, and bad counts are refused", () => {
++        for (const bad of [{players: 4, gbas: 4}, {players: 2, gbas: 2}, {players: 4, gbas: 0}, {players: 4, gbas: 1.5}, {players: 4, gbas: "2"}])
++            expect(sessionCreateOptions(bad)).toBeUndefined();
++        for (const bad of [{id: "1234", gbas: 4}, {id: "12", gbas: 1}, {gbas: 1}, 1234])
++            expect(sessionJoinRequest(bad)).toBeUndefined();
++    });
++
++    function boards(...gbas: number[]) {
++        const session = new Session("1234", gbas.reduce((a, b) => a + b, 0));
++        const clients = gbas.map((_, i) => new FakeClient("b" + i));
++        clients.forEach((c, i) => session.enter(c as any, gbas[i]));
++        return {session, clients};
++    }
++
++    test("the session is full when the GBAs fill it, not the clients", () => {
++        const session = new Session("1234", 4);
++        session.enter(new FakeClient("a") as any, 3);
++        expect(session.isFull()).toBe(false);
++        expect(session.hasRoomFor(2)).toBe(false);
++        expect(session.hasRoomFor(1)).toBe(true);
++        session.enter(new FakeClient("b") as any, 1);
++        expect(session.isFull()).toBe(true);
++    });
++
++    test("the manager refuses a join with more GBAs than there is room for", () => {
++        const m = new SessionManager();
++        const a = new FakeClient("a"), b = new FakeClient("b"), c = new FakeClient("c");
++        const made = m.createSession(a as any, 4, 2);
++        expect(made.isOk && made.value.gbas).toBe(2);
++        const id = made.isOk ? made.value.id : "";
++        expect(m.enterSession(b as any, id, 3).isErr).toBe(true);
++        const joined = m.enterSession(c as any, id, 2);
++        expect(joined.isOk && joined.value.full).toBe(true);
++    });
++
++    test("each board's link ID is the first of its slots: 3 + 1", async () => {
++        const {clients} = boards(3, 1);
++        clients[0].status(LinkStatus.AwaitMode);
++        clients[1].status(LinkStatus.AwaitMode);
++        await flush();
++        expect(clients[0].commands()).toEqual([CommandType.SetModeSlave]);   // its GBA on port 1 is the parent
++        expect(clients[0].commandIds()).toEqual([0]);
++        expect(clients[1].commands()).toEqual([CommandType.SetModeMaster]);
++        expect(clients[1].commandIds()).toEqual([3]);
++    });
++
++    test("1 + 2 + 1, the two-GBA board ready first", async () => {
++        const {clients} = boards(1, 2, 1);
++        for (const i of [1, 0, 2]) clients[i].status(LinkStatus.AwaitMode);
++        await flush();
++        expect(clients.map(c => c.commandIds())).toEqual([[2], [0], [3]]);
++        expect(clients.map(c => c.commands()[0])).toEqual([CommandType.SetModeMaster, CommandType.SetModeSlave, CommandType.SetModeMaster]);
++    });
++
++    test("data is marked with the sender's first slot", async () => {
++        const {clients} = boards(3, 1);
++        clients[0].status(LinkStatus.AwaitMode);
++        clients[1].status(LinkStatus.AwaitMode);
++        clients[1].data(0);
++        clients[0].data(0);
++        await flush();
++        expect(clients[0].packets().map(p => p.from)).toEqual([3]);
++        expect(clients[1].packets().map(p => p.from)).toEqual([0]);
++    });
++
++    test("the handshake waits for every board, then goes to all", async () => {
++        const {clients} = boards(3, 1);
++        for (const c of clients) c.status(LinkStatus.AwaitMode);
++        clients[0].status(LinkStatus.HandshakeReceived);
++        await flush();
++        expect(clients[0].commands()).not.toContain(CommandType.StartHandshake);
++        clients[1].status(LinkStatus.HandshakeReceived);
++        await flush();
++        for (const c of clients) expect(c.commands()).toContain(CommandType.StartHandshake);
 +    });
 +});

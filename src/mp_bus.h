@@ -13,16 +13,19 @@
  *
  * The chain on the carrier: board SO -> port 1 SI, port 1 SO -> port 2 SI,
  * port 2 SO -> port 3 SI, and the board reads every port's SO (SI1..SI3).
- * Local GBAs fill ports 1..locals in order, and the board answers every
- * other slot. So the board's slots are either the ones after the last
- * local GBA (a local GBA is the parent), or slot 0 and those after
- * (a remote player is the parent and the board stands in for it):
+ * Local GBAs fill ports 1..locals in order and take slots in a row from
+ * `first`; the board answers every other slot. With first = 0 a local GBA
+ * is the parent and the board's slots are the ones after the last local
+ * GBA. With first > 0 a remote player is the parent, and the board stands
+ * in for it and for any players before the local GBAs, then answers the
+ * ones after:
  *
- *   local parent   slot 0 port 1, 1 port 2, ...; board: locals..players-1
- *   remote parent  board: 0; slot 1 port 1, ...; board: locals+1..players-1
+ *   first 0   slot 0 port 1, 1 port 2, ...;     board: locals..players-1
+ *   first 3   board: 0, 1, 2; slot 3 port 1
+ *   first 1   board: 0; slot 1 port 1, ...;     board: 1+locals..players-1
  *
- * When the board answers two slots in a row it sends them back to back, as
- * two GBAs would.
+ * When the board answers slots in a row it sends them back to back, as that
+ * many GBAs would, and passes the turn (its SO low) only before a GBA's.
  *
  * Pins and time come through mp_bus_hal_t, so the same code runs in the
  * ESP32-S3's interrupt and against test/test_mpbus.c's model of real GBAs.
@@ -68,12 +71,15 @@ typedef struct {
 
 typedef struct {
     uint8_t players;    /* on the link, 2..4                                 */
-    uint8_t locals;     /* GBAs on this board's chain, ports 1..locals, 0..3 */
-    bool    parent;     /* the board is slot 0 (a remote player is parent)   */
+    uint8_t locals;     /* GBAs on this board's chain, ports 1..locals, 1..3 */
+    uint8_t first;      /* the slot of port 1's GBA; 0: it is the parent     */
 } mp_bus_layout_t;
 
+/* Is the board the parent (standing in for a remote one)? */
+static inline bool mp_bus_is_parent(const mp_bus_layout_t *l) { return l->first > 0; }
+
 /* Is the layout one the chain can carry: 2..4 players, 1..3 GBAs on the
- * chain, and at least one slot left for the board. */
+ * chain in slots that exist, and at least one slot left for the board. */
 bool mp_bus_layout_ok(const mp_bus_layout_t *l);
 
 /* The slots the board answers, as a bit mask; the rest are local GBAs'. */
@@ -98,14 +104,15 @@ void mp_bus_child(const mp_bus_hal_t *h, const mp_bus_layout_t *l, uint32_t t_sc
                   const uint16_t tx[4], uint16_t rx[4], mp_bus_stats_t *st);
 
 /*
- * The board is the parent: one whole transfer, SC and the first word
- * ours, then each local GBA's and the board's other slots in turn.
+ * The board is the parent (first > 0): one whole transfer, SC and the
+ * slots before the local GBAs ours, then each GBA's, then the board's other
+ * slots, in turn.
  */
 void mp_bus_parent(const mp_bus_hal_t *h, const mp_bus_layout_t *l,
                    const uint16_t tx[4], uint16_t rx[4], mp_bus_stats_t *st);
 
-/* At rest between transfers: SO low for a local parent (port 1's GBA sees
- * SI low), high when the board is parent; SD let go; SC let go or high. */
+/* At rest between transfers: SO low when port 1's GBA is the parent (it
+ * sees SI low), high when the board is; SD let go; SC let go or high. */
 void mp_bus_idle(const mp_bus_hal_t *h, const mp_bus_layout_t *l);
 
 #ifdef __cplusplus

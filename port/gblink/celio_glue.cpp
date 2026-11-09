@@ -20,6 +20,7 @@
 
 extern "C" {
 #include "celio.h"
+#include "mp_online.h"
 #include "gblink_port.h"
 #include "zshim.h"
 }
@@ -52,12 +53,27 @@ namespace
     {
         bool run;
         char session[CELIO_SESSION_MAX + 1];
+        uint8_t players, gbas;             // a Multi-Play link: src/mp_online.c
     };
     Wanted g_wanted;                       // under irq_lock
     std::atomic<uint32_t> g_wantedGen{0};
     std::atomic<uint32_t> g_doneGen{0};
 
     celio_t g_celio;                       // the thread's alone
+    mp_online_t g_mpo;                     // ... and its Multi-Play side
+
+    // The relay is shared with the link task (mp_link_next/done), on the
+    // other core: irq_lock is the shim's lock across both. Never nested.
+    unsigned g_relayKey;
+    void relayLock(void*) { g_relayKey = irq_lock(); }
+    void relayUnlock(void*) { irq_unlock(g_relayKey); }
+
+    bool mpBusStart(void*, const mp_bus_layout_t* l, mp_link_t* link) { return gblink_mp4_bus_start(l, link); }
+    void mpBusStop(void*) { gblink_mp4_bus_stop(); }
+    void mpStatus(void*, uint16_t s) { celio_on_status(&g_celio, s, k_uptime_get_32()); }
+    void mpDataOut(void*, const uint8_t d[64]) { celio_on_data(&g_celio, d, 64, k_uptime_get_32()); }
+    void mpCommand(void*, uint8_t cmd, int id) { mp_online_command(&g_mpo, g_celio.players, cmd, id); }
+    void mpData(void*, uint8_t from, const uint8_t d[64]) { mp_online_data(&g_mpo, from, d); }
     std::atomic<bool> g_running{false};
     std::atomic<bool> g_threadStarted{false};
     std::atomic<uint32_t> g_overlong{0};
@@ -130,7 +146,7 @@ namespace
         if (g_running)
         {
             g_running = false;
-            celio_stop(&g_celio);           // sessionLeft, Cancel
+            celio_stop(&g_celio);           // sessionLeft, Cancel (the bus, if multi)
             Transport::setLocalSink(nullptr, nullptr);
             gblink_celio_ws_connect(false);
         }
@@ -138,8 +154,10 @@ namespace
         k_msgq_purge(&g_texts);
         if (w.run)
         {
-            const celio_io_t io = { wsSend, injectCmd, injectData, rnd, nullptr };
-            celio_start(&g_celio, &io, w.session, k_uptime_get_32());
+            const celio_io_t io = { wsSend, injectCmd, injectData, rnd, nullptr, mpCommand, mpData };
+            const mp_online_io_t mio = { mpBusStart, mpBusStop, mpStatus, mpDataOut, relayLock, relayUnlock, nullptr };
+            mp_online_init(&g_mpo, &mio, w.players, w.gbas);
+            celio_start_multi(&g_celio, &io, w.session, w.players, w.gbas, k_uptime_get_32());
             Transport::setLocalSink(localSink, nullptr);
             g_running = true;
             gblink_celio_ws_connect(true);
@@ -175,12 +193,13 @@ namespace
             if (g_running)
             {
                 celio_tick(&g_celio, now);
+                if (g_celio.multi) mp_online_tick(&g_mpo);
                 publish();
             }
         }
     }
 
-    void request(bool run, const char* session)
+    void request(bool run, const char* session, uint8_t players = 2, uint8_t gbas = 1)
     {
         if (!g_threadStarted.exchange(true))
         {
@@ -191,6 +210,8 @@ namespace
         g_wanted.run = run;
         std::memset(g_wanted.session, 0, sizeof g_wanted.session);
         if (session) std::strncpy(g_wanted.session, session, CELIO_SESSION_MAX);
+        g_wanted.players = players;
+        g_wanted.gbas = gbas;
         const uint32_t gen = g_wantedGen.fetch_add(1) + 1;
         irq_unlock(key);
         k_sem_give(&g_wake);
@@ -204,6 +225,17 @@ extern "C" __attribute__((weak)) bool gblink_celio_ws_send(const char*, size_t) 
 extern "C" __attribute__((weak)) void gblink_celio_ws_connect(bool) {}
 
 extern "C" void gblink_celio_start(const char* session) { request(true, session); }
+
+extern "C" void gblink_celio_start_multi(const char* session, uint8_t players, uint8_t gbas)
+{
+    request(true, session, players, gbas);
+}
+
+// The link port as the Multi-Play bus: the board's link driver supplies it
+// (gba_link_esp32s3.c, on boards with the carrier's chain). Elsewhere there
+// is none, and a multi session cannot start its link.
+extern "C" __attribute__((weak)) bool gblink_mp4_bus_start(const mp_bus_layout_t*, mp_link_t*) { return false; }
+extern "C" __attribute__((weak)) void gblink_mp4_bus_stop(void) {}
 
 extern "C" void gblink_celio_stop(void)
 {

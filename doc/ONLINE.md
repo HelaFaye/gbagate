@@ -190,6 +190,7 @@ out.
 | Latency on each WiFi leg, above | `test_celio_latency.mjs`, `test_peer.py`, `test_gblink.py` |
 | Many players on one server: 4 and 8 players (2 and 4 sessions) at once on mixed lines, an intruder refused, nothing crossing between sessions; upstream and patched | `test/gblink_compat/test_celio_crowd.mjs` |
 | Four-player sessions (backport/Celio-Link-Server 0002): four clients on 2-600 ms lines through the real server, roles, handshake, every player's data to the other three, a fifth refused, a pair beside it unchanged | `test/gblink_compat/test_celio_4p.mjs` |
+| A Multi-Play link through the board's own client: a three-GBA board and a one-GBA board through the real server; every GBA hears every other, no checksum errors | `test/gblink_compat/test_celio_mp4.mjs` |
 | The patched server's own tests (vitest) and a strict type-check | `test/gblink_compat/run.sh` |
 | `/gblink` as a GB-Link host: SetMode over it, replies on it and nowhere else | `wifi_host_runs_a_link_mode` in `test/gblink_sim/test_gblink.py` |
 | Every Link: Online screen state | `test/test_screens.c` |

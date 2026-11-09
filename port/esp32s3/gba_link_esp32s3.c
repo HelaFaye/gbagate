@@ -69,6 +69,7 @@
 #include "link_phy.h"
 #include "link_proto.h"
 #include "gba_link_mp4.h"
+#include "mp_link.h"
 #include "mp_bus.h"
 
 static const char *TAG = "mp_phy";
@@ -533,7 +534,7 @@ bool gba_link_mp4_start(const mp_bus_layout_t *l, const gba_link_mp4_client_t *c
     s_mp4_client = *c;
     memset(&s_mp4_stats, 0, sizeof s_mp4_stats);
     xQueueReset(s_words4);
-    if (!l->parent) {                       /* stage the first answers */
+    if (!mp_bus_is_parent(l)) {             /* stage the first answers */
         words4_t tx;
         uint32_t unused;
         c->next(c->ctx, tx.w, &unused);
@@ -542,7 +543,7 @@ bool gba_link_mp4_start(const mp_bus_layout_t *l, const gba_link_mp4_client_t *c
     }
     /* a local parent: we answer as a child (SC in, SO held low); the board
      * as parent: SC and SO ours */
-    set_mode(OWNER_MP4, l->parent ? GBL_PHY_MASTER : GBL_PHY_SLAVE, false);
+    set_mode(OWNER_MP4, mp_bus_is_parent(l) ? GBL_PHY_MASTER : GBL_PHY_SLAVE, false);
     mp_bus_idle(&s_hal, l);
     return true;
 }
@@ -552,6 +553,15 @@ void gba_link_mp4_stop(void) {
 }
 
 void gba_link_mp4_stats(mp_bus_stats_t *out) { *out = s_mp4_stats; }
+
+/* The Celio client's Multi-Play bus (port/gblink/celio_glue.cpp): the relay
+ * behind mp_link as this driver's client. */
+bool gblink_mp4_bus_start(const mp_bus_layout_t *l, mp_link_t *link) {
+    const gba_link_mp4_client_t c = { mp_link_next, mp_link_done, link };
+    return gba_link_mp4_start(l, &c);
+}
+
+void gblink_mp4_bus_stop(void) { gba_link_mp4_stop(); }
 
 /*
  * GBAs on the chain, counted from port 1: a GBA's SO idles high, an empty

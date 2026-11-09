@@ -97,9 +97,11 @@ What remains is putting it on the board, in the table below.
 | The bus engine: the board's side of one transfer in every slot it answers, on the carrier's chain of up to three GBAs, as child (a local GBA is parent) or as parent (standing in for a remote one) | `src/mp_bus.c` | done, tested against modelled GBAs (`test/test_mpbus.c`); timing not yet on a scope |
 | The relay as the driver's client, with the remote parent's cadence | `src/mp_link.c` | done, tested with the engine through the handshake and a frame |
 | The ESP32-S3 driver's four-player mode: the engine in the SC interrupt (child) or the link task (parent), the chain's presence probe | `port/esp32s3/gba_link_esp32s3.c`, `gba_link_mp4.h` | written, compiled by the lint for every board; not run on hardware |
-| Per-sender queues and four-player sessions in the board's Celio client | `src/celio.c` | to do |
-| The firmware mode: Link: Online with 2–3 local players starts the four-player link | `pio/src/gate_app.c` | to do |
-| The end-to-end test: four mGBA Emeralds, four simulated boards, one four-player Celio session; `link4.py`'s checks must pass unchanged | `test/mgba` | to do |
+| Four-player sessions in the board's Celio client: create and join with the players and the board's GBAs, the session's commands and data to the relay, each sender's data in its own order | `src/celio.c` (its multi mode) | done, tested (`test_celio`) |
+| The server side: boards bringing several GBAs, link IDs as first slots | `backport/Celio-Link-Server/0002` | done, 24 server tests |
+| The glue: roles to bus layouts, the relay's statuses, its commands in data packets (each entry tagged with its slot, anything malformed refused) | `src/mp_online.c`, in `port/gblink/celio_glue.cpp` | done, tested with two boards (`test_mponline`) and end to end through the real server (`test_celio_mp4.mjs`) |
+| The firmware mode: Link: Online with 2–3 local players found and set starts a four-player session | `pio/src/gate_app.c` | done; not run on hardware |
+| The end-to-end test with real games: mGBA Emeralds on simulated boards, one four-player Celio session; `link4.py`'s checks must pass unchanged | `test/mgba` | to do |
 
 ### The bus engine and its model
 
@@ -118,3 +120,14 @@ What the model cannot settle: the real GBA's delay between its SI going low
 and its start bit, and how long a parent waits for a slot that never
 starts. The model sweeps the first (1–60 µs) and assumes the second is at
 least the board's own 168 µs. A scope on the carrier settles both.
+
+### The layout a board takes
+
+The server gives each board a link ID: the first of its slots. A board's
+GBAs take that many slots in a row, and the board answers every other
+slot. With link ID 0 its port 1 GBA is the parent and the bus runs as
+child. With any other ID a remote player is the parent and the board stands
+in for it: as parent on the bus, it sends the slots before its GBAs back to
+back and passes the turn (SO low) just before its first GBA's. So a board
+with one GBA can be the fourth player: it answers slots 0–2 and its GBA is
+slot 3. `test_mpbus` checks every such layout.

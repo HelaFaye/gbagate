@@ -31,6 +31,16 @@
  *   then relay: the adapter's status words up as deviceStatus, its 64-byte
  *   data packets up as deviceData with a sequence number; the server's
  *   deviceCommand down as a one-byte command, its deviceData down in order.
+ *
+ * Multi-Play sessions (backport/Celio-Link-Server/0002): a session of 3 or
+ * 4 players, or a board bringing more than one GBA, is not relayed through
+ * the GB-Link firmware, which links two. Then the client is "multi": the
+ * session's commands go to io.mp_command with the board's link ID (the
+ * first of its slots), its data to io.mp_data marked with the sender's, each
+ * sender's in its own order; the caller (src/mp_online.c) runs the
+ * four-player relay and reports its statuses and data through
+ * celio_on_status and celio_on_data as the firmware would. AwaitMode, which
+ * the firmware would send on SetMode, the client queues itself.
  */
 
 #ifndef CELIO_H
@@ -56,6 +66,7 @@ extern "C" {
                                  * an ack, and the first                     */
 #define CELIO_ACK_MAX_MS  8000  /* the most, however slow the line           */
 #define CELIO_RETRIES     5     /* resends before a packet is given up       */
+#define CELIO_SENDERS     4     /* a Multi-Play session's senders, by link ID */
 
 typedef struct {
     /* One WebSocket text frame to the server. False if it could not be sent
@@ -69,6 +80,12 @@ typedef struct {
     /* 32 random bits, for uuids. */
     uint32_t (*random)(void *ctx);
     void *ctx;
+    /* Multi sessions only (see above): a session command (SetModeMaster
+     * 0x10, SetModeSlave 0x11, StartHandshake 0x12, ConnectLink 0x13; or
+     * Cancel 0x01 when the session ends) with this board's link ID, -1 if
+     * the server gave none; and another board's data, `from` its link ID. */
+    void (*mp_command)(void *ctx, uint8_t command, int link_id);
+    void (*mp_data)(void *ctx, uint8_t from, const uint8_t data[64]);
 } celio_io_t;
 
 typedef enum {
@@ -99,10 +116,20 @@ typedef struct {
 
     uint16_t      link_status;                 /* the adapter's last word     */
     uint32_t      tx_seq;                      /* our next data sequence      */
-    uint32_t      rx_seq;                      /* the next one we expect      */
-    bool          held[CELIO_REORDER];
-    uint32_t      held_seq[CELIO_REORDER];
-    uint8_t       held_data[CELIO_REORDER][64];
+
+    /* Multi-Play: asked for at create, then as the server said */
+    uint8_t       players;                     /* GBAs on the link, 2..4      */
+    uint8_t       gbas;                        /* this board's own            */
+    bool          multi;                       /* not through the firmware    */
+
+    /* What arrived, put back in order: each sender numbers its own (a
+     * two-player session has one sender, index 0). */
+    struct celio_rx {
+        uint32_t  rx_seq;                      /* the next one we expect      */
+        bool      held[CELIO_REORDER];
+        uint32_t  held_seq[CELIO_REORDER];
+        uint8_t   held_data[CELIO_REORDER][64];
+    } rx[CELIO_SENDERS];
 
     char          seen[CELIO_SEEN_CMDS][37];
     uint8_t       seen_next;
@@ -148,6 +175,12 @@ typedef struct {
  * <server>/socket.io/?EIO=4&transport=websocket.
  */
 void celio_start(celio_t *c, const celio_io_t *io, const char *session, uint32_t now_ms);
+
+/* The same for a Multi-Play link: `players` GBAs in all (2..4; when
+ * creating, ignored when joining), `gbas` of them on this board's cable
+ * (1..3). players 2 and gbas 1 is celio_start. */
+void celio_start_multi(celio_t *c, const celio_io_t *io, const char *session,
+                       uint8_t players, uint8_t gbas, uint32_t now_ms);
 
 /* Leave: sessionLeft if in one, Cancel to the adapter. The state is IDLE. */
 void celio_stop(celio_t *c);

@@ -581,9 +581,15 @@ static void test_pages(void) {
     check("online: a different number set: the setting", strcmp(p.line[3], "Local Players: 2"), 0);
     check("online: ... and what was found, as a warning", strstr(p.line[4], "found 3") != NULL && p.colour[4] == COL_WARN, 1);
     page("online-local-players-differ", &p);
-    check("online: not three: no 4-player link", ui_online_four_player(&lp), 0);
+    check("online: two chosen, three found: the 4-player link too", ui_online_four_player(&lp), 1);
+    check("... a session of four", ui_online_players(&lp), 4);
     lp.local_players = 3; lp.local_found = 2;
     check("online: three chosen but two found: not offered", ui_online_four_player(&lp), 0);
+    check("... a session of two", ui_online_players(&lp), 2);
+    lp.local_players = 1; lp.local_found = 3;
+    check("online: one chosen: the one cable, as Celio-Client plays", ui_online_four_player(&lp) || ui_online_players(&lp) != 2, 0);
+    lp.local_players = 2; lp.local_found = -1;
+    check("online: nothing probed (no chain on this board): not offered", ui_online_four_player(&lp), 0);
     lp.local_found = -1; lp.local_players = 1;
     ui_page_online(&p, "Link: Online", foot, &lp);
     check("online: not probed: just the setting", strcmp(p.line[3], "Local Players: 1"), 0);

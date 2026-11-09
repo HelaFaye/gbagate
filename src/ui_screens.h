@@ -180,6 +180,9 @@ int ui_print_scroll_max(const struct gbp *p, const char *note);
 int ui_online_local_default(int found);
 /* The four-player relay is offered only with three GBAs found. */
 bool ui_online_four_player(const ui_online_t *o);
+/* The players a session is created for: four with the four-player link,
+ * two (one cable, as Celio-Client plays) otherwise. */
+int ui_online_players(const ui_online_t *o);
 
 void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
                     const ui_online_t *o);

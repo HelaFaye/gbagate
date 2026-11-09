@@ -475,9 +475,14 @@ int ui_online_local_default(int found) {
     return found < 1 ? 1 : found > 3 ? 3 : found;
 }
 
+/* More than one GBA here: a Multi-Play link of four, the other players
+ * remote (doc/MULTIPLAY.md). Only with that many GBAs actually found on the
+ * chain: a board that cannot see them cannot carry them. */
 bool ui_online_four_player(const ui_online_t *o) {
-    return o && o->local_found == 3 && o->local_players == 3;
+    return o && o->local_players > 1 && o->local_found >= o->local_players;
 }
+
+int ui_online_players(const ui_online_t *o) { return ui_online_four_player(o) ? 4 : 2; }
 
 /*
  * The wireless link cable: GB-Link's relay, run against another board over

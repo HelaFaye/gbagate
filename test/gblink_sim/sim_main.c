@@ -134,6 +134,11 @@ int main(int argc, char **argv) {
              * empty to create one; ep 1 stops it */
             if (hdr[1] == 1) {
                 gblink_celio_stop();
+            } else if (hdr[1] == 2 && len >= 2) {
+                /* a Multi-Play session: [players, gbas, session...] */
+                char sid[40] = "";
+                if (len - 2 < sizeof sid) { memcpy(sid, buf + 2, len - 2); sid[len - 2] = '\0'; }
+                gblink_celio_start_multi(sid, buf[0], buf[1]);
             } else {
                 char sid[40] = "";
                 if (len < sizeof sid) { memcpy(sid, buf, len); sid[len] = '\0'; }
@@ -164,6 +169,7 @@ int main(int argc, char **argv) {
             }
             break;
         }
+        case 'm': sim_mp4_report(); break;
         case 'K': {
             gblink_celio_view_t v;
             gblink_celio_view(&v);
