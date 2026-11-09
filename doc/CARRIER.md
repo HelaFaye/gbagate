@@ -11,57 +11,76 @@ Both are powered only from USB-C, with no battery.
 | Battle Chip | the reader board, MCP23017 on board, over I2C | the same |
 | display | 2.4"–3.2" 320x240 SPI panel, ILI9341 or ST7789, with its XPT2046 touch controller | 2.0" 240x320 ST7789V module with an EC11 encoder and two keys |
 | card | the panel module's own micro SD slot | a micro SD breakout |
-| input | touch | encoder and keys, on an MCP23017 |
+| input | touch | the module's encoder and two keys, direct |
 | build flag | `BOARD_CARRIER_TOUCH` | `BOARD_CARRIER_KNOB` |
 
 The pin maps are in `port/esp32s3/board.h`, and `test/test_board.c` checks
-them. They must not collide, must stay on the Supermini's header and off the
-strapping and USB pins, and GPIO 43 may only be a chip select. Nothing here
-has been built yet; see "Firmware still to write" at the end.
+them. They must not collide, must use only pins the Supermini brings out,
+must stay off the strapping and USB pins, and must leave UART0 (43, 44) as
+UART0. Nothing here has been built yet; see "Firmware still to write" at
+the end.
 
 ## The Supermini's pins
 
-The header brings out **GPIO 1–13, 43 (TX) and 44 (RX)**: fifteen pins.
-GPIO 48 drives the board's own RGB LED and is not on the header. (The older
-`BOARD_SUPERMINI` map puts the display's DC on 48. Check your board: if 48
-is not a header pin there, that map needs the same fix.)
+The Supermini has two rows of pins:
 
-43 and 44 are UART0. The console moves to USB on these boards. Two rules
-follow from the ROM, which prints its boot banner on 43 at every reset:
+- **The edge rows** (the two pin headers): GPIO 1–13, 43 (TX) and 44 (RX),
+  plus 5V, GND and 3V3.
+- **The inner rows** (through-holes on the underside): GPIO 14–18, 21, 33,
+  34, 37 and 38 on one side, and 35, 36, 39–42 and 45–48 on the other.
 
-- **43 is only ever a chip select.** It toggles during boot with nothing
-  clocked, so no part responds, and nothing else drives it, so nothing fights
-  the ROM.
-- **44 is only ever an input.**
+Pins left alone:
+- **45 and 46** are strapping pins.
+- **48** is the board's own RGB LED. Its pad also sits at the top edge, but
+  using it for anything else drives the LED's data input too.
+- **0** is BOOT, and **19 and 20** are USB.
+- **33–37** are free only because the Supermini's ESP32-S3FH4R2 has quad
+  PSRAM. A module with octal PSRAM uses them, so check the chip marking if a
+  different Supermini turns up.
 
-GPIO 3 is a strapping pin, but it only selects the JTAG source when an
-eFuse says so, and no gbagate image burns that eFuse. The card's chip
-select sits on it, with the module's pull-up holding it high at reset.
+The core signals (link port 1, the SPI bus, the panel and I2C) stay on the
+edge rows, where they were. The inner rows take the rest. That leaves 43 and
+44 as UART0, the console or the bridge UART: the ROM prints its boot banner
+on 43 at every reset, so nothing else should sit there. It also leaves
+GPIO 3, a strapping pin, unused.
+
+**For the carrier's footprint:** fit headers to the inner rows the same way
+as the edge rows, and plug the Supermini into sockets. Measure the inner
+row's spacing from the edge rows on your board before laying out the PCB:
+if it is not on the 2.54 mm grid, give it its own pads and route them.
 
 ## Pin map
 
-| GPIO | touch carrier | knob carrier |
-|---|---|---|
-| 1 | I2C SDA | I2C SDA |
-| 2 | I2C SCL | I2C SCL |
-| 3 | SD CS | SD CS |
-| 4 | link SC (all ports) | link SC (all ports) |
-| 5 | link SD (all ports) | link SD (all ports) |
-| 6 | SI1: port 1's SO | SI1: port 1's SO |
-| 7 | SO: to port 1's SI | SO: to port 1's SI |
-| 8 | SI2: port 2's SO | SI2: port 2's SO |
-| 9 | LCD DC | LCD DC |
-| 10 | LCD CS | expander INT (0x21) |
-| 11 | SPI MOSI | SPI MOSI |
-| 12 | SPI SCK | SPI SCK |
-| 13 | SPI MISO | SPI MISO |
-| 43 | touch CS | LCD CS |
-| 44 | SI3: port 3's SO | SI3: port 3's SO |
-| 48 | the Supermini's own LED | the same |
+| GPIO | row | touch carrier | knob carrier |
+|---|---|---|---|
+| 1 | edge | I2C SDA | I2C SDA |
+| 2 | edge | I2C SCL | I2C SCL |
+| 4 | edge | link SC (all ports) | link SC (all ports) |
+| 5 | edge | link SD (all ports) | link SD (all ports) |
+| 6 | edge | SI1: port 1's SO | SI1: port 1's SO |
+| 7 | edge | SO: to port 1's SI | SO: to port 1's SI |
+| 8 | edge | SI2: port 2's SO | SI2: port 2's SO |
+| 9 | edge | LCD DC | LCD DC |
+| 10 | edge | LCD CS | LCD CS |
+| 11 | edge | SPI MOSI | SPI MOSI |
+| 12 | edge | SPI SCK | SPI SCK |
+| 13 | edge | SPI MISO | SPI MISO |
+| 43, 44 | edge | UART0 (console, or the bridge UART) | UART0 |
+| 14 | inner | SI3: port 3's SO | SI3: port 3's SO |
+| 15 | inner | SD CS | SD CS |
+| 16 | inner | touch CS | encoder A |
+| 17 | inner | touch IRQ | encoder B |
+| 18 | inner | LCD reset | LCD reset |
+| 21 | inner | backlight (PWM) | backlight (PWM) |
+| 33 | inner | spare | encoder push |
+| 34 | inner | spare | confirm key |
+| 35 | inner | spare | back key |
+| 36 | inner | Battle Chip board INT | Battle Chip board INT |
+| 48 | LED | the Supermini's own LED | the same |
 
-All fifteen are used on both boards. The touch controller is polled over
-SPI, so its IRQ pin is not needed. The panel's reset is an RC on the
-carrier, and its backlight is tied on.
+Spare on both boards: GPIO 3 (strapping, so outputs only and pulled up),
+37–42 and 47. That leaves room for a second SD path for GB-Link's GBC
+cables, an infrared emitter, or the sleek version's extra parts.
 
 ## The link ports: one chain
 
@@ -80,7 +99,7 @@ with the board at both ends:
                         ├──────┘       ├──────┘       │
  GPIO 6 (SI1) ◄─────────┘              │              │
  GPIO 8 (SI2) ◄────────────────────────┘              │
- GPIO 44 (SI3) ◄──────────────────────────────────────┘
+ GPIO 14 (SI3) ◄──────────────────────────────────────┘
 ```
 
 What that gives:
@@ -132,14 +151,16 @@ The internal pull-ups are used. Both slots share the eleven pad lines
 
 **Connector to the carrier:** 1x6 at 2.54 mm (or JST-PH 6 for a cable):
 `3V3, GND, SDA, SCL, INT, 5V`. INT is the expanders' interrupt, open-drain
-and shared. The carrier has the bus's only pull-ups (4.7 kΩ). The board's
-own footprints for them stay unpopulated, because two sets in parallel are
-too strong for the MCP23017's 400 kHz.
+and shared, on GPIO 36 with a 10 kΩ pull-up on the carrier. It tells the
+firmware a chip went in or came out without polling the bus. The carrier
+has the bus's only pull-ups (4.7 kΩ). The board's own footprints for them
+stay unpopulated, because two sets in parallel are too strong for the
+MCP23017's 400 kHz.
 
 **Later, as a controller:** face and shoulder buttons on the same
-connector, through a second expander on this board at **0x22**. (0x21 is
-the knob carrier's.) Its INT joins the shared line, so the connector does
-not change.
+connector, through a second expander on this board at **0x21**. (That is
+where `buttons_mcp.c` already looks for buttons.) Its INT joins the shared
+line, so the connector does not change.
 
 ## The touch carrier
 
@@ -154,39 +175,37 @@ DIYables module lists them bottom to top. Their card slot has its own
 |---|---|
 | VCC | **5V** (the module's regulator; leave its J1 3.3 V jumper open) |
 | CS / DC | GPIO 10 / 9 |
-| RESET | 10 kΩ to 3V3 and 100 nF to ground (power-on reset; the driver also sends a software reset) |
+| RESET | GPIO 18, with 10 kΩ to 3V3 so the panel stays out of reset while the GPIO floats at boot |
 | SDI, SCK | MOSI, SCK |
-| LED | 3V3 (the module switches its backlight) |
+| LED | through a P-channel MOSFET (AO3401 or similar) from 3V3, with its gate on GPIO 21 and 10 kΩ to 3V3, so the backlight starts off and dims by PWM. The backlight draws 30–60 mA, more than a GPIO may source |
 | **SDO** | **not connected.** On many of these modules the panel's SDO does not let go of MISO when its CS is high, which corrupts the touch and card reads. The firmware never reads the panel |
 | T_CLK, T_DIN, T_DO | SCK, MOSI, MISO |
-| T_CS | GPIO 43 |
-| T_IRQ | not connected (polled), or to a test pad |
-| SD_CS / MOSI / MISO / SCK | GPIO 3 / MOSI / MISO / SCK |
+| T_CS | GPIO 16 |
+| T_IRQ | GPIO 17: low while touched, so the controller is read only then |
+| SD_CS / MOSI / MISO / SCK | GPIO 15 / MOSI / MISO / SCK |
 
 ILI9341 or ST7789 cannot be told apart without reading the panel, and the
 panel is not read. So it is a setting, with a test pattern to confirm it.
 
 ## The knob carrier
 
-**Panel module (2.0" ST7789V, EC11, two keys).** The panel's SPI
-(`SCL/SDA`, which here are SCK/MOSI) goes to the shared bus, CS to GPIO 43
-and DC to GPIO 9. RES gets the same RC as above, and BLK is tied on. The
-module's encoder and keys go to the carrier's MCP23017 at **0x21**:
+**Panel module (2.0" ST7789V, EC11, two keys).** The panel's SPI pins
+(`SCL/SDA`, which here are SCK/MOSI) go to the shared bus. Its other pins:
 
-| expander | |
+| module pin | carrier |
 |---|---|
-| GPA0, GPA1 | encoder A, B (common to ground) |
-| GPA2 | encoder push |
-| GPA3 | the module's confirm key |
-| GPA4 | its back key |
-| GPA5–GPB7 | spare: room for a D-pad and face buttons on a later revision |
+| CS | GPIO 10 |
+| DC | GPIO 9 |
+| RES | GPIO 18, with 10 kΩ to 3V3 |
+| BLK | GPIO 21, through the same MOSFET as on the touch carrier, or direct if the module switches its own backlight |
+| encoder A, B | GPIO 16, 17. The encoder's common goes to ground and the internal pull-ups are used. The ESP32-S3's pulse counter decodes them, as on the devkit |
+| encoder push | GPIO 33 |
+| confirm, back keys | GPIO 34, 35 (to ground) |
 
-Its INT goes to GPIO 10. The expander captures the pins' state on each
-change (INTCAP), so a step is read as it was even if the read comes a
-little later. A fast spin is about 400 edges a second, and one I2C read
-takes about 60 µs.
+The panel and the input are direct, so this board needs no expander of its
+own.
 
-**Card:** a micro SD breakout on the shared bus with CS on GPIO 3. Use a
+**Card:** a micro SD breakout on the shared bus, with CS on GPIO 15. Use a
 3.3 V breakout, or a 5 V one with its own regulator and buffer on the 5V
 rail.
 
@@ -250,10 +269,11 @@ encoder, which the UI already supports.
   S3FH4R2 has 2 MB.
 - XPT2046 touch: polling, filtering and a calibration screen, with the
   calibration saved.
-- The encoder and keys through the expander's INT, as input events.
+- The encoder's and keys' pins from `board.h` in the input driver (it
+  reads the devkit's today), and the chip board's INT as a "chip changed"
+  event.
 - The three-port PHY: answering in the slots after the last local GBA, timed
   from SI1–SI3, and taking slot 0 as the parent. This is the hardware layer
   that `doc/MULTIPLAY.md`'s "What has to be built" table lists.
-- The console on USB for these boards.
 - Build environments and CI images for `carrier-touch` and `carrier-knob`.
 - Then the PCB: KiCad, two layers, all headers through-hole.
