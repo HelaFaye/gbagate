@@ -272,8 +272,9 @@ encoder, which the UI already supports.
 - The encoder's and keys' pins from `board.h` in the input driver (it
   reads the devkit's today), and the chip board's INT as a "chip changed"
   event.
-- The three-port PHY: answering in the slots after the last local GBA, timed
-  from SI1–SI3, and taking slot 0 as the parent. This is the hardware layer
-  that `doc/MULTIPLAY.md`'s "What has to be built" table lists.
+- The three-port PHY is written (`src/mp_bus.c`, and the four-player mode
+  in `port/esp32s3/gba_link_esp32s3.c`) and tested against modelled GBAs.
+  It still has to be scoped on the carrier, and Link: Online has to start
+  it (`doc/MULTIPLAY.md`, "What has to be built").
 - Build environments and CI images for `carrier-touch` and `carrier-knob`.
 - Then the PCB: KiCad, two layers, all headers through-hole.

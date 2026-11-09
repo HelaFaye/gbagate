@@ -10,3 +10,7 @@ static inline BaseType_t xTaskCreatePinnedToCore(
     UBaseType_t pr, TaskHandle_t *h, BaseType_t core) {
     (void)f; (void)n; (void)s; (void)p; (void)pr; (void)h; (void)core; return pdPASS;
 }
+
+static inline uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t t) { (void)clear; (void)t; return 0; }
+static inline BaseType_t xTaskNotifyGive(TaskHandle_t h) { (void)h; return pdPASS; }
+static inline TaskHandle_t xTaskGetCurrentTaskHandle(void) { return (TaskHandle_t)1; }

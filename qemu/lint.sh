@@ -24,11 +24,11 @@ COMMON="-std=c11 -Wall -Wextra -Wshadow -Werror -fsyntax-only
 # WiFi headers; stubbing those faithfully enough to be worth anything is a
 # bigger job than it sounds, and they are on the bench list anyway.
 #
-# gba_link_esp32s3.c (the PHY) and the GB-Link port files (usb_gblink_*,
-# gblink_hw_*, gblink_gbspi_*) touch the GPIO register block, RMT and
-# TinyUSB's class-driver API, which no stub here models. They are compiled for
-# real instead: tools/build_hw.sh builds every hardware image with ESP-IDF, and
-# that build is the check for them (see AUDIT.md, round 3).
+# The GB-Link port files (usb_gblink_*, gblink_hw_*, gblink_gbspi_*) touch
+# RMT and TinyUSB's class-driver API, which no stub here models. They are
+# compiled for real instead: tools/build_hw.sh builds every hardware image
+# with ESP-IDF, and that build is the check for them (see AUDIT.md, round 3).
+# gba_link_esp32s3.c (the PHY) is checked below, once per board.
 QEMU_FILES="pio/src/gate_app.c
             pio/src/link_source.c
             pio/src/tasks.c
@@ -72,6 +72,14 @@ check() {
 
 check qemu "-DGBAGATE_QEMU=1" $QEMU_FILES
 check hardware "" $HW_FILES
+
+# The Multi-Play PHY, once per board: its four-player path (src/mp_bus.c on
+# the carrier's chain) only exists where board.h has BOARD_LINK_PORTS > 1,
+# and no hardware image is built for those boards yet. soc/gpio_struct.h in
+# the stubs is the register block's shape and nothing more.
+for b in DEVKIT SUPERMINI CARRIER_TOUCH CARRIER_KNOB; do
+    check "$(echo $b | tr A-Z_ a-z-)" "-DBOARD_$b=1" port/esp32s3/gba_link_esp32s3.c
+done
 
 # The component CMakeLists as ESP-IDF evaluates it, including the script-mode
 # pass that forbids things a normal configure allows.

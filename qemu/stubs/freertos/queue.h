@@ -6,3 +6,4 @@ static inline BaseType_t xQueueSend(QueueHandle_t q, const void *i, TickType_t t
 static inline BaseType_t xQueueSendFromISR(QueueHandle_t q, const void *i, BaseType_t *w) { (void)q; (void)i; (void)w; return pdTRUE; }
 static inline BaseType_t xQueueOverwrite(QueueHandle_t q, const void *i) { (void)q; (void)i; return pdTRUE; }
 static inline BaseType_t xQueueReceive(QueueHandle_t q, void *i, TickType_t t) { (void)q; (void)i; (void)t; return pdFALSE; }
+static inline BaseType_t xQueueReset(QueueHandle_t q) { (void)q; return pdPASS; }

@@ -16,3 +16,9 @@ typedef uint32_t TickType_t;
 #define pdMS_TO_TICKS(ms) ((TickType_t)(ms))
 #define configASSERT(x) do { (void)(x); } while (0)
 #define portYIELD_FROM_ISR(x) do { (void)(x); } while (0)
+
+/* Spinlock critical sections (the PHY's parent transfers). */
+typedef struct { int owner; } portMUX_TYPE;
+#define portMUX_INITIALIZER_UNLOCKED { 0 }
+#define portENTER_CRITICAL(m) do { (void)(m); } while (0)
+#define portEXIT_CRITICAL(m)  do { (void)(m); } while (0)

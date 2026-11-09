@@ -23,3 +23,10 @@ typedef void (*gpio_isr_t)(void *arg);
 static inline esp_err_t gpio_install_isr_service(int flags) { (void)flags; return ESP_OK; }
 static inline esp_err_t gpio_isr_handler_add(gpio_num_t p, gpio_isr_t f, void *a) { (void)p;(void)f;(void)a; return ESP_OK; }
 static inline esp_err_t gpio_set_intr_type(gpio_num_t p, int t) { (void)p;(void)t; return ESP_OK; }
+
+/* Pull modes and interrupt enables, for the Multi-Play PHY (gba_link_esp32s3.c). */
+typedef enum { GPIO_PULLUP_ONLY, GPIO_PULLDOWN_ONLY, GPIO_PULLUP_PULLDOWN, GPIO_FLOATING } gpio_pull_mode_t;
+static inline esp_err_t gpio_set_pull_mode(gpio_num_t p, gpio_pull_mode_t m) { (void)p;(void)m; return ESP_OK; }
+static inline esp_err_t gpio_intr_enable(gpio_num_t p) { (void)p; return ESP_OK; }
+static inline esp_err_t gpio_intr_disable(gpio_num_t p) { (void)p; return ESP_OK; }
+#define ESP_INTR_FLAG_LEVEL3 (1<<3)

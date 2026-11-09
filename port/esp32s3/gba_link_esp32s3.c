@@ -68,6 +68,8 @@
 #include "board.h"
 #include "link_phy.h"
 #include "link_proto.h"
+#include "gba_link_mp4.h"
+#include "mp_bus.h"
 
 static const char *TAG = "mp_phy";
 
@@ -171,7 +173,7 @@ static uint16_t IRAM_ATTR master_word(uint16_t tx) {
 
 /* ---- engine state ------------------------------------------------------------- */
 
-typedef enum { OWNER_NONE = 0, OWNER_GATE, OWNER_GBLINK } owner_t;
+typedef enum { OWNER_NONE = 0, OWNER_GATE, OWNER_GBLINK, OWNER_MP4 } owner_t;
 
 static volatile gbl_phy_mode_t s_mode = GBL_PHY_OFF;
 static volatile owner_t        s_owner = OWNER_NONE;
@@ -185,6 +187,36 @@ static portMUX_TYPE            s_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint32_t s_words_done, s_rx_dropped, s_late_stage;
 static volatile bool     s_stage_fresh;
 
+/* ---- four players on the carrier's chain (src/mp_bus.c, doc/CARRIER.md) ---------- */
+
+#if defined(BOARD_LINK_PORTS) && BOARD_LINK_PORTS > 1
+#define HAVE_MP4 1
+_Static_assert(PIN_LINK_SI2 < 32 && PIN_LINK_SI3 < 32, "chain pins must be GPIO 0..31");
+
+static uint32_t IRAM_ATTR h_now(void *c) { (void)c; return esp_cpu_get_cycle_count(); }
+static void IRAM_ATTR h_wait(void *c, uint32_t t) { (void)c; wait_until(t); }
+static bool IRAM_ATTR h_sd(void *c) { (void)c; return pin_get(s_pin_sd); }
+static void IRAM_ATTR h_sd_out(void *c, bool drive, bool level) {
+    (void)c;
+    pin_set(s_pin_sd, level);
+    pin_drive(s_pin_sd, drive);
+}
+static void IRAM_ATTR h_sc(void *c, bool low) { (void)c; pin_set(PIN_LINK_SC, !low); }
+static void IRAM_ATTR h_so(void *c, bool high) { (void)c; pin_set(PIN_LINK_SO, high); }
+static bool IRAM_ATTR h_si(void *c, int port) {
+    (void)c;
+    return pin_get(port == 1 ? PIN_LINK_SI : port == 2 ? PIN_LINK_SI2 : PIN_LINK_SI3);
+}
+static mp_bus_hal_t s_hal = { h_now, h_wait, h_sd, h_sd_out, h_sc, h_so, h_si, NULL, 0 };
+
+typedef struct { uint16_t w[4]; } words4_t;
+static mp_bus_layout_t        s_mp4_layout;
+static gba_link_mp4_client_t  s_mp4_client;
+static volatile words4_t      s_mp4_tx;       /* the next transfer's answers */
+static QueueHandle_t          s_words4;       /* ISR -> task: every slot     */
+static mp_bus_stats_t         s_mp4_stats;
+#endif
+
 /* ---- child: the SC-falling interrupt -------------------------------------------- */
 
 static void IRAM_ATTR sc_isr(void *arg) {
@@ -197,6 +229,20 @@ static void IRAM_ATTR sc_isr(void *arg) {
 
     /* ISR entry costs ~1 us on this part; sample from the estimated edge. */
     uint32_t t_fall = t_isr - s_cyc_per_us;
+
+#ifdef HAVE_MP4
+    if (s_owner == OWNER_MP4) {
+        words4_t tx, rx;
+        for (int k = 0; k < 4; k++) tx.w[k] = s_mp4_tx.w[k];
+        if (!s_stage_fresh) s_late_stage++;
+        s_stage_fresh = false;
+        mp_bus_child(&s_hal, &s_mp4_layout, t_fall, tx.w, rx.w, &s_mp4_stats);
+        BaseType_t woken4 = pdFALSE;
+        if (xQueueSendFromISR(s_words4, &rx, &woken4) != pdTRUE) s_rx_dropped++;
+        portYIELD_FROM_ISR(woken4);
+        return;
+    }
+#endif
     uint16_t rx = recv_bits(t_fall + ns_to_cyc(NS_SLAVE_SAMPLE0));
 
     uint16_t tx = s_staged;
@@ -234,6 +280,16 @@ static void cfg_output(int pin, bool level) {
 
 static void apply_pins(gbl_phy_mode_t mode, bool sd_alt) {
     gpio_intr_disable(PIN_LINK_SC);
+#ifdef HAVE_MP4
+    /* ports 2 and 3's SO: inputs, pulled down so an empty port reads low
+     * (the carrier fits 100 k as well) */
+    gpio_reset_pin(PIN_LINK_SI2);
+    gpio_set_direction(PIN_LINK_SI2, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIN_LINK_SI2, GPIO_PULLDOWN_ONLY);
+    gpio_reset_pin(PIN_LINK_SI3);
+    gpio_set_direction(PIN_LINK_SI3, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIN_LINK_SI3, GPIO_PULLDOWN_ONLY);
+#endif
     int sd = (sd_alt && BOARD_HAS_SD_ALT) ? PIN_LINK_SD_ALT : PIN_LINK_SD;
     int other = (sd == PIN_LINK_SD) ? (BOARD_HAS_SD_ALT ? PIN_LINK_SD_ALT : -1) : PIN_LINK_SD;
     s_pin_sd = sd;
@@ -307,6 +363,33 @@ static void IRAM_ATTR phy_task(void *arg) {
             continue;
         }
 
+#ifdef HAVE_MP4
+        if (s_owner == OWNER_MP4) {
+            words4_t tx, rx;
+            if (mode == GBL_PHY_MASTER) {
+                /* the remote parent's cadence: the client says when */
+                uint32_t gap_us = 0;
+                s_mp4_client.next(s_mp4_client.ctx, tx.w, &gap_us);
+                portENTER_CRITICAL(&s_mux);
+                mp_bus_parent(&s_hal, &s_mp4_layout, tx.w, rx.w, &s_mp4_stats);
+                portEXIT_CRITICAL(&s_mux);
+                s_words_done++;
+                s_mp4_client.done(s_mp4_client.ctx, rx.w);
+                if (gap_us >= 2000) vTaskDelay(pdMS_TO_TICKS(gap_us / 1000 - 1));
+                wait_until(esp_cpu_get_cycle_count() + (gap_us % 1000) * s_cyc_per_us);
+                continue;
+            }
+            if (xQueueReceive(s_words4, &rx, pdMS_TO_TICKS(10)) == pdTRUE) {
+                s_words_done++;
+                s_mp4_client.done(s_mp4_client.ctx, rx.w);
+                uint32_t unused;
+                s_mp4_client.next(s_mp4_client.ctx, tx.w, &unused);
+                for (int k = 0; k < 4; k++) s_mp4_tx.w[k] = tx.w[k];
+                s_stage_fresh = true;
+            }
+            continue;
+        }
+#endif
         if (mode == GBL_PHY_SLAVE || mode == GBL_PHY_SLAVE_EREADER) {
             uint16_t rx;
             if (xQueueReceive(s_words, &rx, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -440,6 +523,55 @@ static const gbl_phy_driver_t k_gblink_driver = {
     .has_sd_alt   = BOARD_HAS_SD_ALT,
 };
 
+/* ---- four-player client ------------------------------------------------------------------- */
+
+#ifdef HAVE_MP4
+bool gba_link_mp4_start(const mp_bus_layout_t *l, const gba_link_mp4_client_t *c) {
+    if (!mp_bus_layout_ok(l) || !c || !c->next || !c->done || s_yielded) return false;
+    set_mode(OWNER_NONE, GBL_PHY_OFF, false);
+    s_mp4_layout = *l;
+    s_mp4_client = *c;
+    memset(&s_mp4_stats, 0, sizeof s_mp4_stats);
+    xQueueReset(s_words4);
+    if (!l->parent) {                       /* stage the first answers */
+        words4_t tx;
+        uint32_t unused;
+        c->next(c->ctx, tx.w, &unused);
+        for (int k = 0; k < 4; k++) s_mp4_tx.w[k] = tx.w[k];
+        s_stage_fresh = true;
+    }
+    /* a local parent: we answer as a child (SC in, SO held low); the board
+     * as parent: SC and SO ours */
+    set_mode(OWNER_MP4, l->parent ? GBL_PHY_MASTER : GBL_PHY_SLAVE, false);
+    mp_bus_idle(&s_hal, l);
+    return true;
+}
+
+void gba_link_mp4_stop(void) {
+    if (s_owner == OWNER_MP4) set_mode(OWNER_NONE, GBL_PHY_OFF, false);
+}
+
+void gba_link_mp4_stats(mp_bus_stats_t *out) { *out = s_mp4_stats; }
+
+/*
+ * GBAs on the chain, counted from port 1: a GBA's SO idles high, an empty
+ * port's reads low through its pull-down. Port 1's SO is SI, pulled up in
+ * the single-port modes, so it is read with the pull-down too. Only between
+ * transfers, and only while the port is not in use: a first estimate, which
+ * the handshake (mp_detect in src/mp_relay.c) confirms.
+ */
+int gblink_cable_gbas(void) {
+    if (s_owner != OWNER_NONE) return -1;
+    gpio_set_pull_mode(PIN_LINK_SI, GPIO_PULLDOWN_ONLY);
+    esp_rom_delay_us(20);
+    const int pins[3] = { PIN_LINK_SI, PIN_LINK_SI2, PIN_LINK_SI3 };
+    int n = 0;
+    while (n < 3 && pin_get(pins[n])) n++;
+    gpio_set_pull_mode(PIN_LINK_SI, GPIO_FLOATING);
+    return n;
+}
+#endif
+
 /* ---- setup -------------------------------------------------------------------------------- */
 
 static void install_isr_on_core1(void *arg) {
@@ -455,6 +587,10 @@ void gba_link_start(void) {
     if (s_task) return;
     s_cyc_per_us = (uint32_t)(esp_clk_cpu_freq() / 1000000);
     s_words = xQueueCreate(8, sizeof(uint16_t));
+#ifdef HAVE_MP4
+    s_words4 = xQueueCreate(4, sizeof(words4_t));
+    s_hal.ticks_per_us = s_cyc_per_us;
+#endif
     s_gate_words = xQueueCreate(1, sizeof(uint16_t));
     apply_pins(GBL_PHY_OFF, false);
 

@@ -4,7 +4,7 @@ A Multi-Player link joins up to four GBAs, for Pokémon's Cable Club multi
 battles, the Berry Blender, the record corner and other games. Over the
 network each GBA has its own board, so each board must stand in for the
 other three GBAs on its GBA's cable. This is the plan and the evidence for
-it. Nothing in it is built in the firmware yet.
+it. The status of each piece is in the table at the end.
 
 ## What the games say on the cable
 
@@ -91,10 +91,30 @@ What remains is putting it on the board, in the table below.
 
 ## What has to be built
 
-| piece | where |
-|---|---|
-| A PHY mode that answers in up to three slots, and one that drives slot 0 and answers for the other children | `port/gblink/link_phy.h`; the ESP32-S3 driver; the simulator |
-| The 4-player frame builder above | done: `src/mp_relay.c`; to be driven by a new section beside the vendored `UsbSection`, under gbagate's extension mode numbers |
-| Per-sender queues and four-player sessions in the board's Celio client | `src/celio.c` |
-| A cable between mGBA's Multi-Player hardware and the simulator's board, as `rfu_wire.h` is for the Wireless Adapter | `test/mgba`, `test/gblink_sim` |
-| The end-to-end test: four mGBA Emeralds, four simulated boards, one four-player Celio session; `link4.py`'s checks must pass unchanged | `test/mgba` |
+| piece | where | status |
+|---|---|---|
+| The 4-player frame builder above | `src/mp_relay.c` | done |
+| The bus engine: the board's side of one transfer in every slot it answers, on the carrier's chain of up to three GBAs, as child (a local GBA is parent) or as parent (standing in for a remote one) | `src/mp_bus.c` | done, tested against modelled GBAs (`test/test_mpbus.c`); timing not yet on a scope |
+| The relay as the driver's client, with the remote parent's cadence | `src/mp_link.c` | done, tested with the engine through the handshake and a frame |
+| The ESP32-S3 driver's four-player mode: the engine in the SC interrupt (child) or the link task (parent), the chain's presence probe | `port/esp32s3/gba_link_esp32s3.c`, `gba_link_mp4.h` | written, compiled by the lint for every board; not run on hardware |
+| Per-sender queues and four-player sessions in the board's Celio client | `src/celio.c` | to do |
+| The firmware mode: Link: Online with 2–3 local players starts the four-player link | `pio/src/gate_app.c` | to do |
+| The end-to-end test: four mGBA Emeralds, four simulated boards, one four-player Celio session; `link4.py`'s checks must pass unchanged | `test/mgba` | to do |
+
+### The bus engine and its model
+
+`test/test_mpbus.c` runs the engine against GBAs modelled from the wire's
+shape. The parent drops SC and sends. A child sends a few microseconds
+after its SI goes low, then drops its SO. Every unit hears every word by its
+start bit, and SC rising ends the transfer. For every layout the chain can
+carry (2–4 players, 1–3 GBAs, the board as child or as parent), with random
+turn delays, interrupt latency and the clock wrapping, every GBA ends with
+every slot's word and no two units ever drive SD at once. The test was
+checked by breaking the engine: wrong bit order, late sampling, sending over
+a stop bit, not waiting for a start bit and not passing the turn are all
+caught.
+
+What the model cannot settle: the real GBA's delay between its SI going low
+and its start bit, and how long a parent waits for a slot that never
+starts. The model sweeps the first (1–60 µs) and assumes the second is at
+least the board's own 168 µs. A scope on the carrier settles both.
