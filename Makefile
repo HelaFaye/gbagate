@@ -101,7 +101,8 @@ $(BUILD)/online_screen: tools/online_screen.c $(addprefix src/,$(DEPS_screens)) 
 # tree: EMERALD_ROM=/path/to/emerald.gba make mgba-emerald
 mgba-shim: | $(BUILD)
 	@$(CC) -std=gnu11 -O1 -shared -fPIC test/mgba/mgba_shim.c -o $(BUILD)/libmgba_shim.so -lmgba
-	@$(CC) -std=gnu11 -O1 -shared -fPIC test/mgba/mgba_multi.c src/mp_relay.c -o $(BUILD)/libmgba_multi.so -lmgba -lpthread
+	@$(CC) -std=gnu11 -O1 -shared -fPIC test/mgba/mgba_multi.c src/mp_relay.c src/mp_link.c src/mp_bus.c src/mp_online.c \
+	      src/celio.c src/json_lite.c -o $(BUILD)/libmgba_multi.so -lmgba -lpthread
 mgba-emerald: mgba-shim
 	@test/mgba/fetch_symbols.sh
 	@$(MAKE) -s -C test/gblink_sim
@@ -109,6 +110,8 @@ mgba-emerald: mgba-shim
 	@python3 -I test/mgba/rfu_union.py "$(EMERALD_ROM)" $(BUILD)/emerald
 	@python3 -I test/mgba/rfu_union2.py "$(EMERALD_ROM)" $(BUILD)/emerald
 	@python3 -I test/mgba/link4.py "$(EMERALD_ROM)" $(BUILD)/emerald
+	@# through the real Celio-Server: needs test/gblink_compat/run.sh's bundle (77: skipped without it)
+	@python3 -I test/mgba/link4_online.py "$(EMERALD_ROM)" $(BUILD)/emerald || [ $$? -eq 77 ]
 
 # After a change to rom/agent.c or agent_proto.h: rebuild the image and the
 # C array the firmware embeds (lint checks the two are current).

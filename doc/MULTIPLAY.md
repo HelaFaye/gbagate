@@ -101,7 +101,7 @@ What remains is putting it on the board, in the table below.
 | The server side: boards bringing several GBAs, link IDs as first slots | `backport/Celio-Link-Server/0002` | done, 24 server tests |
 | The glue: roles to bus layouts, the relay's statuses, its commands in data packets (each entry tagged with its slot, anything malformed refused) | `src/mp_online.c`, in `port/gblink/celio_glue.cpp` | done, tested with two boards (`test_mponline`) and end to end through the real server (`test_celio_mp4.mjs`) |
 | The firmware mode: Link: Online with 2–3 local players found and set starts a four-player session | `pio/src/gate_app.c` | done; not run on hardware |
-| The end-to-end test with real games: mGBA Emeralds on simulated boards, one four-player Celio session; `link4.py`'s checks must pass unchanged | `test/mgba` | to do |
+| The end-to-end test with real games: four mGBA Emeralds on boards of 1+1+1+1, 3+1, 1+3 and 2+2 GBAs, each board running its own Celio client, `mp_online` and relay, through the real patched Celio-Server; `link4.py`'s checks unchanged | `test/mgba/link4_online.py` (board mode in `mgba_multi.c`) | done: all four pass |
 
 ### The bus engine and its model
 
@@ -131,3 +131,34 @@ in for it: as parent on the bus, it sends the slots before its GBAs back to
 back and passes the turn (SO low) just before its first GBA's. So a board
 with one GBA can be the fourth player: it answers slots 0–2 and its GBA is
 slot 3. `test_mpbus` checks every such layout.
+
+### Real games through the real server
+
+`test/mgba/link4_online.py` runs four Pokémon Emeralds (mGBA cores, in
+lockstep) on boards of one to three GBAs each. Each board runs the board's
+own code: its Celio client in its multi mode, `mp_online` and the relay.
+The script is each board's network driver, with one WebSocket per board to
+the real Celio-Server with `backport/Celio-Link-Server` applied. Each
+board's cable is modelled per transfer of all four slots (the electrical
+layer under it is `test_mpbus`'s).
+
+The checks are `link4.py`'s, which four Emeralds pass on one real cable:
+- every game sees four players and only the parent is master;
+- each game knows its own link ID;
+- the games exchange their link player records, and every game holds the
+  same four trainer IDs in link order;
+- no game has a link error.
+
+The boards add their own: no relay sees a bad checksum, and nothing is
+dropped, lost or refused.
+
+| boards | slots | |
+|---|---|---|
+| 1 + 1 + 1 + 1 | each board one: from any board, one local and three remote | all pass |
+| 3 + 1 | the three-GBA board 1–3, standing in for the remote parent | all pass |
+| 1 + 3 | the three-GBA board 0–2, its port 1 GBA the parent | all pass |
+| 2 + 2 | 2–3 and 0–1 | all pass |
+
+The server gives link ID 0 to whichever board reports AwaitMode first; in
+these runs that was the first to join, which is why 3 + 1 and 1 + 3 cover
+both roles of the three-GBA board.

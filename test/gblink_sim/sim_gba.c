@@ -438,7 +438,14 @@ bool gblink_pin_get(gblink_signal_t sig) {
     rp2040_read_cost();
     switch (sig) {
     case GBLINK_SIG_SC: return atomic_load(&s_pin_sc);
-    case GBLINK_SIG_SI: atomic_fetch_add(&s_si_reads, 1); return atomic_load(&s_pin_si);
+    case GBLINK_SIG_SI: {
+        /* the value first, then the count: the Game Boy changes SI for the
+         * next bit as soon as it sees the count move, so counting first let
+         * a slow read return the next bit's value (one wrong bit in a print) */
+        const bool v = atomic_load(&s_pin_si);
+        atomic_fetch_add(&s_si_reads, 1);
+        return v;
+    }
     default:            return true;
     }
 }
