@@ -11,9 +11,8 @@
 // handshake, 8FFF, frames of eight words with a shared checksum that every
 // GBA checks. test/test_mpbus.c covers the bus itself.
 //
-// Checked: the server gives the three-GBA board ready first link ID 0
-// (its port 1 GBA is the parent; slots 0-2) and the other ID 3 (the board
-// stands in for the parent; its GBA is slot 3); every GBA reaches frames;
+// Checked: the board ready first gets link ID 0 and the other the slots
+// after it (A 0-2 and B 3, or B 0 and A 1-3); every GBA reaches frames;
 // each GBA's command reaches every other GBA, on its own cable and across
 // the server; no GBA sees a checksum it disagrees with.
 //
@@ -57,8 +56,13 @@ try {
   B.send('c', 2, Buffer.concat([Buffer.from([2, 1]), Buffer.from(a.session)]));   // join with one
   await until(async () => (await mp4(A)).on && (await mp4(B)).on, 30000, 'both buses running');
   const [ma, mb] = [await mp4(A), await mp4(B)];
-  if (ma.first !== 0 || ma.locals !== 3 || ma.players !== 4) fail(`A's layout ${JSON.stringify(ma)}`);
-  if (mb.first !== 3 || mb.locals !== 1 || mb.players !== 4) fail(`B's layout ${JSON.stringify(mb)}`);
+  // The server gives link ID 0 to whichever board reports AwaitMode first:
+  // A (its GBAs 0-2, B's 3) or B (its GBA 0, A standing in for no one and
+  // taking 1-3). Either is a right layout; nothing else is.
+  const aFirst = ma.first === 0 && mb.first === 3, bFirst = mb.first === 0 && ma.first === 1;
+  if (ma.locals !== 3 || mb.locals !== 1 || ma.players !== 4 || mb.players !== 4 || !(aFirst || bFirst))
+    fail(`layouts A ${JSON.stringify(ma)} B ${JSON.stringify(mb)}`);
+  else console.log(`  ok    ${aFirst ? "A's port 1 GBA" : "B's GBA"} is the parent (A slots ${ma.first}-${ma.first + 2}, B slot ${mb.first})`);
 
   const all = [0, 1, 2, 3].reduce((m, s) => m | (1 << s), 0);
   const done = await until(async () => {
