@@ -126,6 +126,8 @@ static void online_gather(ui_online_t *o);
 static void online_retry(void);
 static void online_restart(void);
 static int  s_local_players;   /* GBAs on this board's cable, as set (Link: Online) */
+static int  s_players;         /* ... and the session's size, 2-4                 */
+static int  s_online_row;      /* the row the encoder sets: UI_ONLINE_ROW_*       */
 
 #if !defined(GBAGATE_QEMU)
 #include "gbl_peer.h"
@@ -878,19 +880,22 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
     case APP_MODE_LINK_ONLINE: {
         ui_online_t on;
         online_gather(&on);
+        /* before the session links, the click moves between Players and
+         * Local Players and turning sets the one marked; a session not yet
+         * linked starts again for the new numbers (a Multi-Play link is
+         * created differently from a one-cable one). After a failed or
+         * finished session the click starts a new one. */
+        const bool setting = ui_online_setting(&on);
         if (have_event && e && e->type == UI_EVENT_CHIP_SENT) {
-            online_retry();
+            if (setting) s_online_row = !s_online_row;
+            else online_retry();
+            on.row = s_online_row;
         }
-        /* before the session links: turning sets the local players, 1-3,
-         * and a session not yet linked starts again for the new number (a
-         * Multi-Play link is created differently from a one-cable one) */
-        if (have_event && e && e->type == UI_EVENT_ENCODER && on.net == UI_NET_UP && !on.has_stats) {
-            int n = s_local_players + (e->a > 0 ? 1 : -1);
-            n = n < 1 ? 1 : n > 3 ? 3 : n;
-            if (n != s_local_players) {
-                s_local_players = n;
-                online_restart();
-            }
+        if (have_event && e && e->type == UI_EVENT_ENCODER && setting) {
+            const int players = s_players, local = s_local_players;
+            ui_online_step(&s_players, &s_local_players, s_online_row, e->a);
+            if (s_players != players || s_local_players != local) online_restart();
+            on.players = s_players;
             on.local_players = s_local_players;
         }
         ui_page_online(&page, title, footer, &on);
@@ -1672,19 +1677,31 @@ static void online_gather(ui_online_t *o) {
     o->max_rtt_ms  = cv.max_rtt_ms;
     o->local_found   = local_found();
     o->local_players = s_local_players;
+    o->players       = s_players;
+    o->row           = s_online_row;
 #endif
 }
 
 #if !defined(GBAGATE_QEMU)
-static void online_begin(void) {
-    char session[40];
-    net_session(session, sizeof session);
+/* The settings as the rules see them (src/ui_screens.h). */
+static ui_online_t online_settings(void) {
     ui_online_t on = { 0 };
+    on.players = s_players;
     on.local_players = s_local_players;
     on.local_found = local_found();
-    if (ui_online_four_player(&on)) {
-        /* a Multi-Play link: src/mp_online.c, the relay on the chain */
-        gblink_celio_start_multi(session, (uint8_t)ui_online_players(&on), (uint8_t)s_local_players);
+    return on;
+}
+
+static void online_begin(void) {
+    const ui_online_t on = online_settings();
+    if (!ui_online_ready(&on)) {
+        return;               /* not every GBA set is on the chain: the page says so */
+    }
+    char session[40];
+    net_session(session, sizeof session);
+    if (ui_online_multi(&on)) {
+        /* a Multi-Play link: src/mp_online.c, the relay on the cable */
+        gblink_celio_start_multi(session, (uint8_t)s_players, (uint8_t)s_local_players);
     } else {
         gblink_celio_start(session);
     }
@@ -1697,7 +1714,8 @@ static void online_restart(void) {
 #if !defined(GBAGATE_QEMU)
     if (s_celio_started) {
         gblink_celio_stop();
-        online_begin();
+        s_celio_started = false;
+        online_begin();       /* now, or from the tick once it can */
     }
 #endif
 }
@@ -1709,6 +1727,7 @@ static void online_retry(void) {
     gblink_celio_view(&cv);
     if (s_celio_started && (cv.state == CELIO_FAILED || cv.state == CELIO_CLOSED)) {
         gblink_celio_stop();
+        s_celio_started = false;
         online_begin();
     }
 #endif
@@ -1719,6 +1738,8 @@ static bool mode_enter_online(void *ctx, cg_game_t game, bool has_game) {
     s_online = true;
     s_local_found = -1;
     s_local_players = ui_online_local_default(local_found());
+    s_players = ui_online_players_default(s_local_players);
+    s_online_row = UI_ONLINE_ROW_PLAYERS;
     s_celio_started = false;
 #if !defined(GBAGATE_QEMU)
     if (s_shell.caps & HW_CAP_WIFI) {

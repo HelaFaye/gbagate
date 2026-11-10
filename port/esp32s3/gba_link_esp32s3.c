@@ -190,9 +190,16 @@ static volatile bool     s_stage_fresh;
 
 /* ---- four players on the carrier's chain (src/mp_bus.c, doc/CARRIER.md) ---------- */
 
-#if defined(BOARD_LINK_PORTS) && BOARD_LINK_PORTS > 1
+/* Every board: one GBA on the one port takes part as one player (with the
+ * rest remote); the carrier's chain adds ports 2 and 3. */
 #define HAVE_MP4 1
+#ifndef BOARD_LINK_PORTS
+#define BOARD_LINK_PORTS 1
+#endif
+#if BOARD_LINK_PORTS > 1
+#define HAVE_CHAIN 1
 _Static_assert(PIN_LINK_SI2 < 32 && PIN_LINK_SI3 < 32, "chain pins must be GPIO 0..31");
+#endif
 
 static uint32_t IRAM_ATTR h_now(void *c) { (void)c; return esp_cpu_get_cycle_count(); }
 static void IRAM_ATTR h_wait(void *c, uint32_t t) { (void)c; wait_until(t); }
@@ -206,7 +213,12 @@ static void IRAM_ATTR h_sc(void *c, bool low) { (void)c; pin_set(PIN_LINK_SC, !l
 static void IRAM_ATTR h_so(void *c, bool high) { (void)c; pin_set(PIN_LINK_SO, high); }
 static bool IRAM_ATTR h_si(void *c, int port) {
     (void)c;
+#ifdef HAVE_CHAIN
     return pin_get(port == 1 ? PIN_LINK_SI : port == 2 ? PIN_LINK_SI2 : PIN_LINK_SI3);
+#else
+    (void)port;                   /* one port: the layout never asks for another */
+    return pin_get(PIN_LINK_SI);
+#endif
 }
 static mp_bus_hal_t s_hal = { h_now, h_wait, h_sd, h_sd_out, h_sc, h_so, h_si, NULL, 0 };
 
@@ -216,7 +228,6 @@ static gba_link_mp4_client_t  s_mp4_client;
 static volatile words4_t      s_mp4_tx;       /* the next transfer's answers */
 static QueueHandle_t          s_words4;       /* ISR -> task: every slot     */
 static mp_bus_stats_t         s_mp4_stats;
-#endif
 
 /* ---- child: the SC-falling interrupt -------------------------------------------- */
 
@@ -281,7 +292,7 @@ static void cfg_output(int pin, bool level) {
 
 static void apply_pins(gbl_phy_mode_t mode, bool sd_alt) {
     gpio_intr_disable(PIN_LINK_SC);
-#ifdef HAVE_MP4
+#ifdef HAVE_CHAIN
     /* ports 2 and 3's SO: inputs, pulled down so an empty port reads low
      * (the carrier fits 100 k as well) */
     gpio_reset_pin(PIN_LINK_SI2);
@@ -528,7 +539,8 @@ static const gbl_phy_driver_t k_gblink_driver = {
 
 #ifdef HAVE_MP4
 bool gba_link_mp4_start(const mp_bus_layout_t *l, const gba_link_mp4_client_t *c) {
-    if (!mp_bus_layout_ok(l) || !c || !c->next || !c->done || s_yielded) return false;
+    if (!mp_bus_layout_ok(l) || l->locals > BOARD_LINK_PORTS || !c || !c->next || !c->done || s_yielded)
+        return false;
     set_mode(OWNER_NONE, GBL_PHY_OFF, false);
     s_mp4_layout = *l;
     s_mp4_client = *c;
@@ -563,6 +575,7 @@ bool gblink_mp4_bus_start(const mp_bus_layout_t *l, mp_link_t *link) {
 
 void gblink_mp4_bus_stop(void) { gba_link_mp4_stop(); }
 
+#ifdef HAVE_CHAIN
 /*
  * GBAs on the chain, counted from port 1: a GBA's SO idles high, an empty
  * port's reads low through its pull-down. Port 1's SO is SI, pulled up in
@@ -580,6 +593,7 @@ int gblink_cable_gbas(void) {
     gpio_set_pull_mode(PIN_LINK_SI, GPIO_FLOATING);
     return n;
 }
+#endif
 #endif
 
 /* ---- setup -------------------------------------------------------------------------------- */

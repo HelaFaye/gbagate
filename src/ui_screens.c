@@ -358,7 +358,7 @@ void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
     /* celio_state_t, without including celio.h in every screen's build */
     enum { C_IDLE, C_CONNECTING, C_ENTERING, C_WAITING, C_STARTING, C_LINKED, C_CLOSED, C_FAILED };
     bool again = o && o->net == UI_NET_UP && (o->celio == C_FAILED || o->celio == C_CLOSED);
-    begin(p, title, keys, again ? "retry" : NULL);
+    begin(p, title, keys, again ? "retry" : ui_online_setting(o) ? "next" : NULL);
     if (!o || o->net == UI_NET_NONE) {
         ui_page_add(p, COL_BAD, "not available");
         ui_page_add(p, COL_TEXT_DIM, "this image has no");
@@ -390,7 +390,11 @@ void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
     case C_IDLE:
     case C_CONNECTING:
     case C_ENTERING:
-        ui_page_add(p, COL_WARN, "finding Celio...");
+        if (o->local_players > 0 && !ui_online_ready(o)) {
+            ui_page_add(p, COL_WARN, "connect %d GBAs", o->local_players);
+        } else {
+            ui_page_add(p, COL_WARN, "finding Celio...");
+        }
         break;
     case C_WAITING:
         ui_page_add(p, COL_WARN, "waiting for partner");
@@ -432,12 +436,15 @@ void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
         break;
     }
     if (before && o->local_players > 0) {
-        /* "Local Players: 3 found" is wider than the panel, so "found" goes
-         * centred under the number (or "found 2" when the setting is not
-         * what is on the cable). */
+        /* Players, then Local Players: the selected row marked, the other
+         * spaced to line up. "Local Players: 3 found" is wider than the
+         * panel, so "found" goes centred under the number (or "found 2"
+         * when the setting is not what is on the cable). */
         char setting[UI_PAGE_TEXT], under[UI_PAGE_TEXT];
-        snprintf(setting, sizeof setting, "Local Players: %d", o->local_players);
-        ui_page_add(p, COL_TEXT, "%s", setting);
+        const bool sel_players = o->row == UI_ONLINE_ROW_PLAYERS;
+        ui_page_add(p, sel_players ? COL_TEXT : COL_TEXT_DIM, "%sPlayers: %d", sel_players ? "> " : "  ", o->players);
+        snprintf(setting, sizeof setting, "%sLocal Players: %d", sel_players ? "  " : "> ", o->local_players);
+        ui_page_add(p, sel_players ? COL_TEXT_DIM : COL_TEXT, "%s", setting);
         if (o->local_found >= 0) {
             const bool same = o->local_found == o->local_players;
             char word[24];                 /* "found " and any int */
@@ -445,7 +452,6 @@ void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
             ui_online_under(under, sizeof under, setting, word);
             ui_page_add(p, same ? COL_TEXT_DIM : COL_WARN, "%s", under);
         }
-        if (ui_online_four_player(o)) ui_page_add(p, COL_GOOD, "4-player link");
     }
     if (o->ip) {
         ui_page_add(p, COL_TEXT_DIM, "IP %s", o->ip);
@@ -459,7 +465,10 @@ void ui_online_under(char *out, size_t n, const char *line, const char *word) {
     char head[UI_PAGE_TEXT];
     snprintf(head, sizeof head, "%.*s", (int)(len ? len - 1 : 0), line);
     const int centre = ui_font_width(head) + (ui_font_width(line + (len ? len - 1 : 0)) + 1) / 2;
-    const int start = centre - (ui_font_width(word) + 1) / 2;
+    int start = centre - (ui_font_width(word) + 1) / 2;
+    /* centred, unless that would run off the panel: then as far right as
+     * fits ("found 2" under the marked row's number) */
+    if (start + ui_font_width(word) > TEXT_W) start = TEXT_W - ui_font_width(word);
     size_t k = 0;
     char pad[UI_PAGE_TEXT] = "";
     while (k + 1 < sizeof pad) {          /* the most spaces that do not pass start */
@@ -469,6 +478,10 @@ void ui_online_under(char *out, size_t n, const char *line, const char *word) {
         k++;
     }
     snprintf(out, n, "%s%s", pad, word);
+    while (k > 0 && ui_font_fit(out, TEXT_W) < strlen(out)) {   /* the spacing between them */
+        pad[--k] = '\0';
+        snprintf(out, n, "%s%s", pad, word);
+    }
 }
 
 int ui_online_local_default(int found) {
@@ -478,11 +491,34 @@ int ui_online_local_default(int found) {
 /* More than one GBA here: a Multi-Play link of four, the other players
  * remote (doc/MULTIPLAY.md). Only with that many GBAs actually found on the
  * chain: a board that cannot see them cannot carry them. */
-bool ui_online_four_player(const ui_online_t *o) {
-    return o && o->local_players > 1 && o->local_found >= o->local_players;
+int ui_online_players_default(int local_players) { return local_players > 1 ? 4 : 2; }
+
+void ui_online_step(int *players, int *local, int row, int delta) {
+    const int d = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+    if (row == UI_ONLINE_ROW_PLAYERS) {
+        int n = *players + d;
+        const int lo = *local + 1 > 2 ? *local + 1 : 2;
+        *players = n < lo ? lo : n > 4 ? 4 : n;
+    } else {
+        int n = *local + d;
+        const int hi = *players - 1 < 3 ? *players - 1 : 3;
+        *local = n < 1 ? 1 : n > hi ? hi : n;
+    }
 }
 
-int ui_online_players(const ui_online_t *o) { return ui_online_four_player(o) ? 4 : 2; }
+bool ui_online_multi(const ui_online_t *o) {
+    return o && (o->players > 2 || o->local_players > 1);
+}
+
+bool ui_online_setting(const ui_online_t *o) {
+    enum { C_ENTERING = 2, C_WAITING = 3 };   /* celio_state_t */
+    return o && o->net == UI_NET_UP && o->local_players > 0 && !o->has_stats &&
+           (o->celio <= C_ENTERING || o->celio == C_WAITING);
+}
+
+bool ui_online_ready(const ui_online_t *o) {
+    return o && (o->local_players <= 1 || o->local_found >= o->local_players);
+}
 
 /*
  * The wireless link cable: GB-Link's relay, run against another board over

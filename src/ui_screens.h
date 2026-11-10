@@ -149,13 +149,17 @@ typedef struct {
      * slowest ack. Shown only when has_stats. */
     bool        has_stats;
     uint32_t    up, down, resent, lost, max_rtt_ms;
-    /* GBAs on this board's own cable (doc/MULTIPLAY.md): how many the
-     * player says (1-3; 0 hides the line) and how many answered on the
-     * cable (-1: not probed). Three local GBAs and the board make four:
-     * only then is the four-player relay offered. */
+    /* The session's size and this board's part of it (doc/MULTIPLAY.md):
+     * players on the link (2-4), the GBAs on this board's own cable (1-3;
+     * 0 hides both rows), how many answered on it (-1: not probed), and
+     * which row the encoder sets (UI_ONLINE_ROW_*). */
+    int         players;
     int         local_players;
     int         local_found;
+    int         row;
 } ui_online_t;
+
+enum { UI_ONLINE_ROW_PLAYERS = 0, UI_ONLINE_ROW_LOCAL = 1 };
 
 /* `word` padded to sit centred under `line`'s last character (the panel's
  * font is proportional). */
@@ -178,11 +182,24 @@ int ui_print_scroll_max(const struct gbp *p, const char *note);
 
 /* What the local-players setting starts at: the GBAs found, or 1. */
 int ui_online_local_default(int found);
-/* The four-player relay is offered only with three GBAs found. */
-bool ui_online_four_player(const ui_online_t *o);
-/* The players a session is created for: four with the four-player link,
- * two (one cable, as Celio-Client plays) otherwise. */
-int ui_online_players(const ui_online_t *o);
+/* ... and Players: four with more than one GBA here, else two (one cable,
+ * as Celio-Client plays). */
+int ui_online_players_default(int local_players);
+
+/* Turn the selected row by delta. Players 2-4, local players 1-3, and at
+ * least one player remote: Players never goes below local + 1, and local
+ * players never reach Players. */
+void ui_online_step(int *players, int *local_players, int row, int delta);
+
+/* A Multi-Play session (src/mp_online.h) rather than one cable: more than
+ * two players, or more than one GBA here. */
+bool ui_online_multi(const ui_online_t *o);
+/* Can it start: with several GBAs here, only once that many are found on
+ * the chain (one GBA is the port every board has). */
+bool ui_online_ready(const ui_online_t *o);
+/* Are the Players / Local Players rows showing (before the link), so the
+ * click moves between them and turning sets them? */
+bool ui_online_setting(const ui_online_t *o);
 
 void ui_page_online(ui_page_t *p, const char *title, const ui_keys_t *keys,
                     const ui_online_t *o);

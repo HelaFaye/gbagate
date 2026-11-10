@@ -83,6 +83,25 @@ The server decides which board is master: the first to report itself ready.
 As with Celio-Client, the GBAs must suit the roles. That is what two players
 going to the Cable Club together do.
 
+### Three or four players
+
+Before the link, the page has two rows: **Players** (the session's size,
+2–4) and **Local Players** (the GBAs on this board's cable, 1–3). The click
+moves the marker between them and turning sets the marked one. At least
+one player is always remote. Players starts at 4 when more than one GBA is
+set and at 2 otherwise. Changing either restarts a session that has not
+linked yet.
+
+- **2 players, 1 local:** one cable, exactly as Celio-Client plays.
+- **More than 2 players, or more than 1 local:** a Multi-Play session
+  (`doc/MULTIPLAY.md`). Its creator's numbers set the size, and a board
+  joining brings its own Local Players. Any board can take part with its
+  one GBA. Two or three local GBAs need the carrier's chain, and the session
+  waits ("connect 3 GBAs") until that many are found on it.
+
+The four-player layouts are tested with real games through the real server
+(`test/mgba/link4_online.py`): 1+1+1+1, 3+1, 1+3 and 2+2.
+
 A code joins once: the board forgets it when the link comes up. If a session
 ends or fails, the screen says why, and **confirm** starts again.
 

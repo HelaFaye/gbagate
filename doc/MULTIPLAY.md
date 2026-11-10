@@ -100,7 +100,7 @@ What remains is putting it on the board, in the table below.
 | Four-player sessions in the board's Celio client: create and join with the players and the board's GBAs, the session's commands and data to the relay, each sender's data in its own order | `src/celio.c` (its multi mode) | done, tested (`test_celio`) |
 | The server side: boards bringing several GBAs, link IDs as first slots | `backport/Celio-Link-Server/0002` | done, 24 server tests |
 | The glue: roles to bus layouts, the relay's statuses, its commands in data packets (each entry tagged with its slot, anything malformed refused) | `src/mp_online.c`, in `port/gblink/celio_glue.cpp` | done, tested with two boards (`test_mponline`) and end to end through the real server (`test_celio_mp4.mjs`) |
-| The firmware mode: Link: Online with 2–3 local players found and set starts a four-player session | `pio/src/gate_app.c` | done; not run on hardware |
+| The firmware mode: Link: Online's Players (2–4) and Local Players (1–3) rows; more than two players or more than one local GBA starts a Multi-Play session, which waits for the local GBAs to be found on the chain. Any board can play its one GBA | `pio/src/gate_app.c`, `src/ui_screens.c` | done; not run on hardware |
 | The end-to-end test with real games: four mGBA Emeralds on boards of 1+1+1+1, 3+1, 1+3 and 2+2 GBAs, each board running its own Celio client, `mp_online` and relay, through the real patched Celio-Server; `link4.py`'s checks unchanged | `test/mgba/link4_online.py` (board mode in `mgba_multi.c`) | done: all four pass |
 
 ### The bus engine and its model
