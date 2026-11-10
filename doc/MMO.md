@@ -242,6 +242,25 @@ frame and queues their steps for the others.
 - **Screens:** the four screens show the same four trainers in the same
   places.
 
+**In and out of a building.** By Professor Birch's lab:
+- player 0 goes in: gone from the three screens outside, and alone inside;
+- player 1 follows: the two inside see each other in place, and the two
+  outside see neither;
+- player 0 walks about inside, and player 1 sees it;
+- player 0 goes back out: seen again outside at the door, and gone from
+  player 1's lab.
+
+A warp clears a game's object events, so the server forgets what that game
+was showing when its map changes, and every map is quieted as it loads.
+
+**Open question: should other players be solid?** As object events they
+are, so a player standing on a doormat blocks the door for everyone, and a
+crowd can wall a corridor off. The test's players step off the mat. An
+MMO usually lets players pass through each other. Here that means a
+figure the player's own movement ignores: one of the game's collision
+checks (`GetCollisionAtCoords` and the object-event collision under it),
+patched in RAM by the loader to skip figures.
+
 What it took:
 - **Not `gMain.callback2`.** The overworld's input (`CB1_Overworld`) only
   runs while callback2 *is* `CB2_Overworld`, so a hook there freezes the
