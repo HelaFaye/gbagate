@@ -248,7 +248,41 @@ constants (`src/ui_list.h`: 12-pixel rows, a 14-pixel header and an
 7–9 mm, which is 40–48 pixels. Scaling the current screens up does not
 work either: 2x is 256x256, which does not fit 240 lines.
 
-What it needs:
+**What runs now** (`src/touch_pad.c`, `port/esp32s3/lcd_ili9341_esp32s3.c`,
+`port/esp32s3/touch_xpt2046_esp32s3.c`): the 128x128 UI scaled by 15/8 into
+the 240x240 square in the middle of the landscape panel, with five touch
+keys in the 40-pixel strip either side. Each key is 40x48 pixels, about
+7x9 mm, the size a finger can hit. The keys are the ten buttons of the
+d-pad boards (INPUT_DPAD5):
+
+| left | | right | |
+|---|---|---|---|
+| `<` TAB | tab left | `>` TAB | tab right |
+| `L` PG UP | page up | `A` OK | select, send |
+| `^` | up | `B` BACK | back |
+| `v` | down | `SEL` FAV | favourite |
+| `R` PG DN | page down | `ST` MENU | sort, options |
+
+A touch is a button held for as long as the finger stays on it, so every
+screen, its hints ("A send", "B back") and its long presses work as they
+do with switches. A held key is drawn lit on the panel's next flush, so a
+press that changes nothing on screen (down at the end of a list) is not
+lit until something else is drawn. Text at 15/8 is 13 pixels
+high, about 2.4 mm. The touch calibration defaults to a 2.8" module's
+plates (200 to 3900 raw on both axes, X along the long side); a module
+that reads otherwise needs `tp_cal_t` changed until the calibration
+screen exists.
+
+Checked on qemu_esp32 (`qemu/accurate.sh boot gate carrier-touch`):
+- The picture comes off the emulated glass: the 15/8 scaling (every
+  doubled line is a true copy), the keys, and the theme's colours.
+- A touch on a key lights it and moves the menu; lifting the finger
+  releases it.
+- Touch alone reaches Send Program, which lists the program on the SD card.
+
+Not yet on a real panel.
+
+What a UI made for touch would need, beyond this:
 
 1. The layout's sizes come from the board, and every screen is drawn from
    them. `test_screens` renders the whole gallery at both 128x128 and
@@ -264,17 +298,20 @@ encoder, which the UI already supports.
 
 ## Firmware still to write
 
-- ILI9341 and ST7789 drivers at 320x240, with DMA and dirty-rectangle
-  updates. A full frame is 150 KB, so it lives in PSRAM; the Supermini's
-  S3FH4R2 has 2 MB.
-- XPT2046 touch: polling, filtering and a calibration screen, with the
-  calibration saved.
-- The encoder's and keys' pins from `board.h` in the input driver (it
-  reads the devkit's today), and the chip board's INT as a "chip changed"
-  event.
+- Written for the touch carrier: the ILI9341 driver (ST7789 with
+  `-DBOARD_LCD_ST7789=1`), which scales the UI in 30-row chunks with no
+  full-frame buffer, and the XPT2046, which is read only while PENIRQ is
+  low, with two samples that must agree. Still to write: a calibration
+  screen, with the calibration saved, and PWM on the backlight (it is on
+  or off today).
+- The knob carrier: its encoder's and keys' pins in the input driver
+  (`tools/build_hw.sh` does not build it yet), and the chip board's INT
+  as a "chip changed" event.
 - The three-port PHY is written (`src/mp_bus.c`, and the four-player mode
   in `port/esp32s3/gba_link_esp32s3.c`) and tested against modelled GBAs.
   It still has to be scoped on the carrier, and Link: Online has to start
   it (`doc/MULTIPLAY.md`, "What has to be built").
-- Build environments and CI images for `carrier-touch` and `carrier-knob`.
+- Build environments and CI images: `carrier-touch` is built
+  (`BOARD=carrier-touch tools/build_hw.sh gate`) and booted on qemu_esp32
+  in CI; `carrier-knob` is to come.
 - Then the PCB: KiCad, two layers, all headers through-hole.

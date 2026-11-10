@@ -28,13 +28,36 @@ neither substitutes for the other.
 
 ## The hardware image on qemu_esp32
 
-`./qemu/accurate.sh build`, then `./qemu/accurate.sh boot gate`. This builds
-Espressif's QEMU with the patches in HelaFaye/qemu_esp32: S3 GPIO pins as
-wires, the GPIO matrix and IO_MUX, and GP-SPI2/3 with GDMA. It then boots the
-*hardware* image on it and checks that the board's own drivers come up: the
-ST7735 over SPI, and both link PHYs on real GPIO. That removes the first two
-items from "Cannot" above, as far as booting goes. Nothing is on the other end
-of the pins yet. doc/MMO.md (the scale test) says what is still needed.
+```
+./qemu/accurate.sh build                       # once per fork commit: ~20 min
+./qemu/accurate.sh boot gate carrier-touch     # or: boot gate devkit
+```
+
+This builds Espressif's QEMU with the patches in HelaFaye/qemu_esp32, at the
+commit `FORK_REV` pins. The patches add S3 GPIO pins as wires, GP-SPI2/3,
+SPI panels, touch, SD cards over SPI and I2C devices.
+`qemu/accurate_boot.py` then boots the *hardware* image with the board's
+parts wired to its `board.h` pins:
+- **carrier-touch:** the ILI9341, the XPT2046, an SD card holding
+  `rom/tester.gba`, and the Battle Chip board's MCP23017s;
+- **devkit:** the ST7735.
+
+It checks what the board's own drivers do with those parts. The picture is
+read back from the emulated glass (QMP `screendump`). The touch is pressed
+through the XPT2046 model (`qom-set`), and the result is checked on screen
+and in the log. Screenshots land in `build/hw-gate-<board>/accurate/`.
+CI runs both boards (the `emulator` job), with the QEMU build cached per fork
+commit.
+
+It has already found two firmware bugs:
+- The ST7735 driver sent each pixel low byte first, so every colour on the
+  glass was wrong.
+- No board mounted its SD card: `sd_init()` had no caller, and the bus had
+  no MISO.
+
+It also found two bugs in QEMU's SD model in SPI mode (fork patch 0008).
+Still not modelled: USB-OTG, WiFi on the S3, and a GBA on the link pins
+(doc/MMO.md, the scale test).
 
 ## The UART transport
 

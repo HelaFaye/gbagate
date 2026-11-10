@@ -51,8 +51,16 @@ if(GBAGATE_QEMU)
                      ../../port/esp32s3/st7735_qemu.c
                      ../../port/esp32s3/input_qemu.c)
 else()
+    # The panel: the ST7735 on every board but the touch carrier, whose
+    # 320x240 ILI9341 (or ST7789) draws the same 128x128 UI scaled, through
+    # the same st7735_* calls, with the touch keys beside it.
+    if(GBAGATE_BOARD STREQUAL "carrier-touch")
+        set(PANEL ../../port/esp32s3/lcd_ili9341_esp32s3.c)
+    else()
+        set(PANEL ../../port/esp32s3/st7735_esp32s3.c)
+    endif()
     list(APPEND SRCS
-        ../../port/esp32s3/st7735_esp32s3.c
+        ${PANEL}
         ../../port/esp32s3/sd_esp32s3.c
         ../../port/esp32s3/gba_link_esp32s3.c
         ../../port/esp32s3/transport_esp32s3.c)
@@ -65,7 +73,10 @@ else()
     # are evaluated, so it looked for a file literally named
     # "port/esp32s3/buttons_esp32s3.c>" and no hardware image could configure.
     # A plain if() is evaluated when the list is built, which is what was meant.
-    if(BUTTONS_ON_EXPANDER)
+    # The touch carrier has no switches: its touch keys are the buttons.
+    if(GBAGATE_BOARD STREQUAL "carrier-touch")
+        list(APPEND SRCS ../../port/esp32s3/touch_xpt2046_esp32s3.c)
+    elseif(BUTTONS_ON_EXPANDER)
         list(APPEND SRCS ../../port/esp32s3/buttons_mcp.c)
     else()
         list(APPEND SRCS ../../port/esp32s3/buttons_esp32s3.c)

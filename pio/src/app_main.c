@@ -19,6 +19,7 @@ extern void tasks_start(uint32_t features);
 extern uint16_t *st7735_framebuffer(void);
 extern esp_err_t st7735_init(int panel);
 #ifndef GBAGATE_QEMU
+#include "driver/spi_common.h"
 /* Weak: the link and mini images have no USB drive (usb_msc_esp32s3.c is
  * built for gate and full only), and the call below is a runtime check. */
 esp_err_t msc_storage_init(void);
@@ -89,6 +90,14 @@ void app_main(void) {
         if (derr == ESP_OK) {
             caps |= HW_CAP_DISPLAY;
             ESP_LOGI(TAG, "display ready, framebuffer %p", st7735_framebuffer());
+#if !defined(GBAGATE_QEMU)
+            /* The card shares the panel's bus, which is up now. No card is
+             * the usual case and not an error: Send Program says so. */
+            if (BOARD_HAS_SD) {
+                extern esp_err_t sd_init(int spi_host);
+                sd_init(SPI2_HOST);
+            }
+#endif
         } else {
             ESP_LOGE(TAG, "display init failed: %s -- the panel will stay black",
                      esp_err_to_name(derr));

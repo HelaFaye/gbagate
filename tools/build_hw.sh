@@ -6,6 +6,8 @@
 #   tools/build_hw.sh gate            devkit, gate image
 #   tools/build_hw.sh full
 #   BOARD=supermini tools/build_hw.sh mini
+#   BOARD=carrier-touch tools/build_hw.sh gate   the touch carrier (doc/CARRIER.md);
+#                       the knob carrier is not built yet: its keys have no switch map
 #
 # platformio.ini remains the reference for flashing; this exists because
 # PlatformIO fetches its toolchain from a registry, and a plain ESP-IDF checkout
@@ -24,8 +26,8 @@ BUILD="$ROOT/build/hw-$VARIANT-$BOARD${OVR:+-$OVR}"
 
 case "$VARIANT" in link|gate|full|mini) ;; *)
     echo "usage: $0 {link|gate|full|mini}" >&2; exit 1 ;; esac
-case "$BOARD" in devkit|supermini) ;; *)
-    echo "BOARD must be devkit or supermini" >&2; exit 1 ;; esac
+case "$BOARD" in devkit|supermini|carrier-touch) ;; *)
+    echo "BOARD must be devkit, supermini or carrier-touch" >&2; exit 1 ;; esac
 [ -n "${IDF_PATH:-}" ] || { echo "source \$IDF_PATH/export.sh first" >&2; exit 1; }
 
 PARTS=partitions.csv; FLASH=4MB
@@ -43,7 +45,10 @@ DEFAULTS="$ROOT/pio/sdkconfig.defaults"
 [ -f "$ROOT/pio/sdkconfig.defaults.$VARIANT" ] && DEFAULTS="$DEFAULTS;$ROOT/pio/sdkconfig.defaults.$VARIANT"
 
 EXTRA=""
-[ "$BOARD" = supermini ] && EXTRA="-D BUTTONS_ON_EXPANDER=1 -D GBAGATE_BOARD=supermini"
+case "$BOARD" in
+    supermini) EXTRA="-D BUTTONS_ON_EXPANDER=1 -D GBAGATE_BOARD=supermini" ;;
+    carrier-touch) EXTRA="-D GBAGATE_BOARD=$BOARD" ;;   # its touch keys are the buttons
+esac
 # Board overrides from the environment, e.g. BOARD_HAS_BRIDGE=1 tools/build_hw.sh gate
 for f in $(env | sed -n 's/^\(BOARD_HAS_[A-Z_]*\)=.*/\1/p'); do EXTRA="$EXTRA -D $f=${!f}"; done
 

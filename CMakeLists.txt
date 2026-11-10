@@ -49,6 +49,10 @@ if(GBAGATE_QEMU)
 endif()
 if(DEFINED GBAGATE_BOARD AND GBAGATE_BOARD STREQUAL "supermini")
   add_compile_definitions(BOARD_SUPERMINI=1)
+elseif(DEFINED GBAGATE_BOARD AND GBAGATE_BOARD STREQUAL "carrier-touch")
+  add_compile_definitions(BOARD_CARRIER_TOUCH=1)
+elseif(DEFINED GBAGATE_BOARD AND GBAGATE_BOARD STREQUAL "carrier-knob")
+  add_compile_definitions(BOARD_CARRIER_KNOB=1)
 endif()
 # board.h's BOARD_HAS_* overrides, given as `idf.py -DBOARD_HAS_SD=0 build`
 # (or through tools/build_hw.sh's EXTRA). A -D to idf.py sets a CMake

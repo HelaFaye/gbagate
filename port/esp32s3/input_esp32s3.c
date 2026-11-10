@@ -84,6 +84,10 @@ static TaskHandle_t s_task;
  */
 int input_hw_set_mode(int mode_in) {
     s_encoder = false;              /* the task stops sampling while we rewire */
+#if BOARD_HAS_TOUCH
+    /* Every button has a touch key, whatever Settings holds. */
+    mode_in = INPUT_DPAD5;
+#endif
     s_mode = (input_mode_t)mode_in;
     if (s_mode >= INPUT_MODE_COUNT) {
         s_mode = INPUT_ENCODER;

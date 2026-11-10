@@ -154,6 +154,7 @@ jobs:
           - { variant: mini, board: devkit }
           - { variant: mini, board: supermini }
           - { variant: gate, board: devkit, bridge: 1 }
+          - { variant: gate, board: carrier-touch }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       # compiled objects, per image: a push that touches a few files rebuilds
@@ -173,3 +174,53 @@ jobs:
           fi
           if [ -n "${{ matrix.bridge }}" ]; then export BOARD_HAS_BRIDGE=1; fi
           BOARD=${{ matrix.board }} tools/build_hw.sh ${{ matrix.variant }}
+
+  emulator:
+    # The hardware images on qemu_esp32 (Espressif's QEMU with HelaFaye's S3
+    # patches): the board's own drivers against emulated parts, the picture
+    # read back from the glass and the touch pressed (qemu/accurate.sh).
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.6
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: QEMU build dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq ninja-build pkg-config libglib2.0-dev libpixman-1-dev \
+            libgcrypt20-dev libslirp-dev flex bison python3-venv mtools >/dev/null
+      - name: which fork commit
+        id: fork
+        shell: bash
+        run: echo "rev=$(sed -n 's/^FORK_REV="${FORK_REV:-\([0-9a-f]*\)}".*/\1/p' qemu/accurate.sh)" >> "$GITHUB_OUTPUT"
+      # The emulator, per pinned fork commit: twenty minutes to build, so built once
+      - name: cache the emulator
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: build/esp-qemu
+          key: esp-qemu-${{ steps.fork.outputs.rev }}
+      - name: cache ccache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: .ccache
+          key: ccache-emulator-${{ github.sha }}
+          restore-keys: ccache-emulator-
+      - name: build the emulator
+        shell: bash
+        run: ./qemu/accurate.sh build
+      - name: boot the touch carrier and the devkit
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh" >/dev/null
+          if command -v ccache >/dev/null; then
+            export IDF_CCACHE_ENABLE=1 CCACHE_DIR="$PWD/.ccache" CCACHE_MAXSIZE=400M
+          fi
+          ./qemu/accurate.sh boot gate carrier-touch
+          ./qemu/accurate.sh boot gate devkit
+      - name: screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: emulator-screens
+          path: build/hw-gate-*/accurate/*.ppm
+          if-no-files-found: ignore

@@ -258,8 +258,10 @@
  * The DIY carrier boards (doc/CARRIER.md): a Supermini, up to three GBA
  * link ports on one Multi-Play chain, the Battle Chip board on I2C, and
  * either a 320x240 touch panel (ILI9341 or ST7789 with an XPT2046) or a
- * 2" ST7789V with a rotary encoder and two keys. Planned: the panels' and the
- * touch controller's drivers and the three-port PHY are not written yet.
+ * 2" ST7789V with a rotary encoder and two keys. The touch carrier's panel
+ * and touch drivers are written (lcd_ili9341_esp32s3.c, touch_xpt2046_
+ * esp32s3.c) and run on qemu_esp32; the knob carrier's are not, and it is
+ * not built yet.
  *
  * The Supermini has two sets of pins. The edge rows (the pin headers)
  * bring out GPIO 1-13, 43 (TX) and 44 (RX); the inner rows, through-holes

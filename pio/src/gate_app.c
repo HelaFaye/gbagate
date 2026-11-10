@@ -271,6 +271,29 @@ __attribute__((weak)) bool msc_rescan(rom_catalog_t *c, uint32_t logo) {
 __attribute__((weak)) const rom_io_t *msc_io(void) { return NULL; }
 #endif
 
+/*
+ * The SD card (port/esp32s3/sd_esp32s3.c), when there is no USB drive: the
+ * carriers and any board built without USB storage. It was written and never
+ * called, so no board read its card. Weak for the QEMU image, which has none.
+ */
+bool            sd_mounted(void);
+bool            sd_rescan(rom_catalog_t *cat, uint32_t logo_reference);
+const rom_io_t *sd_io(void);
+__attribute__((weak)) bool sd_mounted(void) { return false; }
+__attribute__((weak)) bool sd_rescan(rom_catalog_t *c, uint32_t logo) {
+    (void)c; (void)logo; return false;
+}
+__attribute__((weak)) const rom_io_t *sd_io(void) { return NULL; }
+
+/* Where programs come from: the USB drive if there is one, else the card. */
+static bool storage_available(void) { return msc_storage_available() || sd_mounted(); }
+static bool storage_rescan(rom_catalog_t *cat) {
+    return msc_storage_available() ? msc_rescan(cat, 0) : sd_rescan(cat, 0);
+}
+static const rom_io_t *storage_io(void) {
+    return msc_storage_available() ? msc_io() : sd_mounted() ? sd_io() : NULL;
+}
+
 /* ---- persistence -------------------------------------------------------- */
 
 static settings_t s_settings;
@@ -648,7 +671,7 @@ static void send_program(void)
     s_send_advice = "turn on the GBA, no cart";
     s_send_pct = 0;
 
-    const rom_io_t *io = msc_io();
+    const rom_io_t *io = storage_io();
     if (!io || !rom_stage(&s_cat, s_roms.cursor, io, NULL,
                           staging, MB_MAX_SIZE, &len)) {
         snprintf(s_send_status, sizeof s_send_status, "can't read the file");
@@ -1224,9 +1247,9 @@ static const char *svc_agent_start(void) {
     memcpy(image, gbagent_image, gbagent_image_len);
 
     /* A logo, from a program the user owns. */
-    const rom_io_t *io = msc_io();
+    const rom_io_t *io = storage_io();
     if (io && s_cat.count == 0) {
-        msc_rescan(&s_cat, 0);
+        storage_rescan(&s_cat);
     }
     bool logo = false;
     for (uint16_t i = 0; io && i < s_cat.count && !logo; i++) {
@@ -1481,9 +1504,9 @@ void gate_enter_mode(app_mode_t mode, cg_game_t game) {
          * no longer there.
          */
         romview_state_t st = ROMVIEW_NO_STORAGE;
-        if (!msc_storage_available()) {
+        if (!storage_available()) {
             st = ROMVIEW_HOST_OWNS;
-        } else if (msc_rescan(&s_cat, 0)) {
+        } else if (storage_rescan(&s_cat)) {
             st = ROMVIEW_OK;
         }
         romview_init(&s_roms);

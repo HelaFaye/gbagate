@@ -362,12 +362,17 @@ the patch series in `patches/espressif-qemu`. That patch set is still in
 progress. `qemu/accurate.sh` pins the commit last checked and builds it
 there.
 
-**Checked on it so far** (`qemu/accurate.sh boot gate`): the hardware image
-runs, not the emulator image (`GBAGATE_QEMU=0`). The real ST7735 driver comes
-up over GP-SPI2. The Multi-Play and Wireless Adapter PHYs start on core 1 on
-real GPIO. The link source is the PHY, and every task starts with no panic.
-USB fails, because QEMU has no USB-OTG for the S3. On stock Espressif QEMU
-the same image could only be swapped for UART stand-ins.
+**Checked on it so far** (`qemu/accurate.sh boot gate carrier-touch`, and
+`devkit`): the hardware image runs, not the emulator image (`GBAGATE_QEMU=0`),
+with the board's parts on its pins. On the touch carrier these are the
+ILI9341, the XPT2046, an SD card and the Battle Chip board's expanders; on
+the devkit, the ST7735.
+- The panel drivers draw a picture that is read back from the glass and
+  checked. The touch is pressed through the emulated controller.
+- The SD card mounts, and the link PHYs start on core 1 on real GPIO.
+- USB-OTG is still not emulated on the S3.
+
+qemu/README.md lists the bugs this has found.
 
 **Still needed before the test can run.** First, from the emulator (watch
 the fork for these):
@@ -377,7 +382,6 @@ the fork for these):
 - A network for the board on the S3 machine. On the S3 the fork has
   `open_eth`, which ESP-IDF drives as `CONFIG_ETH_USE_OPENETH`. Its master
   branch has a WiFi model, but only for the ESP32.
-- Optional: a panel on `spi2`, so screenshots come from the real driver.
 
 Then from us:
 - An openeth netif in place of WiFi for the QEMU run.
