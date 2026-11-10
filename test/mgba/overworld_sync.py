@@ -207,18 +207,23 @@ def quiet(g, mh):
     c.w32(mh + 8, E.FREE_EWRAM + 0x800)        # an empty map script table
 
 
-def warp_all(m, games):
+def keep_quiet(games):
+    """Every map as it loads (the town, the lab): its header is in RAM with
+    ROM pointers until quieted, and the game copies it twice in a warp."""
+    for g in games:
+        mh = g.c.sym['gMapHeader']
+        if g.c.r32(mh + 8) >= 0x08000000:
+            quiet(g, mh)
+
+
+def warp_all(m, games, spots=SPOTS):
     """Every player into Littleroot Town on its own tile, quieted."""
-    mh = m.sym['gMapHeader']
-    scripts = m.sym['LittlerootTown_MapScripts']
-    for g, (x, y) in zip(games, SPOTS):
+    for g, (x, y) in zip(games, spots):
         g.c.w32(E.FREE_EWRAM + 0x800, 0)
         g.c.call_once(WARP, defines={'MAP_GROUP': LITTLEROOT[0], 'MAP_NUM': LITTLEROOT[1], 'X': x, 'Y': y})
     for _ in range(400):
         m.run(1)
-        for g in games:
-            if g.c.r32(mh + 8) == scripts:
-                quiet(g, mh)
+        keep_quiet(games)
     return [g.player()[:4] for g in games]
 
 
@@ -230,13 +235,21 @@ class Server:
         self.last = [None] * len(games)
         self.steps = [0] * len(games)            # each player's steps and turns, as seen
         self.turns = [0] * len(games)
+        self.maps = [g.player()[:2] for g in games]
 
     def tick(self):
+        for j, h in enumerate(self.games):          # a game that changed map lost its figures
+            where = h.player()[:2]
+            if where != self.maps[j]:
+                self.maps[j] = where
+                h.shown = {}
+                h.queue = []
+                h.c.w16(MAILBOX, 0)
         for k, g in enumerate(self.games):
             now = g.player()
             before = self.last[k]
             self.last[k] = now
-            if before and before[:2] == now[:2]:
+            if before and before[:2] == now[:2] and abs(before[2] - now[2]) + abs(before[3] - now[3]) <= 1:
                 if before[2:4] != now[2:4]:
                     self.steps[k] += 1
                 elif before[4] != now[4]:
@@ -280,6 +293,14 @@ ROUTES = [
     [(E.DOWN, 16), (0, 4), (E.RIGHT, 48), (0, 10), (E.UP, 2), (0, 8), (E.UP, 48), (E.LEFT, 16)],
     [(E.LEFT, 2), (0, 6), (E.LEFT, 16), (0, 6), (E.DOWN, 32), (0, 6), (E.RIGHT, 32), (0, 2), (E.UP, 2)],
 ]
+
+
+def frame(m, games, srv, keys=None):
+    m.run(1, keys or [0] * N)
+    keep_quiet(games)
+    for g in games:
+        g.hook()
+    srv.tick()
 
 
 def keys_at(route, f):
@@ -360,8 +381,94 @@ def main(rom, out):
                                                     'on screen' if on_screen and not fig[5] else 'off screen'),
                   fig[3] < 64 and not fig[4] and (fig[5] == (not on_screen)))
         g.c.shot(os.path.join(out, 'overworld-player%d.png' % g.i))
+    buildings(m, games, out)
     print('emerald overworld, four players  %s' % ('all checks passed' if not fails else 'FAILURES'))
     return 1 if fails else 0
+
+
+LAB_DOOR = (7, 16)                        # Littleroot Town's warp 2: Professor Birch's lab
+LAB = (1, 4)
+NEAR_LAB = ((7, 18), (8, 18), (10, 18), (11, 18))
+
+
+def shows(g, k):
+    return g.figure(k) is not None
+
+
+def walk(m, games, srv, who, key, frames):
+    for _ in range(frames):
+        keys = [0] * N
+        keys[who] = key
+        frame(m, games, srv, keys)
+
+
+def settle(m, games, srv, frames=90):
+    for _ in range(frames):
+        frame(m, games, srv)
+
+
+def until_map(m, games, srv, who, key, where, limit=400):
+    """Hold key for player who until their map is where and the overworld runs again."""
+    for _ in range(limit):
+        keys = [0] * N
+        keys[who] = key if games[who].player()[:2] != where else 0
+        frame(m, games, srv, keys)
+        c = games[who].c
+        if games[who].player()[:2] == where and c.callback2() in (c.sym['CB2_Overworld'] | 1,):
+            break
+    settle(m, games, srv, 60)
+
+
+def same_place(g, k, games):
+    p, fig = games[k].player(), g.figure(k)
+    return fig is not None and fig[:2] == p[2:4]
+
+
+def buildings(m, games, out):
+    """In and out of Professor Birch's lab, next to the others."""
+    print('  -- buildings: Professor Birch\'s lab')
+    warp_all(m, games, NEAR_LAB)
+    srv = Server(games)
+    settle(m, games, srv, 40)
+    check('outside the lab, every game shows the three others',
+          all(shows(g, k) for g in games for k in range(N) if k != g.i))
+
+    until_map(m, games, srv, 0, E.UP, LAB)                  # player 0 goes in
+    check('player 0 is in the lab (%s)' % (games[0].player()[:4],), games[0].player()[:2] == LAB)
+    check('... and gone from the three screens outside', not any(shows(games[j], 0) for j in (1, 2, 3)))
+    check('... and alone in there', not any(shows(games[0], k) for k in (1, 2, 3)))
+    # off the doormat: other players are solid, so one standing on it
+    # blocks the door for everyone (doc/MMO.md)
+    walk(m, games, srv, 0, E.UP, 16)
+    walk(m, games, srv, 0, E.RIGHT, 16)
+
+    walk(m, games, srv, 1, E.LEFT, 16)                      # player 1 follows
+    until_map(m, games, srv, 1, E.UP, LAB)
+    check('player 1 is in the lab too', games[1].player()[:2] == LAB)
+    walk(m, games, srv, 1, E.UP, 16)
+    walk(m, games, srv, 1, E.LEFT, 16)
+    settle(m, games, srv, 30)
+    check('... and they see each other there, in place', same_place(games[0], 1, games) and same_place(games[1], 0, games))
+    check('... while the two outside see neither', not any(shows(games[j], k) for j in (2, 3) for k in (0, 1)))
+
+    walk(m, games, srv, 0, E.UP, 32)                        # player 0 walks about inside
+    walk(m, games, srv, 0, E.RIGHT, 16)
+    settle(m, games, srv, 40)
+    check('player 0 walks in the lab, and player 1 sees it in place (%s, %s)' %
+          (games[0].player()[2:4], (games[1].figure(0) or [None, None])[:2]), same_place(games[1], 0, games))
+    games[0].c.shot(os.path.join(out, 'overworld-lab-player0.png'))
+    games[1].c.shot(os.path.join(out, 'overworld-lab-player1.png'))
+
+    walk(m, games, srv, 0, E.LEFT, 16)                      # back to the door, and out
+    walk(m, games, srv, 0, E.DOWN, 32)
+    walk(m, games, srv, 0, E.LEFT, 16)
+    until_map(m, games, srv, 0, E.DOWN, LITTLEROOT)
+    settle(m, games, srv, 60)
+    check('player 0 is back outside (%s)' % (games[0].player()[:4],), games[0].player()[:2] == LITTLEROOT)
+    check('... seen again by the two outside, in place', same_place(games[2], 0, games) and same_place(games[3], 0, games))
+    check('... and gone from player 1\'s lab', not shows(games[1], 0))
+    for g in games:
+        g.c.shot(os.path.join(out, 'overworld-after-lab-player%d.png' % g.i))
 
 
 if __name__ == '__main__':
