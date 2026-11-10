@@ -26,6 +26,16 @@ So QEMU exercises the firmware's *logic* in place. **It does not remove a
 single item from the bench list in `PROJECT_STATUS.md`.** Both are worth doing;
 neither substitutes for the other.
 
+## The hardware image on qemu_esp32
+
+`./qemu/accurate.sh build`, then `./qemu/accurate.sh boot gate`. This builds
+Espressif's QEMU with the patches in HelaFaye/qemu_esp32: S3 GPIO pins as
+wires, the GPIO matrix and IO_MUX, and GP-SPI2/3 with GDMA. It then boots the
+*hardware* image on it and checks that the board's own drivers come up: the
+ST7735 over SPI, and both link PHYs on real GPIO. That removes the first two
+items from "Cannot" above, as far as booting goes. Nothing is on the other end
+of the pins yet. doc/MMO.md (the scale test) says what is still needed.
+
 ## The UART transport
 
 QEMU does not emulate the S3's USB-OTG, so CDC never enumerates and cannot be

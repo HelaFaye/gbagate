@@ -344,6 +344,59 @@ and collision ahead of the player, chunk by chunk (Netcode, above), and
 the loader writes them into the map buffer before the player can see
 them.
 
+## How many players in sight: the scale test
+
+Once the player limit is raised and the link protocol changed, the question
+is how many players can be within each other's draw/sync distance before
+something gives. Three places can give first, and each needs its own bench:
+
+| where | what runs out | how it shows | tested on |
+|---|---|---|---|
+| the GBA | object events (Emerald has 16, the player holds one), sprite palettes (16 in hardware), sprite tile VRAM, the agent's time in VBlank | a player not drawn, wrong colours, a dropped frame | mGBA: `overworld_sync.py` with N figures in one chunk |
+| the cable | the steps a frame of the link can carry to the GBA | steps arriving late, then the catch-up at run speed | mGBA and the board, together |
+| the board | core time (PHY on core 1, network and relay on core 0), queue depth, heap per player, WiFi | queues filling, drops, late steps, a missed link frame | the board's own code under realistic timing: **qemu_esp32** |
+
+The board's side is why the test runs on qemu_esp32
+(https://github.com/HelaFaye/qemu_esp32), which is Espressif's QEMU with
+the patch series in `patches/espressif-qemu`. That patch set is still in
+progress. `qemu/accurate.sh` pins the commit last checked and builds it
+there.
+
+**Checked on it so far** (`qemu/accurate.sh boot gate`): the hardware image
+runs, not the emulator image (`GBAGATE_QEMU=0`). The real ST7735 driver comes
+up over GP-SPI2. The Multi-Play and Wireless Adapter PHYs start on core 1 on
+real GPIO. The link source is the PHY, and every task starts with no panic.
+USB fails, because QEMU has no USB-OTG for the S3. On stock Espressif QEMU
+the same image could only be swapped for UART stand-ins.
+
+**Still needed before the test can run.** First, from the emulator (watch
+the fork for these):
+- A GBA on the link pins: a device on SC, SD, SI and SO, wired with
+  `esp32s3.pin-link`, that speaks pin-level to an mGBA core, or to the sim's
+  GBA model, over a socket.
+- A network for the board on the S3 machine. On the S3 the fork has
+  `open_eth`, which ESP-IDF drives as `CONFIG_ETH_USE_OPENETH`. Its master
+  branch has a WiFi model, but only for the ESP32.
+- Optional: a panel on `spi2`, so screenshots come from the real driver.
+
+Then from us:
+- An openeth netif in place of WiFi for the QEMU run.
+- The step protocol on the board (Order of work, step 4).
+- A crowd generator: N scripted players walking one chunk through the server.
+
+**Timing caveat.** QEMU is not cycle-accurate. Runs use `-icount` so the
+numbers repeat. Core load is compared between N and N+1, not read as an
+absolute. One bench run on a real board calibrates it.
+
+**The run.** N = 1, 2, 4, 8, … players in one chunk, each on a scripted
+route. For each N, measure:
+- on every GBA: steps shown late, and players not drawn;
+- on the board: queue depth and drops, core load (FreeRTOS run-time stats),
+  heap low-water, and missed link frames.
+
+The limit is the first N where any of these crosses its line. The table
+above says where to look first.
+
 ## Order of work
 
 1. The agent hooked into a running game, on the emulator with a scripted
