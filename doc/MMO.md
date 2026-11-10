@@ -253,6 +253,23 @@ frame and queues their steps for the others.
 A warp clears a game's object events, so the server forgets what that game
 was showing when its map changes, and every map is quieted as it loads.
 
+**Talking to another player.** Player 2 turns to face player 3's figure and
+presses A. The server answers with a script that the game's own engine
+runs, started with `ScriptContext_SetupScript` (lockall, message,
+waitmessage, waitbuttonpress, closemessage, releaseall, end). Its text is
+player 3's own name, from their save, and a line. Checked:
+- the message box says it (`gStringVar4`), and player 2's controls are
+  locked;
+- player 3 keeps walking meanwhile: talking holds up only the one reading;
+- A closes the box, the script is done, the controls come back, and
+  player 2 walks again.
+
+A figure has no script of its own (it is not from a map template), so
+pressing A at one does nothing in the game itself. In the test, the server
+stand-in sees the A press and that player 2 is facing the figure. On the
+board, the agent checks the same two things: the press, and a figure on
+the tile ahead.
+
 **Open question: should other players be solid?** As object events they
 are, so a player standing on a doormat blocks the door for everyone, and a
 crowd can wall a corridor off. The test's players step off the mat. An

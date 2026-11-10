@@ -58,7 +58,8 @@ GFX_BRENDAN, GFX_MAY = 0, 89              # OBJ_EVENT_GFX_*_NORMAL
 WALK = {'down': 0x08, 'up': 0x09, 'left': 0x0A, 'right': 0x0B}   # MOVEMENT_ACTION_WALK_NORMAL_*
 FACE = {1: 0x00, 2: 0x01, 3: 0x02, 4: 0x03}                      # DIR_* -> MOVEMENT_ACTION_FACE_*
 DIRS = {1: 'down', 2: 'up', 3: 'left', 4: 'right'}               # DIR_SOUTH.. DIR_EAST
-C_SPAWN, C_MOVE, C_REMOVE = 1, 2, 3
+C_SPAWN, C_MOVE, C_REMOVE, C_SAY = 1, 2, 3, 4
+SAY_SCRIPT = E.FREE_EWRAM + 0x400       # a script and its text, for C_SAY
 
 WARP = '''
 typedef void (*fn)(void);
@@ -95,6 +96,7 @@ typedef u8 (*id_fn)(u8, u8, u8);
 typedef u8 (*u8obj_fn)(void *);
 typedef u8 (*set_fn)(void *, u8);
 typedef void (*rm_fn)(void *);
+typedef void (*script_fn)(const u8 *);
 #define MB ((volatile unsigned short *)MAILBOX)
 void entry(u8 task) {
     (void)task;
@@ -116,6 +118,9 @@ void entry(u8 task) {
             ((set_fn)(SYM_ObjectEventSetHeldMovement | 1))(obj, (u8)c[2]);
         } else if (c[0] == 3) {                /* remove */
             if (id != 16) ((rm_fn)(SYM_RemoveObjectEvent | 1))(obj);
+        } else if (c[0] == 4) {                /* run a script: once none is running */
+            if (*(volatile u8 *)SYM_sGlobalScriptContextStatus != 2) break;
+            ((script_fn)(SYM_ScriptContext_SetupScript | 1))((const u8 *)(c[2] | (unsigned)c[3] << 16));
         }
     }
     for (int i = k; i < n; i++)                /* what is left, to the front */
@@ -236,6 +241,10 @@ class Server:
         self.steps = [0] * len(games)            # each player's steps and turns, as seen
         self.turns = [0] * len(games)
         self.maps = [g.player()[:2] for g in games]
+        for g in games:                             # a new server: nothing shown yet
+            g.shown = {}
+            g.queue = []
+            g.c.w16(MAILBOX, 0)
 
     def tick(self):
         for j, h in enumerate(self.games):          # a game that changed map lost its figures
@@ -382,8 +391,117 @@ def main(rom, out):
                   fig[3] < 64 and not fig[4] and (fig[5] == (not on_screen)))
         g.c.shot(os.path.join(out, 'overworld-player%d.png' % g.i))
     buildings(m, games, out)
+    dialog(m, games, out)
     print('emerald overworld, four players  %s' % ('all checks passed' if not fails else 'FAILURES'))
     return 1 if fails else 0
+
+
+# Emerald's text encoding (pokeemerald charmap.txt), as much as the test says
+def encode(text):
+    out = bytearray()
+    for ch in text:
+        if ch == ' ':
+            out.append(0x00)
+        elif ch == '\n':
+            out.append(0xFE)
+        elif 'A' <= ch <= 'Z':
+            out.append(0xBB + ord(ch) - ord('A'))
+        elif 'a' <= ch <= 'z':
+            out.append(0xD5 + ord(ch) - ord('a'))
+        elif '0' <= ch <= '9':
+            out.append(0xA1 + ord(ch) - ord('0'))
+        else:
+            out.append({'!': 0xAB, '?': 0xAC, '.': 0xAD, ':': 0xF0, ',': 0xB8}[ch])
+    return bytes(out)
+
+
+def decode(b):
+    table = {0x00: ' ', 0xFE: '\n', 0xAB: '!', 0xAC: '?', 0xAD: '.', 0xF0: ':', 0xB8: ','}
+    s = ''
+    for v in b:
+        if v == 0xFF:
+            break
+        if 0xBB <= v < 0xBB + 26:
+            s += chr(ord('A') + v - 0xBB)
+        elif 0xD5 <= v < 0xD5 + 26:
+            s += chr(ord('a') + v - 0xD5)
+        elif 0xA1 <= v < 0xA1 + 10:
+            s += chr(ord('0') + v - 0xA1)
+        else:
+            s += table.get(v, '?')
+    return s
+
+
+def say(g, name, line):
+    """What the server sends when a player talks to another: a script the
+    game's own engine runs (lockall, message, waitmessage, waitbuttonpress,
+    closemessage, releaseall, end; pokeemerald's script_cmd_table.inc), with
+    the other player's name and line as the text."""
+    text = name + encode(': ' + line) + b'\xff'
+    at = SAY_SCRIPT + 16
+    script = bytes([0x69, 0x67]) + struct.pack('<I', at) + bytes([0x66, 0x6D, 0x68, 0x6B, 0x02])
+    g.c.write(SAY_SCRIPT, script)
+    g.c.write(at, text)
+    g.send(C_SAY, 0, SAY_SCRIPT & 0xFFFF, SAY_SCRIPT >> 16)
+
+
+def name_of_player(g):
+    """The player's own name, from their save, in the game's encoding."""
+    sb2 = g.c.r32(g.c.sym['gSaveBlock2Ptr'])
+    raw = g.c.read(sb2, 8)
+    return raw[:raw.index(0xFF)] if 0xFF in raw else raw
+
+
+def facing_figure(g, games):
+    """The other player whose figure stands on the tile this player faces."""
+    me = g.player()
+    dx, dy = {1: (0, 1), 2: (0, -1), 3: (-1, 0), 4: (1, 0)}[me[4]]
+    for k in range(N):
+        fig = g.figure(k) if k != g.i else None
+        if fig and fig[:2] == (me[2] + dx, me[3] + dy):
+            return k
+    return None
+
+
+def dialog(m, games, out):
+    """One player talks to another's figure: the game's own message box."""
+    print('  -- dialog: talking to another player')
+    warp_all(m, games, ((5, 13), (14, 13), (10, 18), (11, 18)))
+    srv = Server(games)
+    settle(m, games, srv, 40)
+    walk(m, games, srv, 2, E.RIGHT, 3)                       # a tap: face player 3 (solid: no step)
+    settle(m, games, srv, 20)
+    k = facing_figure(games[2], games)
+    check('player 2 faces player 3\'s figure (%s; player 2 %s, player 3 %s, its figure %s)' %
+          (k, games[2].player()[:5], games[3].player()[:5], games[2].figure(3)), k == 3)
+    keys = [0] * N
+    keys[2] = E.A
+    m.run(2, keys)                                         # A, as the game reads it
+    if k is not None:                                      # the server: player 3's name and line
+        say(games[2], name_of_player(games[k]), 'Hi!\nWant to battle?')
+    settle(m, games, srv, 90)
+    c = games[2].c
+    shown = decode(c.read(c.sym['gStringVar4'], 64))
+    want = decode(name_of_player(games[3])) + ': Hi!\nWant to battle?'
+    check('the message box says %r' % shown, shown == want)
+    check('... and player 2\'s controls are locked while it is open', c.r8(c.sym['sLockFieldControls']) == 1)
+    before3 = games[3].player()[2:4]
+    walk(m, games, srv, 3, E.DOWN, 16)
+    settle(m, games, srv, 20)
+    check('player 3 is not held up: walks while player 2 reads (%s -> %s)' % (before3, games[3].player()[2:4]),
+          games[3].player()[2:4] != before3)
+    c.shot(os.path.join(out, 'overworld-dialog-player2.png'))
+    keys = [0] * N
+    keys[2] = E.A
+    m.run(4, keys)                                         # close it
+    settle(m, games, srv, 60)
+    check('A closes it: no script running, controls back',
+          c.r8(c.sym['sGlobalScriptContextStatus']) == 2 and c.r8(c.sym['sLockFieldControls']) == 0)
+    before2 = games[2].player()[2:4]
+    walk(m, games, srv, 2, E.UP, 16)
+    settle(m, games, srv, 20)
+    check('... and player 2 walks again (%s -> %s)' % (before2, games[2].player()[2:4]),
+          games[2].player()[2:4] != before2)
 
 
 LAB_DOOR = (7, 16)                        # Littleroot Town's warp 2: Professor Birch's lab
