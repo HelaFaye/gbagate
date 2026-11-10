@@ -60,12 +60,17 @@ jobs:
       # agent-emu runs the memory agent on an emulated ARM7
       # System-wide: the tests run python3 -I, which ignores the user site a
       # plain pip install would use.
+      # pip as root uses a cache only if root owns it: root's for the install,
+      # the runner's again for the cache step to save
       - name: cache pip's wheels
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: ~/.cache/pip-ci
+          path: /tmp/pip-ci
           key: pip-unicorn-2.1.1-${{ env.ImageOS }}-${{ env.ImageVersion }}
-      - run: sudo python3 -m pip install --break-system-packages -q --cache-dir ~/.cache/pip-ci unicorn==2.1.1 && sudo chown -R "$USER" ~/.cache/pip-ci
+      - run: |
+          sudo mkdir -p /tmp/pip-ci && sudo chown -R root:root /tmp/pip-ci
+          sudo python3 -m pip install --break-system-packages -q --cache-dir /tmp/pip-ci unicorn==2.1.1
+          sudo chown -R "$USER" /tmp/pip-ci
       # pret's librfu, which fetch_librfu.sh clones at the commit it pins
       - name: cache librfu
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
