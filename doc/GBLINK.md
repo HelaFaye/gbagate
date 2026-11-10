@@ -130,7 +130,7 @@ Reply, 16 bytes:
 | 4 | extension version 1 |
 | 5-7 | gbagate firmware version (0.4.0) |
 | 8-11 | capabilities, u32 LE |
-| 12 | board: 0 host simulator, 1 devkit, 2 Supermini |
+| 12 | board: 0 host simulator, 1 devkit, 2 Supermini, 3 touch carrier, 4 knob carrier |
 | 13 | image: 0 link, 1 gate, 2 full, 3 mini |
 
 Capability bits:
@@ -146,6 +146,7 @@ Capability bits:
 | 6 | ESP-NOW |
 | 7 | standalone multiboot |
 | 8 | bridge UART wired |
+| 9 | 5 V level shifter on the link port: Game Boy partners, printer mode 0x03 |
 
 The layout is in `src/gbx_proto.h`.
 
@@ -280,6 +281,13 @@ whatever is plugged in, which is the truth for that board.
 5 V tolerant. The GB SPI and printer modes (0x02, 0x03) need a bidirectional
 level shifter between the board and the port, as the GB-Link DIY board has
 (a SparkFun BOB-12009). The GBA modes are 3.3 V.
+
+None of gbagate's boards has one. So the printer mode, which only ever
+talks to a Game Boy game, is refused without one (PATCHES.md P16): it
+answers `GBSessionFinished` at once. Capability bit 9 tells a host which
+it is. Mode 0x02 stays, because it also carries GBA multiboot over Normal
+mode, which is 3.3 V; a Game Boy or Game Boy Color on it still needs the
+shifter. A board built with one sets `-DBOARD_HAS_GB_5V=1`.
 
 ---
 

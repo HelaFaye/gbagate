@@ -156,12 +156,18 @@ uint32_t gbagate_ext_caps(void) {
     if (f & FEAT_ESPNOW)       c |= GBX_CAP_ESPNOW;
     if (f & FEAT_MULTIBOOT)    c |= GBX_CAP_MULTIBOOT;
     if (BOARD_HAS_BRIDGE)      c |= GBX_CAP_BRIDGE;
+    if (BOARD_HAS_GB_5V)       c |= GBX_CAP_GB_5V;
     return c;
 }
 
+/* The board, as fitted: the carriers used to report themselves as a devkit. */
 uint8_t gbagate_ext_board(void) {
 #if defined(BOARD_SUPERMINI)
     return GBX_BOARD_SUPERMINI;
+#elif defined(BOARD_CARRIER_TOUCH)
+    return GBX_BOARD_CARRIER_TOUCH;
+#elif defined(BOARD_CARRIER_KNOB)
+    return GBX_BOARD_CARRIER_KNOB;
 #else
     return GBX_BOARD_DEVKIT;
 #endif

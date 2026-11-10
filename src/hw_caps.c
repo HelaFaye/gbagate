@@ -41,13 +41,21 @@ const char *hw_cap_name(hw_cap_t cap) {
     case HW_CAP_NRF24_PLUS:  return "nRF24L01+";
     case HW_CAP_WIFI:        return "WiFi";
     case HW_CAP_BLE:         return "Bluetooth";
-    case HW_CAP_USB:         return "USB";
-    case HW_CAP_LINK_PORT:   return "link cable";
+    case HW_CAP_USB:         return "USB drive";
+    case HW_CAP_USB_GBLINK:  return "USB adapter";
+    case HW_CAP_LINK_PORT:   return "link port";
+    case HW_CAP_IR:          return "infrared";
+    case HW_CAP_GB_5V:       return "GB 5V shifter";
+    case HW_CAP_LINK_PINS:   return "link pins";
     default:                 return "?";
     }
 }
 
 size_t hw_caps_describe(uint32_t mask, char *buf, size_t cap) {
+    return hw_caps_describe_marked(mask, 0, buf, cap);
+}
+
+size_t hw_caps_describe_marked(uint32_t mask, uint32_t stand_in, char *buf, size_t cap) {
     if (cap == 0) {
         return 0;
     }
@@ -61,7 +69,8 @@ size_t hw_caps_describe(uint32_t mask, char *buf, size_t cap) {
             continue;
         }
         const char *name = hw_cap_name((hw_cap_t)m);
-        size_t need = strlen(name) + (first ? 0u : 2u);
+        bool star = (stand_in & m) != 0;
+        size_t need = strlen(name) + (star ? 1u : 0u) + (first ? 0u : 2u);
         if (used + need + 1 > cap) {
             break;
         }
@@ -71,6 +80,9 @@ size_t hw_caps_describe(uint32_t mask, char *buf, size_t cap) {
         }
         memcpy(buf + used, name, strlen(name));
         used += strlen(name);
+        if (star) {
+            buf[used++] = '*';
+        }
         buf[used] = '\0';
         first = false;
     }

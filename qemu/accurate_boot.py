@@ -24,6 +24,7 @@ screenshots to <out-dir>/*.ppm. QEMU_BIOS: the ROM directory, for a QEMU
 that is not in its build tree (qemu_esp32's CI artifact).
 """
 import json
+import re
 import os
 import socket
 import subprocess
@@ -260,6 +261,13 @@ def run(q, qmp, console, board, variant, out):
     check('the Multi-Play PHY starts on core 1', 'mp_phy: Multi-Play PHY on core 1' in log)
     check('the Wireless Adapter PHY starts on core 1', 'rfu_phy: Wireless Adapter PHY on core 1' in log)
     check('the link source is the PHY', 'link source: phy' in log)
+    # What the board offers is what it has (src/hw_caps.h): the PHY gives the
+    # pins; neither board has an IR emitter or a 5 V level shifter, so
+    # Infrared and GB Printer are not offered.
+    m = re.search(r'shell started with caps 0x([0-9a-fA-F]+)', log)
+    caps = int(m.group(1), 16) if m else 0
+    check('the board offers the link pins (caps %#x)' % caps, caps & (1 << 11))
+    check('and neither infrared nor a 5 V shifter', not caps & ((1 << 9) | (1 << 10)))
 
     img = qmp.shot(os.path.join(out, 'boot.ppm'))
     w, h, _ = img
@@ -343,11 +351,12 @@ def carrier_touch(qmp, log, img, console, out):
     check('the other strip did not change',
           all(at(img, xx, yy) == at(after, xx, yy) for xx in range(RIGHT_X, PANEL_W) for yy in range(PANEL_H)))
 
-    # By touch alone to Send Program: up to the top, down one, OK. The gate
-    # image's menu opens with Link (USB, Wireless and Online in one entry),
-    # then Send Program.
-    for _ in range(12):
-        tap(qmp, 'UP')
+    # By touch alone to Send Program. The menu wraps, so no number of ups
+    # finds the top of a menu whose length depends on what the board has;
+    # but the cursor is known: it opened on row 0 (Link: USB, Wireless and
+    # Online in one entry) and the touch above moved it to row 1, Send
+    # Program. Up and down again, so the keys are pressed once more, then OK.
+    tap(qmp, 'UP')
     tap(qmp, 'DOWN')
     before = len(open(console, errors='replace').read())
     tap(qmp, 'A')

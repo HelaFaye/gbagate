@@ -151,18 +151,35 @@ static void begin(ui_page_t *p, const char *title, const ui_keys_t *keys,
  */
 void ui_page_diagnostics(ui_page_t *p, const char *title, const ui_keys_t *keys,
                          const ui_diag_t *d) {
-    char caps[64];
-    hw_caps_describe(d->caps, caps, sizeof caps);
+    char caps[104];
+    size_t n = (size_t)snprintf(caps, sizeof caps, "fitted: ");
+    hw_caps_describe_marked(d->caps, d->stand_in, caps + n, sizeof caps - n);
+    bool any_stand_in = (d->caps & d->stand_in) || (d->link_via && d->link_via_stand_in) ||
+                        (d->input && d->input_stand_in);
     begin(p, title, keys, NULL);
-    ui_page_add(p, COL_TEXT_DIM, "detected:");
+    /* "fitted", not "detected": most of these are what the board is built
+     * with (the link port has no presence pin); the display and the chip
+     * reader are the ones probed. */
     ui_page_add_wrapped(p, COL_TEXT, caps);
-    ui_page_add(p, d->linked ? COL_GOOD : COL_WARN, "link   %s",
-                d->linked ? "linked" : "waiting");
-    ui_page_add(p, COL_TEXT, "xfers  %lu", (unsigned long)d->transfers);
-    ui_page_add(p, COL_TEXT, "chips  %lu", (unsigned long)d->chips_sent);
-    ui_page_add(p, COL_TEXT, "gate   %04X", d->gate_id);
-    ui_page_add(p, d->ui_dropped ? COL_WARN : COL_TEXT, "uidrop %lu",
-                (unsigned long)d->ui_dropped);
+    if (d->link_via) {
+        ui_page_add(p, d->linked ? COL_GOOD : COL_WARN, "link %s%s %s", d->link_via,
+                    d->link_via_stand_in ? "*" : "", d->linked ? "linked" : "waiting");
+    } else {
+        ui_page_add(p, d->linked ? COL_GOOD : COL_WARN, "link %s",
+                    d->linked ? "linked" : "waiting");
+    }
+    if (d->input) {
+        ui_page_add(p, COL_TEXT, "input %s%s", d->input, d->input_stand_in ? "*" : "");
+    }
+    ui_page_add(p, COL_TEXT, "xfers %lu", (unsigned long)d->transfers);
+    ui_page_add(p, COL_TEXT, "chips %lu gate %04X", (unsigned long)d->chips_sent, d->gate_id);
+    /* Only when it says something: UI events lost to a full queue. */
+    if (d->ui_dropped) {
+        ui_page_add(p, COL_WARN, "uidrop %lu", (unsigned long)d->ui_dropped);
+    }
+    if (any_stand_in) {
+        ui_page_add(p, COL_WARN, "* a stand-in");
+    }
 }
 
 /* Values of app_dispatch_status_t (app_modes.h), which this file need not

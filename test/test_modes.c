@@ -82,8 +82,11 @@ static const app_mode_handler_t k_handlers[] = {
 };
 #define HANDLER_COUNT (sizeof k_handlers / sizeof k_handlers[0])
 
-#define FULL_CAPS (HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB | \
-                   HW_CAP_WIFI | HW_CAP_CHIP_READER)
+/* Every capability at once: no real board (USB is the drive or the adapter,
+ * never both), but every mode is listed. */
+#define FULL_CAPS (HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB | \
+                   HW_CAP_USB_GBLINK | HW_CAP_WIFI | HW_CAP_CHIP_READER | HW_CAP_IR | \
+                   HW_CAP_GB_5V)
 
 static void setup(app_dispatch_t *d, fakes_t *f, uint32_t caps) {
     memset(f, 0, sizeof *f);
@@ -340,9 +343,12 @@ static void test_from_shell_unbound(void) {
 
     ui_shell_t s;
     shell_init(&s, FULL_CAPS);
-    while (strcmp(shell_current_label(&s), "Send Program") != 0) {
+    /* Bounded: a missing entry is a failure, not a hang. */
+    for (uint8_t i = 0; i < shell_item_count(&s) &&
+                        strcmp(shell_current_label(&s), "Send Program") != 0; i++) {
         shell_move(&s, 1);
     }
+    check("Send Program is listed", strcmp(shell_current_label(&s), "Send Program"), 0);
     check("multiboot starts at once", shell_select(&s), 1);
     check("but has no handler",
           app_dispatch_from_shell(&d, &s), APP_DISPATCH_NO_HANDLER);

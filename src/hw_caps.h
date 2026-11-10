@@ -30,8 +30,21 @@ typedef enum {
     HW_CAP_NRF24_PLUS  = 1u << 4,  /* ...and it is a genuine nRF24L01+      */
     HW_CAP_WIFI        = 1u << 5,
     HW_CAP_BLE         = 1u << 6,
-    HW_CAP_USB         = 1u << 7,  /* USB cable enumerated                  */
-    HW_CAP_LINK_PORT   = 1u << 8   /* GBA link cable detected on SD/SC      */
+    HW_CAP_USB         = 1u << 7,  /* USB is the drive (the "usb" setting)  */
+    /* A link port with a source of transfers: the PHY on a board, the bridge
+     * standing in for it under emulation. No cable is sensed -- the port has
+     * no presence pin. */
+    HW_CAP_LINK_PORT   = 1u << 8,
+    HW_CAP_IR          = 1u << 9,  /* the IR emitter is fitted and came up  */
+    HW_CAP_GB_5V       = 1u << 10, /* a 5 V level shifter on the link port:
+                                      Game Boy partners (board.h)           */
+    /* The link port's own pins, driven by this board: multiboot, IR, the GB
+     * modes. Not under emulation, where HW_CAP_LINK_PORT is the UART bridge
+     * standing in for the gate's transfers and nothing else. */
+    HW_CAP_LINK_PINS   = 1u << 11,
+    /* USB is the GB-Link adapter: one controller, so it is this or the drive
+     * (HW_CAP_USB), never both. */
+    HW_CAP_USB_GBLINK  = 1u << 12
 } hw_cap_t;
 
 typedef struct {
@@ -58,6 +71,10 @@ const char *hw_cap_name(hw_cap_t cap);
 
 /* Render a missing-capability mask as "nRF24, GPIO expander" into buf. */
 size_t hw_caps_describe(uint32_t mask, char *buf, size_t cap);
+
+/* As hw_caps_describe, with a '*' after each name in stand_in: a capability
+ * that something under emulation provides instead of the hardware. */
+size_t hw_caps_describe_marked(uint32_t mask, uint32_t stand_in, char *buf, size_t cap);
 
 #ifdef __cplusplus
 }

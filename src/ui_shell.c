@@ -13,7 +13,7 @@
  */
 static const menu_entry_t k_modes[APP_MODE_COUNT] = {
     { APP_MODE_LINK_USB, "Link: USB",
-      HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB, "plug in USB" },
+      HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB_GBLINK, "USB is the drive" },
     { APP_MODE_LINK_WIRELESS, "Link: Wireless",
       HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_WIFI, "WiFi unavailable" },
     /*
@@ -23,8 +23,10 @@ static const menu_entry_t k_modes[APP_MODE_COUNT] = {
      */
     { APP_MODE_LINK_ONLINE, "Link: Online",
       HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_WIFI, "WiFi unavailable" },
+    /* Multiboot is driven on the pins themselves: not over the emulator's
+     * bridge, which carries only the gate's transfers. */
     { APP_MODE_MULTIBOOT, "Send Program",
-      HW_CAP_DISPLAY | HW_CAP_LINK_PORT, "connect the link cable" },
+      HW_CAP_DISPLAY | HW_CAP_LINK_PINS, "needs the link port's pins" },
     /*
      * Infrared drives an LED from RCNT bit 3 in General Purpose mode, so it
      * needs the link port and nothing else -- no SIO, no clock. ir_cdz.c has
@@ -32,7 +34,7 @@ static const menu_entry_t k_modes[APP_MODE_COUNT] = {
      * here there was no way to reach it.
      */
     { APP_MODE_INFRARED, "Infrared",
-      HW_CAP_DISPLAY | HW_CAP_LINK_PORT, "connect the link cable" },
+      HW_CAP_DISPLAY | HW_CAP_LINK_PINS | HW_CAP_IR, "no IR emitter fitted" },
 
     /*
      * Handing the volume over is a deliberate action, not something to infer
@@ -55,8 +57,10 @@ static const menu_entry_t k_modes[APP_MODE_COUNT] = {
      * as a Game Boy Printer and shows the picture (src/gbprinter.c). Game
      * Boy links are 5 V: the board needs its level shifter (doc/GBLINK.md).
      */
+    /* Listed only with the shifter: a Game Boy on a bare 3.3 V port is
+     * exactly what must not be invited. */
     { APP_MODE_PRINTER, "GB Printer",
-      HW_CAP_DISPLAY | HW_CAP_LINK_PORT, "connect the link cable" },
+      HW_CAP_DISPLAY | HW_CAP_LINK_PINS | HW_CAP_GB_5V, "needs a 5V level shifter" },
     { APP_MODE_SETTINGS, "Settings", HW_CAP_DISPLAY, NULL },
     { APP_MODE_DIAGNOSTICS, "Diagnostics", 0, NULL },
 };

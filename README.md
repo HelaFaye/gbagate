@@ -168,6 +168,47 @@ declare the bits they need and are omitted entirely when unsatisfied.
 `hw_menu_hidden()` exists so a diagnostics screen can explain the omission —
 without it, "the wireless option is missing" is an unfalsifiable bug report.
 
+**Only what the board has.** A mode is listed only when the part it drives
+is fitted, and anything that stands in for hardware says so. Diagnostics
+marks a stand-in with `*` and adds a footnote saying so. The capability bits:
+
+| bit | set when | gates |
+|---|---|---|
+| link port | a source of the game's transfers: the PHY, or the UART bridge* under emulation | Link, Self Test, Battle Chip |
+| link pins | the PHY: the board drives the port's own pins | Send Program, Infrared, GB Printer, GBA Memory |
+| infrared | `BOARD_HAS_IR` and the emitter came up | Infrared |
+| GB 5V shifter | `BOARD_HAS_GB_5V`: a 5 V level shifter on the port | GB Printer (and GB-Link's printer mode 0x03, `PATCHES.md` P16) |
+| USB drive / USB adapter | USB came up as the drive, or as the GB-Link adapter (one controller: one or the other) | USB Storage / Link: USB |
+| WiFi | the S3's radio, on hardware only (QEMU's S3 has none) | Link: Wireless, Link: Online |
+| chip reader | an MCP23017 answered on I2C | the Battle Chip applet's reader |
+
+What each board offers today, in the gate image (the link and mini images
+leave out some modes: `variant.c`):
+
+| | devkit | Supermini | touch carrier | emulator image |
+|---|---|---|---|---|
+| Link: USB / Wireless / Online | yes | yes | yes | no: no USB, no radio |
+| Send Program, GBA Memory | yes | yes | yes | no: the bridge has no pins |
+| Self Test, Battle Chip | yes | yes | yes | yes, over the bridge* |
+| Infrared | no emitter fitted | no | no | no |
+| GB Printer | no 5 V shifter | no | no | no |
+| SD card | yes | yes | yes | no |
+| input | encoder or switches | switches (expander) | touch keys* | keys over UART* |
+| panel | ST7735 | ST7735 | ILI9341, the UI at 15/8 | framebuffer over UART* |
+
+\* Stand-ins, and said so on the device:
+- **The UART bridge** carries the gate's transfers in place of the link PHY.
+- **The touch keys** stand in for buttons until there is a UI made for touch
+  (`doc/CARRIER.md`).
+- **Keys and framebuffer over UART** stand in for the panel and switches
+  that QEMU lacks.
+
+Not stand-ins, but not obvious either:
+- On the touch carrier, the 128x128 UI is scaled into the panel, and the
+  list is repainted where the ST7735 scrolls in hardware.
+- Settings hides the glass offsets and the input mode there, since they do
+  nothing on that board.
+
 `nrf24_probe.{h,c}` detects the radio over SPI with the transfer function
 injected, so it is testable against a simulated part. Presence is not "bytes
 came back" — a floating bus returns those too. It is:

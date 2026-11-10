@@ -230,13 +230,14 @@ static void test_move_mode(void) {
 static void test_shell(void) {
     printf("mode shell\n");
 
-    /* A bare board: display and link port, no USB, no WiFi, no reader. */
+    /* A bare board: display and the link port with its pins; no USB, no
+     * WiFi, no reader, no IR emitter, no 5 V shifter. */
     ui_shell_t s;
-    shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
-    /* Send Program, Infrared, GB Printer, Self Test, Settings, Diagnostics.
-     * Link needs USB or WiFi, and Battle Chip is an applet now (applets/),
-     * which the firmware adds after shell_init. */
-    check("modes offered", shell_item_count(&s), 6);
+    shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS);
+    /* Send Program, Self Test, Settings, Diagnostics. Not Infrared or GB
+     * Printer, whose parts it lacks; Link needs USB or WiFi; Battle Chip is
+     * an applet (applets/), which the firmware adds after shell_init. */
+    check("modes offered", shell_item_count(&s), 4);
     check_str("first is Send Program", shell_label_at(&s, 0), "Send Program");
 
     for (uint8_t i = 0; i < shell_item_count(&s); i++) {
@@ -257,8 +258,9 @@ static void test_shell(void) {
     check("diagnostics always present", diag, 1);
 
     /* Full board. */
-    shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB |
-                   HW_CAP_WIFI | HW_CAP_CHIP_READER);
+    shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB |
+                   HW_CAP_USB_GBLINK | HW_CAP_WIFI | HW_CAP_CHIP_READER | HW_CAP_IR |
+                   HW_CAP_GB_5V);
     /* The three link modes share one Link entry. */
     check("everything offered", shell_item_count(&s), APP_MODE_COUNT - 2);
 

@@ -101,9 +101,10 @@ def run_tests(name, tests, argv):
 
 
 class Sim:
-    def __init__(self, flash=None, serial=False, net=False, net_delay=0.0, net_jitter=0.0):
+    def __init__(self, flash=None, serial=False, net=False, net_delay=0.0, net_jitter=0.0, env=None):
         args = [SIM] + ([flash] if flash else [])
-        self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  env=dict(os.environ, **env) if env else None)
         self.cv = threading.Condition()
         self._wlock = threading.Lock()
         self.status = []      # u16 words, in order

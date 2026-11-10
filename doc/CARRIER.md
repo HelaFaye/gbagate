@@ -263,7 +263,9 @@ d-pad boards (INPUT_DPAD5):
 | `v` | down | `SEL` FAV | favourite |
 | `R` PG DN | page down | `ST` MENU | sort, options |
 
-A touch is a button held for as long as the finger stays on it, so every
+**The keys are a stand-in**, and Diagnostics says so ("input touch keys*"):
+they make a touch panel work a UI built for buttons, until there is one built
+for touch (below). A touch is a button held for as long as the finger stays on it, so every
 screen, its hints ("A send", "B back") and its long presses work as they
 do with switches. A held key is drawn lit on the panel's next flush, so a
 press that changes nothing on screen (down at the end of a list) is not

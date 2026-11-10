@@ -76,10 +76,14 @@
 #define GBX_CAP_ESPNOW      (1u << 6)  /* board-to-board radio               */
 #define GBX_CAP_MULTIBOOT   (1u << 7)  /* standalone Send Program            */
 #define GBX_CAP_BRIDGE      (1u << 8)  /* GB-Link's bridge UART is wired      */
+#define GBX_CAP_GB_5V       (1u << 9)  /* a 5 V level shifter on the link port:
+                                          Game Boy partners, printer mode 0x03 */
 
 #define GBX_BOARD_HOST      0u         /* the host simulator                 */
 #define GBX_BOARD_DEVKIT    1u
 #define GBX_BOARD_SUPERMINI 2u
+#define GBX_BOARD_CARRIER_TOUCH 3u     /* doc/CARRIER.md                     */
+#define GBX_BOARD_CARRIER_KNOB  4u
 
 /* ---- mode 0x80: Battle Chip Gate --------------------------------------------
  *

@@ -551,6 +551,22 @@ def printer_packet(cmd, data=b'', compressed=0):
 
 
 @test
+def printer_refused_without_shifter():
+    """P16: a board with no 5 V level shifter (every gbagate board) refuses the
+    printer mode, which only ever talks to a Game Boy: the session ends at once,
+    printer mode never starts, and the board says why in its 0x4F capabilities."""
+    s = Sim(env={'GBLINK_SIM_NO_GB_5V': '1'})
+    try:
+        s.cmd(0x00, 0x03)
+        s.wait_status(ST['GBSessionFinished'], 2.0)          # the session ends at once
+        time.sleep(0.4)
+        check(ST['GBPrinterModeActive'] not in s.status, 'printer mode never started')
+        check(not s.data, 'nothing streamed: %s' % s.data[:2])
+    finally:
+        s.close()
+
+
+@test
 def printer_stream():
     """gb.cpp printer: FF at entry, then cmd, comp, len lo/hi, data per packet,
     FE after PRINT; the device answers 0x81 then status 0x00."""

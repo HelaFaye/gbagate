@@ -59,7 +59,7 @@ endif()
 # variable, which the compiler never sees unless it is passed on like this.
 foreach(flag BOARD_HAS_DISPLAY BOARD_HAS_LINK BOARD_HAS_SD BOARD_HAS_BUTTONS
              BOARD_HAS_IR BOARD_HAS_READER BOARD_HAS_SD_ALT BOARD_HAS_RGB_LED
-             BOARD_HAS_VCC_SWITCH BOARD_HAS_BRIDGE)
+             BOARD_HAS_VCC_SWITCH BOARD_HAS_BRIDGE BOARD_HAS_GB_5V)
   if(DEFINED ${flag})
     add_compile_definitions(${flag}=${${flag}})
   endif()

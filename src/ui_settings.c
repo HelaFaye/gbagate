@@ -15,11 +15,25 @@ static bool s_display_dirty;
 void uiset_init(ui_settings_t *v, settings_t *s) {
     memset(v, 0, sizeof *v);
     v->s = s;
+    uiset_hide(v, 0);
     s_dirty = false;
     s_display_dirty = false;
 }
 
 uint8_t uiset_count(void) { return SETFIELD_COUNT; }
+
+void uiset_hide(ui_settings_t *v, uint32_t fields) {
+    v->rows = 0;
+    for (uint8_t f = 0; f < SETFIELD_COUNT; f++) {
+        if (!(fields & (1u << f))) {
+            v->field[v->rows++] = f;
+        }
+    }
+    v->cursor = 0;
+    v->editing = false;
+}
+
+uint8_t uiset_rows(const ui_settings_t *v) { return v->rows; }
 
 static const char *field_name(setfield_t f) {
     switch (f) {
@@ -76,11 +90,12 @@ static void field_value(const settings_t *s, setfield_t f, char *out, size_t cap
 
 const char *uiset_label(void *ctx, uint8_t index) {
     ui_settings_t *v = ctx;
-    if (index >= SETFIELD_COUNT) {
+    if (index >= v->rows) {
         return NULL;
     }
+    setfield_t f = (setfield_t)v->field[index];
     char val[24];
-    field_value(v->s, (setfield_t)index, val, sizeof val);
+    field_value(v->s, f, val, sizeof val);
 
     /*
      * Brackets around the value being edited. With one encoder doing both jobs
@@ -92,7 +107,7 @@ const char *uiset_label(void *ctx, uint8_t index) {
     char shown[28];
     snprintf(shown, sizeof shown, active ? "[%s]" : "%s", val);
     /* The value right-aligned and kept whole; the name gives way. */
-    ui_two_col(v->scratch, sizeof v->scratch, field_name((setfield_t)index), shown,
+    ui_two_col(v->scratch, sizeof v->scratch, field_name(f), shown,
                UI_MENU_COLS);
     return v->scratch;
 }
@@ -172,11 +187,17 @@ void uiset_move(ui_settings_t *v, int32_t delta) {
         return;
     }
     if (!v->editing) {
-        int32_t pos = ((int32_t)v->cursor + delta) % SETFIELD_COUNT;
+        if (v->rows == 0) {
+            return;
+        }
+        int32_t pos = ((int32_t)v->cursor + delta) % v->rows;
         if (pos < 0) {
-            pos += SETFIELD_COUNT;
+            pos += v->rows;
         }
         v->cursor = (uint8_t)pos;
+        return;
+    }
+    if (v->cursor >= v->rows) {
         return;
     }
     /*
@@ -184,7 +205,7 @@ void uiset_move(ui_settings_t *v, int32_t delta) {
      * acceleration that helps across 400 chips makes an offset unsettable:
      * a flick moves it the whole range and back.
      */
-    adjust(v->s, (setfield_t)v->cursor, delta > 0 ? 1 : -1);
+    adjust(v->s, (setfield_t)v->field[v->cursor], delta > 0 ? 1 : -1);
 }
 
 bool uiset_toggle_edit(ui_settings_t *v) {

@@ -68,7 +68,8 @@ boot() {
     dir="$ROOT/build/hw-$variant-$board"
     say "hardware image: $variant, $board"
     BOARD="$board" "$ROOT/tools/build_hw.sh" "$variant" >/dev/null
-    (cd "$dir" && python -m esptool --chip esp32s3 merge-bin --pad-to-size 4MB \
+    # merge_bin and --fill-flash-size: esptool 4 (ESP-IDF 5.5) knows only these, and 5 still takes them
+    (cd "$dir" && python -m esptool --chip esp32s3 merge_bin --fill-flash-size 4MB \
         -o "$dir/flash-qemu.bin" @flash_args >/dev/null)
     python3 -I "$ROOT/qemu/accurate_boot.py" "$QEMU" "$dir/flash-qemu.bin" "$board" "$variant" \
         "$dir/accurate"

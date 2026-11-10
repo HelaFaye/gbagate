@@ -41,7 +41,9 @@ typedef enum {
 
 typedef struct {
     settings_t *s;
-    uint8_t     cursor;
+    uint8_t     cursor;     /* a row: field[cursor] is the field             */
+    uint8_t     rows;       /* the fields this board offers                  */
+    uint8_t     field[SETFIELD_COUNT];
     bool        editing;    /* turning changes the value, not the selection */
     char        scratch[40];
     char        footer[40];
@@ -50,6 +52,17 @@ typedef struct {
 void uiset_init(ui_settings_t *v, settings_t *s);
 
 uint8_t uiset_count(void);
+
+/*
+ * Leave fields out that do nothing on this board (a bit per setfield_t): the
+ * ST7735's glass offsets on a panel that has none, the input mode where touch
+ * is the only input. Settings then shows, and walks, only the rest. Call after
+ * uiset_init; the cursor goes back to the first row.
+ */
+void uiset_hide(ui_settings_t *v, uint32_t fields);
+
+/* The rows shown: uiset_count() less the hidden fields. */
+uint8_t uiset_rows(const ui_settings_t *v);
 
 /* "name  value", for ui_render_menu(). NULL past the end. */
 const char *uiset_label(void *ctx, uint8_t index);

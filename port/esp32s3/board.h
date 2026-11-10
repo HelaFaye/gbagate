@@ -364,6 +364,18 @@
 #endif
 
 /*
+ * A 5 V level shifter on the link port (a bidirectional one, as the GB-Link
+ * DIY board's SparkFun BOB-12009). Game Boy and Game Boy Color links are 5 V
+ * and the S3's pins are not 5 V tolerant, so the modes that only ever talk to
+ * a Game Boy -- GB Printer here, GB-Link's printer mode 0x03 -- are offered
+ * only with one. None of the boards above has one: build with
+ * -DBOARD_HAS_GB_5V=1 for a board that does. GBA links are 3.3 V and need none.
+ */
+#ifndef BOARD_HAS_GB_5V
+#define BOARD_HAS_GB_5V 0
+#endif
+
+/*
  * Strapping pins. A switch or a bus line on one of these gives a board that
  * sometimes boots into the ROM bootloader instead of the firmware, depending
  * on what a finger was resting on -- which reads as an intermittent hardware

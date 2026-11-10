@@ -170,7 +170,7 @@ static void mem_page(const applet_env_t *env, ui_page_t *p) {
 
 const applet_t applet_gba_memory = {
     .name        = "GBA Memory",
-    .requires    = HW_CAP_DISPLAY | HW_CAP_LINK_PORT,
+    .requires    = HW_CAP_DISPLAY | HW_CAP_LINK_PINS,   /* the agent goes by multiboot */
     .absent_hint = "connect the link cable",
     .enter       = mem_enter,
     .exit        = mem_exit,

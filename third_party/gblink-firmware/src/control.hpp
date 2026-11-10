@@ -112,6 +112,15 @@ public:
 
             case Mode::gbPrinter:
             {
+                // gbagate (PATCHES.md P16): a printer only ever talks to a Game
+                // Boy game, whose link is 5 V; without a level shifter on the
+                // port the mode is not offered. Refused at once, the same way
+                // a finished session ends.
+                if (!(gbagate_ext_caps() & GBX_CAP_GB_5V))
+                {
+                    sendLinkStatus(LinkStatus::GBSessionFinished);
+                    break;
+                }
                 GBModule gbModule;
                 m_currentModule = &gbModule;
                 gbModule.executePrinterMode();  // Sets purple LED internally

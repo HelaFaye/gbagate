@@ -193,6 +193,15 @@ static void check_frame(const char *name, bool footer) {
 
 /* Render a page, check it, keep it. Every line must fit: one that does not
  * is cut off on the panel, and is reported by name. */
+static bool has_line(const ui_page_t *p, const char *text) {
+    for (uint8_t i = 0; i < p->count; i++) {
+        if (strstr(p->line[i], text)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void page(const char *name, const ui_page_t *p) {
     ui_render_page(&g_canvas, p);
     fits(name, "title", p->title, UI_SCREEN_W - 6);
@@ -264,8 +273,9 @@ static void test_shell(void) {
     check_frame("link", true);
     shot("link-choice");
 
-    /* Only what this board has: no WiFi, no reader, no USB. */
-    shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
+    /* Only what this board has: the link port and its pins; no WiFi, no
+     * reader, no USB, no IR, no 5 V shifter. */
+    shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS);
     ui_render_menu(&g_canvas, "gbagate", shell_label, &s, shell_item_count(&s),
                    shell_cursor(&s), "mini");
     shot("menu-minimal");
@@ -412,6 +422,31 @@ static void test_pages(void) {
     ui_page_diagnostics(&p, "Diagnostics", foot, &d);
     footer_is("diagnostics", &p, "", "hold back");
     page("diagnostics", &p);
+    check("no stand-in, no footnote", has_line(&p, "stand-in"), 0);
+
+    /* The emulator image and the touch carrier: what stands in for hardware
+     * says so, on every line it is on, and once at the bottom. */
+    ui_diag_t e = { .caps = HW_CAP_DISPLAY | HW_CAP_LINK_PORT,
+                    .stand_in = HW_CAP_DISPLAY | HW_CAP_LINK_PORT,
+                    .link_via = "bridge", .link_via_stand_in = true,
+                    .input = "UART keys", .input_stand_in = true,
+                    .transfers = 4096, .chips_sent = 3, .gate_id = 0x00C6 };
+    ui_page_diagnostics(&p, "Diagnostics", foot, &e);
+    page("diagnostics-emulator", &p);
+    check("emulator: the panel marked", has_line(&p, "display*"), 1);
+    check("emulator: the link port marked", has_line(&p, "link port*"), 1);
+    check("emulator: the bridge marked", has_line(&p, "bridge*"), 1);
+    check("emulator: the keys marked", has_line(&p, "UART keys*"), 1);
+    check("emulator: the footnote", has_line(&p, "* a stand-in"), 1);
+    ui_diag_t t = { .caps = HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_WIFI |
+                            HW_CAP_CHIP_READER,
+                    .link_via = "phy", .input = "touch keys", .input_stand_in = true,
+                    .transfers = 123456, .chips_sent = 12, .gate_id = 0x00C6 };
+    ui_page_diagnostics(&p, "Diagnostics", foot, &t);
+    page("diagnostics-touch", &p);
+    check("touch: the PHY is not marked", has_line(&p, "phy*"), 0);
+    check("touch: the keys are", has_line(&p, "touch keys*"), 1);
+    check("touch: the footnote", has_line(&p, "* a stand-in"), 1);
 
     const struct { int st; const char *name; } refusals[] = {
         { 1, "refused-no-handler" }, { 2, "refused-hardware" }, { 3, "refused-game" },

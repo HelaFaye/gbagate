@@ -155,8 +155,10 @@ static void test_handlers(void) {
     check("ctx is the applet", h[2].ctx == &applet_chip_dice, 1);
     check("requires carried", h[1].requires, HW_CAP_DISPLAY);
     check("needs_game carried", h[2].needs_game, 1);
-    check("Battle Chip needs the link port",
+    check("Battle Chip needs the link port (the bridge will do)",
           h[0].requires, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
+    check("GBA Memory needs the pins (its agent goes by multiboot)",
+          applet_gba_memory.requires, HW_CAP_DISPLAY | HW_CAP_LINK_PINS);
     check("a short buffer is respected", applet_handlers(h, 1), 1);
     check("and an empty one", applet_handlers(h, 0), 0);
 }
@@ -207,7 +209,7 @@ static void host_draw(host_t *t) {
 static void test_menu_placement(void) {
     printf("menu placement\n");
     host_t t;
-    host_init(&t, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB);
+    host_init(&t, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB);
     int tp = -1, dice = -1, mem = -1, settings = -1;
     for (uint8_t i = 0; i < shell_item_count(&t.shell); i++) {
         const char *l = shell_label_at(&t.shell, i);
@@ -383,7 +385,7 @@ static void favs_changed(void) { g_gate.saves++; }
 static void bc_host(host_t *t, bool reader) {
     memset(&g_gate, 0, sizeof g_gate);
     memset(g_favs, 0, sizeof g_favs);
-    host_init(t, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
+    host_init(t, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS);
     t->env.gate_start  = gate_start;
     t->env.gate_stop   = gate_stop;
     t->env.gate_send   = gate_send;

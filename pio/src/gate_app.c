@@ -23,6 +23,7 @@
 
 #include "chipdb.h"
 #include "chipgate.h"
+#include "board.h"
 #include "link_source.h"
 #include "ui_chipview.h"
 #include "ui_list.h"
@@ -783,7 +784,7 @@ static void render_settings(const ui_event_t *e, bool have_event)
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
     ui_keys_t keys = page_keys();
     ui_render_menu(&canvas, "Settings", uiset_label, &s_setedit,
-                   uiset_count(), s_setedit.cursor,
+                   uiset_rows(&s_setedit), s_setedit.cursor,
                    /* The editor's own hint says whether turning changes the
                     * value or the selection, which no binding table knows. */
                    uiset_footer(&s_setedit, &keys));
@@ -974,8 +975,25 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
         /* Redrawn every call: the counters change on their own, and a screen
          * that only updates on input is indistinguishable from one that has
          * stopped. */
+        const link_source_t *src = link_source_active();
         ui_diag_t d = {
             .caps       = s_shell.caps,
+#if defined(GBAGATE_QEMU)
+            /* The emulator image: the panel is a framebuffer streamed out of a
+             * UART, the link port the UART bridge, the keys a UART too. */
+            .stand_in   = HW_CAP_DISPLAY | HW_CAP_LINK_PORT,
+            .input      = "UART keys",
+            .input_stand_in = true,
+#elif BOARD_HAS_TOUCH
+            /* On-screen keys, standing in for buttons until the UI is made
+             * for touch (doc/CARRIER.md). */
+            .input      = "touch keys",
+            .input_stand_in = true,
+#else
+            .input      = input_mode_name((input_mode_t)s_settings.input_mode),
+#endif
+            .link_via   = src ? src->name : NULL,
+            .link_via_stand_in = src && strcmp(src->name, "phy") != 0,
             .linked     = chipgate_connected(&s_gate),
             .transfers  = s_transfers,
             .chips_sent = s_chips_sent,
@@ -1568,6 +1586,12 @@ void gate_settings_start(void) {
     ui_theme_set((ui_theme_id_t)s_settings.theme);
     s_settings_dirty = false;
     uiset_init(&s_setedit, &s_settings);
+#if BOARD_HAS_TOUCH
+    /* The ILI9341 has no glass offsets (they are the ST7735's), and touch is
+     * the only input: two fields that would do nothing, so not offered. */
+    uiset_hide(&s_setedit, (1u << SETFIELD_COLSTART) | (1u << SETFIELD_ROWSTART) |
+                           (1u << SETFIELD_INPUT));
+#endif
 }
 
 int gate_input_mode(void) { return (int)s_settings.input_mode; }

@@ -78,6 +78,16 @@ void ui_render_page(const ui_canvas_t *c, const ui_page_t *p);
 
 typedef struct {
     uint32_t caps;         /* hw_caps mask */
+    /* What stands in for hardware, said so on the screen with a '*': caps
+     * bits provided by something else (the emulator's UART bridge for the
+     * link port, its framebuffer stream for the panel), the link source's
+     * name, and the input with whether it is a stand-in (touch keys standing
+     * in for buttons; keys over the emulator's UART). */
+    uint32_t    stand_in;
+    const char *link_via;   /* "phy", "bridge"; NULL: not shown           */
+    bool        link_via_stand_in;
+    const char *input;      /* "5-way + 4", "touch keys"; NULL: not shown */
+    bool        input_stand_in;
     bool     linked;
     uint32_t transfers;
     uint32_t chips_sent;

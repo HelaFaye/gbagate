@@ -20,6 +20,8 @@ namespace gbagate
     void hardwareCommand(std::span<const uint8_t> data);
 }
 
+#include "gbx_proto.h"
+
 // Supplied by the board (or the simulator): GBX_CAP_* bits, GBX_BOARD_*, and
 // the image (variant_id_t).
 extern "C" uint32_t gbagate_ext_caps(void);
