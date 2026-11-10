@@ -392,6 +392,8 @@ def main(rom, out):
         g.c.shot(os.path.join(out, 'overworld-player%d.png' % g.i))
     buildings(m, games, out)
     dialog(m, games, out)
+    if '--battle' in sys.argv:              # in progress (doc/MMO.md): not yet passing
+        battle(m, games, out)
     print('emerald overworld, four players  %s' % ('all checks passed' if not fails else 'FAILURES'))
     return 1 if fails else 0
 
@@ -485,12 +487,13 @@ def dialog(m, games, out):
     want = decode(name_of_player(games[3])) + ': Hi!\nWant to battle?'
     check('the message box says %r' % shown, shown == want)
     check('... and player 2\'s controls are locked while it is open', c.r8(c.sym['sLockFieldControls']) == 1)
+    c.shot(os.path.join(out, 'overworld-dialog-player2.png'))           # face to face
     before3 = games[3].player()[2:4]
     walk(m, games, srv, 3, E.DOWN, 16)
     settle(m, games, srv, 20)
     check('player 3 is not held up: walks while player 2 reads (%s -> %s)' % (before3, games[3].player()[2:4]),
           games[3].player()[2:4] != before3)
-    c.shot(os.path.join(out, 'overworld-dialog-player2.png'))
+    c.shot(os.path.join(out, 'overworld-dialog-player2-after.png'))     # player 3 walked on
     keys = [0] * N
     keys[2] = E.A
     m.run(4, keys)                                         # close it
@@ -502,6 +505,118 @@ def dialog(m, games, out):
     settle(m, games, srv, 20)
     check('... and player 2 walks again (%s -> %s)' % (before2, games[2].player()[2:4]),
           games[2].player()[2:4] != before2)
+
+
+GIVE_MON = '''
+typedef void (*fn)(void);
+typedef unsigned char (*give_fn)(unsigned short, unsigned char, unsigned short, unsigned, unsigned, unsigned char);
+void entry(void) {
+    ((give_fn)(SYM_ScriptGiveMon | 1))(SPECIES, 5, 0, 0, 0, 0);
+    *(volatile unsigned *)(SYM_gMain + 4) = SYM_CB2_Overworld | 1;
+    ((fn)(SYM_CB2_Overworld | 1))();
+}
+'''
+
+# What the Cable Club's Colosseum does once both players sit down
+# (cable_club.c): its own task, with the link service in gSpecialVar_0x8004.
+START_BATTLE = '''
+typedef void (*fn)(void);
+typedef unsigned char (*create_fn)(void *, unsigned char);
+void entry(void) {
+    *(volatile unsigned short *)SYM_gSpecialVar_0x8004 = 1;       /* USING_SINGLE_BATTLE */
+    ((create_fn)(SYM_CreateTask | 1))((void *)(SYM_Task_StartWiredCableClubBattle | 1), 80);
+    *(volatile unsigned *)(SYM_gMain + 4) = SYM_CB2_Overworld | 1;
+    ((fn)(SYM_CB2_Overworld | 1))();
+}
+'''
+
+BATTLE_MON = 0x58                         # sizeof(struct BattlePokemon); hp at 0x28
+SPECIES_NAMES = {277: 'Treecko', 280: 'Torchic'}
+
+
+def battle_mon(g, battler):
+    c = g.c
+    b = c.sym['gBattleMons'] + BATTLE_MON * battler
+    return c.r16(b), c.r16(b + 0x28)      # species, hp
+
+
+def battle(m, games, out):
+    """Two players fight a link battle from the overworld, the Cable Club's way."""
+    print('  -- battle: two players, a link battle')
+    warp_all(m, games, ((10, 18), (11, 18), (5, 13), (14, 13)))
+    a, b = games[0], games[1]
+    for g, species in ((a, 277), (b, 280)):                 # a starter each: Treecko, Torchic
+        g.c.call_once(GIVE_MON, defines={'SPECIES': species})
+    m.run(10)
+    m.lib.m_bus_plug(0x3)                                   # a cable between players 0 and 1 only
+    m.attach()                                              # ... player 0 the parent
+    m.run(30)
+    for g in (a, b):
+        g.c.call_once(L4.CALL % 'OpenLink')
+    for _ in range(80):
+        m.run(15)
+        if all(L4.status(g.c)['count'] == 2 for g in (a, b)):
+            break
+    check('linked: both games count two players', all(L4.status(g.c)['count'] == 2 for g in (a, b)))
+    a.c.call_once(L4.CALL % 'CheckShouldAdvanceLinkState')
+    for _ in range(160):
+        m.run(15)
+        if all(g.c.r8(m.sym['gReceivedRemoteLinkPlayers']) for g in (a, b)):
+            break
+    check('... and exchanged their link player records',
+          all(g.c.r8(m.sym['gReceivedRemoteLinkPlayers']) for g in (a, b)))
+    for g in (a, b):                                        # as the Cable Club does next
+        g.c.call_once(L4.CALL % 'StartSendingKeysToLink')
+    m.run(30)
+
+    for g in (a, b):
+        g.c.call_once(START_BATTLE)
+    in_battle = False
+    for _ in range(600):
+        m.run(5)
+        if all(g.c.callback2() == m.sym['BattleMainCB2'] | 1 for g in (a, b)):
+            in_battle = True
+            break
+    check('both games in the battle', in_battle)
+    flags = [g.c.r32(m.sym['gBattleTypeFlags']) for g in (a, b)]
+    check('... a link trainer battle on both (%s)' % [hex(f) for f in flags], all(f & 0x0A == 0x0A for f in flags))
+    m.run(120)
+    ma, mb = battle_mon(a, 0), battle_mon(b, 0)
+    check('each fights the other\'s own Pokemon: %s vs %s' % (SPECIES_NAMES.get(ma[0]), SPECIES_NAMES.get(mb[0])),
+          battle_mon(a, 1)[0] == mb[0] and battle_mon(b, 1)[0] == ma[0] and {ma[0], mb[0]} == {277, 280})
+    a.c.shot(os.path.join(out, 'overworld-battle-player0.png'))
+    b.c.shot(os.path.join(out, 'overworld-battle-player1.png'))
+
+    seen_a, seen_b, agree, turns = [], [], True, 0
+    for f in range(12000):                                  # both press A: FIGHT, the first move, the text
+        keys = [0] * N
+        if f % 20 < 3:
+            keys[0] = keys[1] = E.A
+        m.run(1, keys)
+        hp = (battle_mon(a, 0)[1], battle_mon(a, 1)[1])
+        hp_b = (battle_mon(b, 1)[1], battle_mon(b, 0)[1])   # the same two, as B sees them
+        if not seen_a or seen_a[-1] != hp:
+            seen_a.append(hp)
+        if not seen_b or seen_b[-1] != hp_b:
+            seen_b.append(hp_b)
+        outcomes = [g.c.r8(m.sym['gBattleOutcome']) for g in (a, b)]
+        if all(outcomes):
+            break
+    turns = len(seen_a) - 1
+    check('both games saw the same HP, change by change (%d changes)' % turns, seen_a == seen_b and turns > 0)
+    outcomes = [g.c.r8(m.sym['gBattleOutcome']) for g in (a, b)]
+    check('it ends, one winning and one losing (outcomes %s)' % outcomes, sorted(outcomes) == [1, 2])
+    winner = 0 if outcomes[0] == 1 else 1
+    print('    player %d won: HP %s' % (winner, seen_a[-1]))
+    back = False
+    for _ in range(900):
+        m.run(5, [E.A if _ % 4 == 0 else 0] * N)
+        if all(g.c.callback2() == m.sym['CB2_Overworld'] | 1 for g in (a, b)):
+            back = True
+            break
+    check('both back in the overworld afterwards', back)
+    for g in (a, b):
+        g.c.shot(os.path.join(out, 'overworld-after-battle-player%d.png' % g.i))
 
 
 LAB_DOOR = (7, 16)                        # Littleroot Town's warp 2: Professor Birch's lab
@@ -594,4 +709,5 @@ if __name__ == '__main__':
     if not rom or not os.path.exists(rom):
         print('emerald overworld  skipped: no ROM')
         sys.exit(77)
-    sys.exit(main(rom, sys.argv[2] if len(sys.argv) > 2 else os.path.join(E.ROOT, 'build/emerald')))
+    out = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith('--') else os.path.join(E.ROOT, 'build/emerald')
+    sys.exit(main(rom, out))

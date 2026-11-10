@@ -270,6 +270,23 @@ stand-in sees the A press and that player 2 is facing the figure. On the
 board, the agent checks the same two things: the press, and a figure on
 the tile ahead.
 
+**A battle between two players, in progress** (`overworld_sync.py
+--battle`). The session's place is the overworld: two players in Littleroot
+start a link battle where they stand, with no trip to the Cable Club. Each
+is given a starter with `ScriptGiveMon`. Their games link on a cable between
+just the two of them (`m_bus_plug`), with the game's own `OpenLink` and
+link-player exchange (both pass), then `StartSendingKeysToLink`, as the
+Club does. Then the Club's own `Task_StartWiredCableClubBattle` is meant to
+start the battle. It does not yet: once keys go over the cable, the
+game's `HandleLinkConnection` skips every callback in a frame where nothing
+arrived, and in the harness that is every frame. Next: find whether the
+modelled cable falls short of the key-exchange timing, or the Club does
+more set-up before this point. Once it runs, the test checks:
+- each game fights the other's real Pokémon;
+- both games see the same HP, change by change;
+- one wins and one loses;
+- both come back to the same overworld spot.
+
 **Open question: should other players be solid?** As object events they
 are, so a player standing on a doormat blocks the door for everyone, and a
 crowd can wall a corridor off. The test's players step off the mat. An

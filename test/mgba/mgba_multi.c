@@ -90,6 +90,8 @@ static void quiet(struct mLogger *l, int c, enum mLogLevel lv, const char *f, va
 static struct mLogger g_log = { .log = quiet };
 
 static struct GBA *gba(int i) { return (struct GBA *)U[i].core->board; }
+static uint8_t g_plugged = 0xF;           /* the cores on the shared cable (m_bus_plug) */
+static bool on_cable(int i) { return (g_plugged >> i) & 1; }
 static bool in_multi(int i) { return gba(i)->sio.mode == SIO_MULTI; }
 
 /* Bring every unit's SI/SD bits up to date, start or finish a transfer.
@@ -97,9 +99,9 @@ static bool in_multi(int i) { return gba(i)->sio.mode == SIO_MULTI; }
 static void bus_step(void) {
     g_quantum++;
     bool all = true;
-    for (int i = 0; i < N; i++) all = all && in_multi(i);
+    for (int i = 0; i < N; i++) if (on_cable(i)) all = all && in_multi(i);
     for (int i = 0; i < N; i++) {
-        if (!in_multi(i)) continue;
+        if (!on_cable(i) || !in_multi(i)) continue;
         uint16_t *cnt = &gba(i)->sio.siocnt;
         *cnt = (uint16_t)((*cnt & ~0x000C) | (i ? 0x0004 : 0) | (all ? 0x0008 : 0));
     }
@@ -107,12 +109,13 @@ static void bus_step(void) {
         g_start_req = false;
         int baud = gba(0)->sio.siocnt & 3, units = 0;
         for (int i = 0; i < N; i++) {
-            if (in_multi(i)) units++;
-            g_words[i] = in_multi(i) ? gba(i)->memory.io[REG_SIOMLT_SEND >> 1] : 0xFFFF;
+            const bool here = on_cable(i) && in_multi(i);
+            if (here) units++;
+            g_words[i] = here ? gba(i)->memory.io[REG_SIOMLT_SEND >> 1] : 0xFFFF;
         }
         for (int i = N; i < MAXC; i++) g_words[i] = 0xFFFF;
         for (int i = 0; i < N; i++) {
-            if (!in_multi(i)) continue;
+            if (!on_cable(i) || !in_multi(i)) continue;
             gba(i)->sio.siocnt |= 0x0080;
             for (int k = 0; k < MAXC; k++) gba(i)->memory.io[(REG_SIOMULTI0 >> 1) + k] = 0xFFFF;
         }
@@ -128,7 +131,7 @@ static void bus_step(void) {
         g_transfers++;
         memcpy(g_last, g_words, sizeof g_last);
         for (int i = 0; i < N; i++) {
-            if (!in_multi(i)) continue;
+            if (!on_cable(i) || !in_multi(i)) continue;
             struct GBA *g = gba(i);
             for (int k = 0; k < MAXC; k++) g->memory.io[(REG_SIOMULTI0 >> 1) + k] = g_words[k];
             g->sio.siocnt = (uint16_t)((g->sio.siocnt & ~(0x0080 | 0x0030 | 0x0040)) | (i << 4));
@@ -605,4 +608,12 @@ void m_board_view(int b, uint32_t out[15], char sid[40]) {
 int m_core_slot(int i) {
     const struct board *b = &BD[g_core_board[i]];
     return b->bus_on ? slot_of(b, g_core_port[i]) : -1;
+}
+
+/* Which cores are on the shared cable (bit i: core i); the rest are not
+ * plugged in, and the cable is ready without them. Core 0 is the parent. */
+void m_bus_plug(unsigned mask) {
+    pthread_mutex_lock(&g_mx);
+    g_plugged = (uint8_t)mask;
+    pthread_mutex_unlock(&g_mx);
 }
