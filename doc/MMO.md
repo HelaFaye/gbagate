@@ -222,6 +222,37 @@ parent's `CheckShouldAdvanceLinkState()`, every game holds the same four
 trainer IDs in link order, with no link errors. This is the ground truth for
 the board's 4-player relay.
 
+**Four players in one overworld** (`overworld_sync.py`, step 3 of the order
+below): four Emeralds warped into Littleroot Town, each walking a scripted
+route with emulated controls (steps, turns in place, bumps into walls and
+each other). On every game an agent stand-in runs as a game Task:
+`CreateTask` puts it in the game's own `RunTasks`, called every frame. It
+reads a mailbox and acts with the game's own functions:
+- `SpawnSpecialObjectEventParameterized` draws each other player as Brendan
+  or May;
+- `ObjectEventSetHeldMovement` walks or turns them, one step after another;
+- `RemoveObjectEvent` takes them away.
+
+A server stand-in reads each player's map, tile, facing and elevation every
+frame and queues their steps for the others.
+- **While walking:** every figure stays within one step of its player.
+- **Once everyone stops:** every figure, on every game, stands on its
+  player's tile facing the same way, drawn and on screen where the two
+  positions say.
+- **Screens:** the four screens show the same four trainers in the same
+  places.
+
+What it took:
+- **Not `gMain.callback2`.** The overworld's input (`CB1_Overworld`) only
+  runs while callback2 *is* `CB2_Overworld`, so a hook there freezes the
+  player. A Task is the right place.
+- **The intro's step-on triggers.** Littleroot's coord events move a
+  new-game player. They are dropped in the RAM header's copy of the events
+  as the warp lands; the doors stay, for buildings.
+- **The EWRAM past pokeemerald's data is 4 KB** (`0x0203F000`–`0x0203FFFF`).
+  Past it is a mirror of `0x02000000`, the game's heap, which overwrites
+  anything put there.
+
 Next on mGBA:
 - **Talking, trading and battling** in the room. Each starts a link session
   over the same adapters.

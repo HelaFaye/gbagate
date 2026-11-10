@@ -112,6 +112,7 @@ mgba-emerald: mgba-shim
 	@python3 -I test/mgba/link4.py "$(EMERALD_ROM)" $(BUILD)/emerald
 	@# through the real Celio-Server: needs test/gblink_compat/run.sh's bundle (77: skipped without it)
 	@python3 -I test/mgba/link4_online.py "$(EMERALD_ROM)" $(BUILD)/emerald || [ $$? -eq 77 ]
+	@python3 -I test/mgba/overworld_sync.py "$(EMERALD_ROM)" $(BUILD)/emerald
 
 # After a change to rom/agent.c or agent_proto.h: rebuild the image and the
 # C array the firmware embeds (lint checks the two are current).
