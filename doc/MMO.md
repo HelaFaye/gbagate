@@ -261,6 +261,36 @@ Next on mGBA:
 - **A custom room** loaded through the header window and the IRQ-table hook.
 - **The ROM-patch route,** for a modded copy.
 
+## Two ways to carry other players
+
+**Object events, driven by the agent** (tested: `overworld_sync.py`). The
+agent spawns each nearby player as an object event and plays their steps
+as held movements. Each step is a small packet, and nothing in the game's
+own link code is involved, so it works on any map, at any distance, with
+any number of players the object table can hold.
+
+**The game's own link protocol, changed in RAM by the loader.** Emerald
+already moves linked players in a shared room: in the Cable Club rooms the
+games exchange their keys every frame over the link (`gLinkPlayerObjectEvents`,
+the link field's key exchange), and every game moves every player's
+avatar from the same keys. The loader can patch that code where it runs,
+in RAM:
+- let it run on overworld maps, not only in the Cable Club rooms;
+- carry steps instead of raw keys, so a slow player does not hold up the
+  others;
+- leave the transport as it is: the board relays it as Link: Online does.
+
+That reuses the game's own drawing, collision and facing for linked
+players, and the link battle and trade paths that start from them. Both
+routes draw with the same object events, so the step stream, the server
+and the checks in `overworld_sync.py` carry over.
+
+**Custom worlds need chunk preloading either way.** A map that is not in
+the ROM has no layout for the game to load. The board sends its metatiles
+and collision ahead of the player, chunk by chunk (Netcode, above), and
+the loader writes them into the map buffer before the player can see
+them.
+
 ## Order of work
 
 1. The agent hooked into a running game, on the emulator with a scripted
