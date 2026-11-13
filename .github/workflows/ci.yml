@@ -188,7 +188,8 @@ jobs:
         run: |
           apt-get update -qq
           apt-get install -y -qq ninja-build pkg-config libglib2.0-dev libpixman-1-dev \
-            libgcrypt20-dev libslirp-dev flex bison python3-venv mtools gcc-arm-none-eabi >/dev/null
+            libgcrypt20-dev libslirp-dev flex bison python3-venv mtools gcc-arm-none-eabi \
+            iproute2 procps xvfb xauth python3-tk lua5.4 liblua5.4-dev lua-socket >/dev/null
       - name: which fork commit
         id: fork
         shell: bash
@@ -219,6 +220,105 @@ jobs:
           fi
           ./qemu/accurate.sh boot gate carrier-touch
           ./qemu/accurate.sh boot gate devkit
+      - name: build hybrid carrier-touch UART bridge firmware
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          set -e
+          . "$IDF_PATH/export.sh" >/dev/null
+          if command -v ccache >/dev/null; then
+            export IDF_CCACHE_ENABLE=1 CCACHE_DIR="$PWD/.ccache" CCACHE_MAXSIZE=400M
+          fi
+          GBAGATE_BUILD_DIR="$PWD/build/hw-gate-carrier-touch-mgba" \
+          GBAGATE_UART_BRIDGE=1 \
+          GBAGATE_UART_TX_GPIO=37 \
+          GBAGATE_UART_RX_GPIO=38 \
+          BOARD=carrier-touch tools/build_hw.sh gate
+          test -s build/hw-gate-carrier-touch-mgba/flash-qemu.bin
+
+      - name: build pinned headless mGBA with Lua 5.4
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          MGBA_REV=d58ea8a86f30598fbf3958585de3d33028535072
+
+          git clone --filter=blob:none \
+            https://github.com/mgba-emu/mgba.git \
+            build/mgba-headless-src
+          git -C build/mgba-headless-src checkout --detach "$MGBA_REV"
+
+          cmake -S build/mgba-headless-src \
+            -B build/mgba-headless-build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_HEADLESS=ON \
+            -DBUILD_QT=OFF \
+            -DBUILD_SDL=OFF \
+            -DBUILD_GL=OFF \
+            -DENABLE_SCRIPTING=ON \
+            -DUSE_LUA=5.4 \
+            -DUSE_FFMPEG=OFF \
+            -DUSE_ZLIB=OFF \
+            -DUSE_MINIZIP=OFF \
+            -DUSE_PNG=OFF \
+            -DUSE_LIBZIP=OFF \
+            -DUSE_SQLITE3=OFF \
+            -DUSE_ELF=OFF \
+            -DUSE_JSON_C=OFF \
+            -DUSE_FREETYPE=OFF \
+            -DUSE_LZMA=OFF \
+            -DUSE_DISCORD_RPC=OFF
+
+          cmake --build build/mgba-headless-build \
+            --target mgba-headless --parallel 2
+
+          test -x build/mgba-headless-build/mgba-headless
+
+          LUA_PATH='/usr/share/lua/5.4/?.lua;/usr/share/lua/5.4/?/init.lua;;' \
+          LUA_CPATH='/usr/lib/x86_64-linux-gnu/lua/5.4/?.so;;' \
+          lua5.4 -e 'local s=require("socket"); assert(type(s.tcp)=="function"); print("LuaSocket 5.4 OK")'
+
+          if ldd build/mgba-headless-build/mgba-headless | grep -q 'not found'; then
+            echo "mGBA has unresolved shared-library dependencies."
+            ldd build/mgba-headless-build/mgba-headless
+            exit 1
+          fi
+
+      - name: run accurate carrier-touch mGBA regression
+        timeout-minutes: 10
+        shell: bash
+        env:
+          LUA_PATH: "/usr/share/lua/5.4/?.lua;/usr/share/lua/5.4/?/init.lua;;"
+          LUA_CPATH: "/usr/lib/x86_64-linux-gnu/lua/5.4/?.so;;"
+        run: |
+          set -euo pipefail
+          command -v ss
+          command -v pgrep
+          command -v ps
+          python3 -c 'import tkinter; print("Tkinter OK")'
+          xvfb-run -a -s "-screen 0 1280x800x24" env \
+            GBAGATE_LINK_PORT=5557 \
+            GBAGATE_TEST_TIMEOUT=180 \
+            GBAGATE_LIVE_OUT="$RUNNER_TEMP/gbagate-accurate-mgba" \
+            GBAGATE_LIVE_DIR="$RUNNER_TEMP/gbagate-accurate-mgba-state" \
+            GBAGATE_SOURCE_FLASH="$GITHUB_WORKSPACE/build/hw-gate-carrier-touch-mgba/flash-qemu.bin" \
+            GBAGATE_MGBA="$GITHUB_WORKSPACE/build/mgba-headless-build/mgba-headless" \
+            bash qemu/test_accurate_mgba.sh
+
+      - name: upload accurate mGBA regression artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: accurate-mgba-regression-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/gbagate-accurate-mgba/**
+            ${{ runner.temp }}/gbagate-accurate-mgba-state/**
+            build/hw-gate-carrier-touch-mgba/flash-qemu.bin
+            build/mgba-headless-build/CMakeCache.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: screenshots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
