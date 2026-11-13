@@ -187,7 +187,7 @@ jobs:
       - name: QEMU build dependencies
         run: |
           apt-get update -qq
-          apt-get install -y -qq ninja-build pkg-config libglib2.0-dev libpixman-1-dev \
+          apt-get install -y -qq cmake ninja-build pkg-config libglib2.0-dev libpixman-1-dev \
             libgcrypt20-dev libslirp-dev flex bison python3-venv mtools gcc-arm-none-eabi \
             iproute2 procps xvfb xauth python3-tk lua5.4 liblua5.4-dev lua-socket >/dev/null
       - name: which fork commit
