@@ -234,6 +234,14 @@ jobs:
           GBAGATE_UART_TX_GPIO=37 \
           GBAGATE_UART_RX_GPIO=38 \
           BOARD=carrier-touch tools/build_hw.sh gate
+          # Build the complete flash image expected by QEMU.
+          # This mirrors the merge operation in qemu/accurate.sh.
+          (
+            cd build/hw-gate-carrier-touch-mgba
+            python -m esptool --chip esp32s3 merge_bin \
+              --fill-flash-size 4MB \
+              -o flash-qemu.bin @flash_args
+          )
           test -s build/hw-gate-carrier-touch-mgba/flash-qemu.bin
 
       - name: build pinned headless mGBA with Lua 5.4

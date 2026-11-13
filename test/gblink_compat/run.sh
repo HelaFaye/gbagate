@@ -35,11 +35,31 @@ GB-Link-Switch-LDN    37c693b7f7689d8812a06e54018b5468ed4d8075
 # Testing against it made the two look incompatible when they are not.
 SRC="${GBLINK_SRC:-$BUILD/src}"
 mkdir -p "$SRC"
+
+# Retry transient GitHub clone failures without silently skipping required
+# compatibility inputs.
+clone_public_repo() {
+    local url="$1" dest="$2" attempt
+    for attempt in 1 2 3; do
+        if GIT_TERMINAL_PROMPT=0 git clone -q "$url" "$dest"; then
+            return 0
+        fi
+        rm -rf "$dest"
+        if [ "$attempt" -lt 3 ]; then
+            echo "clone failed for $url (attempt $attempt/3); retrying..." >&2
+            sleep "$attempt"
+        fi
+    done
+    echo "ERROR: unable to clone required upstream $url after 3 attempts." >&2
+    echo "Verify that the repository is public and reachable from the runner." >&2
+    return 1
+}
+
 echo "$PINS" | while read -r repo pin owner; do
     [ -n "$repo" ] || continue
-    url="https://github.com/${owner:-GB-Link}/$repo"
+    url="https://github.com/${owner:-GB-Link}/$repo.git"
     if [ ! -d "$SRC/$repo/.git" ] && [ ! -d "$SRC/$repo/src" ]; then
-        git clone -q "$url" "$SRC/$repo"
+        clone_public_repo "$url" "$SRC/$repo"
     fi
     if [ -z "${GBLINK_SRC:-}" ]; then
         git -C "$SRC/$repo" remote set-url origin "$url"   # an older checkout may be the fork's
