@@ -188,7 +188,7 @@ jobs:
         run: |
           apt-get update -qq
           apt-get install -y -qq ninja-build pkg-config libglib2.0-dev libpixman-1-dev \
-            libgcrypt20-dev libslirp-dev flex bison python3-venv mtools >/dev/null
+            libgcrypt20-dev libslirp-dev flex bison python3-venv mtools gcc-arm-none-eabi >/dev/null
       - name: which fork commit
         id: fork
         shell: bash
@@ -208,6 +208,8 @@ jobs:
       - name: build the emulator
         shell: bash
         run: ./qemu/accurate.sh build
+      - name: build the carrier-touch SD-card test ROM
+        run: make rom
       - name: boot the touch carrier and the devkit
         shell: bash
         run: |
