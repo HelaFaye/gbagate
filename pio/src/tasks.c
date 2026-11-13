@@ -50,13 +50,11 @@ static const char *TAG = "tasks";
 static QueueHandle_t s_ui_events;
 static link_bridge_t s_bridge;
 
-#ifdef GBAGATE_QEMU
+#if defined(GBAGATE_QEMU) || defined(GBAGATE_UART_BRIDGE)
 /*
- * Under emulation there is no PHY and no USB host. The game's words arrive over
- * UART1 through the bridge instead, so these three pieces -- the UART transport,
- * the word delivery into the gate's link_source, and an open database to give
- * the gate an identity -- are wired here. On hardware the PHY and the UI do all
- * of this, which is why it is compiled in only for the QEMU images.
+ * The UART bridge supplies the game's words and the gate's identity. In the
+ * normal QEMU image it replaces the PHY; in the hybrid accurate-QEMU image
+ * the physical PHY is still initialized, but the gate uses this host tunnel.
  */
 extern esp_err_t transport_uart_start(link_bridge_t *bridge);
 extern void      link_source_feed(uint16_t seq, uint16_t game_word);
@@ -139,12 +137,11 @@ void tasks_start(uint32_t features) {
     s_ui_events = xQueueCreate(16, sizeof(ui_event_t));
     configASSERT(s_ui_events);
 
-#ifdef GBAGATE_QEMU
+#if defined(GBAGATE_QEMU) || defined(GBAGATE_UART_BRIDGE)
     /*
-     * Bring the emulated link up before the tasks that use it: open a default
-     * database so the gate has an identity to announce (MMBN6 US = "bn6g"),
-     * start the UART bridge, and route inbound words into link_source. The
-     * uart_rx task drives bridge_tick itself.
+     * Open the default database (MMBN6 US = "bn6g"), start the UART bridge,
+     * and route inbound words into link_source. The UART RX task drives
+     * bridge_tick itself.
      */
     gate_open_database("bn6g");
     if (transport_uart_start(&s_bridge) == ESP_OK) {

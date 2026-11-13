@@ -64,6 +64,12 @@ else()
         ../../port/esp32s3/sd_esp32s3.c
         ../../port/esp32s3/gba_link_esp32s3.c
         ../../port/esp32s3/transport_esp32s3.c)
+    # Optional host link tunnel alongside the real board drivers. This is
+    # independent of GBAGATE_QEMU, which replaces the panel, input, SD and
+    # PHY drivers. This option replaces only the gate's selected link source.
+    if(GBAGATE_UART_BRIDGE)
+        list(APPEND SRCS ../../port/esp32s3/transport_uart.c)
+    endif()
     # Direct GPIO or an I2C expander, decided by the board rather than the
     # variant: a Supermini has too few pins for ten switches, a 44-pin devkit
     # has plenty. Only one is built, because both define input_active().
