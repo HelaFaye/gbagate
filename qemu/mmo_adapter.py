@@ -3,10 +3,10 @@ touch carrier's hybrid image (GBAGATE_UART_BRIDGE) on qemu_esp32, with its
 real board drivers, its link words on UART1 (the bridge, link_proto) and its
 way to the MMO server on UART2 (the tunnel).
 
-    Adapter(i, flash, out)  boots board i; .start_overworld() takes it to
-    Link: Overworld by touch; .transfer(word) is one link transfer.
+    Adapter(i, flash, out)  boots board i; .start_novaboot() takes it to
+    Link: NovaBoot by touch; .transfer(word) is one link transfer.
 
-Used by test_mmo_adapter.py (model GBAs) and test/mgba/overworld_adapter.py
+Used by test_mmo_adapter.py (model GBAs) and test/mgba/novaboot_adapter.py
 (Emerald).
 """
 import os
@@ -91,14 +91,14 @@ class Adapter:
         self.qmp.touch(x, y, False)
         time.sleep(gap)
 
-    def start_overworld(self):
-        """Link, then the chooser's Overworld, by touch. The menu opens on
-        Link (row 0); the chooser lists Wireless, Online, Overworld here."""
+    def start_novaboot(self):
+        """Link, then the chooser's NovaBoot, by touch. The menu opens on
+        Link (row 0); the chooser lists Wireless, Online, NovaBoot here."""
         self.tap('A')
         self.tap('DOWN')
         self.tap('DOWN')
         self.tap('A')
-        return self.wait_log("overworld: the agent's words to the server", 10)
+        return self.wait_log("novaboot: the agent's words to the server", 10)
 
     def connect_link(self, timeout=30):
         """The bridge: link_proto over UART1, the host side of the cable."""

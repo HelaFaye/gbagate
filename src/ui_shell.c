@@ -67,7 +67,7 @@ static const menu_entry_t k_modes[APP_MODE_COUNT] = {
      * way to the server (HW_CAP_SERVER), which today is the hybrid
      * emulator image's UART tunnel alone.
      */
-    { APP_MODE_LINK_OVERWORLD, "Link: Overworld",
+    { APP_MODE_LINK_NOVABOOT, "Link: NovaBoot",
       HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_SERVER, "no way to the server" },
     { APP_MODE_SETTINGS, "Settings", HW_CAP_DISPLAY, NULL },
     { APP_MODE_DIAGNOSTICS, "Diagnostics", 0, NULL },
@@ -141,7 +141,7 @@ void shell_init(ui_shell_t *s, uint32_t caps) {
     s->screen = SHELL_SCREEN_MODES;
 
     const app_mode_t links[] = { APP_MODE_LINK_USB, APP_MODE_LINK_WIRELESS,
-                                 APP_MODE_LINK_ONLINE, APP_MODE_LINK_OVERWORLD };
+                                 APP_MODE_LINK_ONLINE, APP_MODE_LINK_NOVABOOT };
     for (size_t i = 0; i < sizeof links / sizeof links[0]; i++) {
         if (hw_menu_missing(&k_modes[links[i]], caps) == 0) {
             s->links[s->link_count++] = links[i];
@@ -190,7 +190,7 @@ static const char *link_label(app_mode_t m) {
     switch (m) {
     case APP_MODE_LINK_USB:      return "USB - PC or mGBA";
     case APP_MODE_LINK_WIRELESS: return "Wireless - gbagate";
-    case APP_MODE_LINK_OVERWORLD: return "Overworld - MMO";
+    case APP_MODE_LINK_NOVABOOT: return "NovaBoot - MMO";
     default:                     return "Online - Celio";
     }
 }
@@ -314,7 +314,7 @@ bool shell_select(ui_shell_t *s) {
 
 static bool is_link(app_mode_t m) {
     return m == APP_MODE_LINK_USB || m == APP_MODE_LINK_WIRELESS ||
-           m == APP_MODE_LINK_ONLINE || m == APP_MODE_LINK_OVERWORLD;
+           m == APP_MODE_LINK_ONLINE || m == APP_MODE_LINK_NOVABOOT;
 }
 
 bool shell_back(ui_shell_t *s) {

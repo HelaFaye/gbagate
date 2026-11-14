@@ -322,7 +322,7 @@ the in-game agent talks to the board over link words, and the board talks
 to the server:
 
 ```
-Emerald (agent)  --link words-->  board: Link: Overworld  --mmo_net-->  server
+Emerald (agent)  --link words-->  board: Link: NovaBoot  --mmo_net-->  server
                  <--commands----  src/mmo_relay.c          <--players--
 ```
 
@@ -346,7 +346,7 @@ Emerald (agent)  --link words-->  board: Link: Overworld  --mmo_net-->  server
   - Server to board: `MN_WELCOME` (a player id), `MN_PLAYER` for the
     players on this board's map, and `MN_GONE`.
   - Interest is the map; chunks come when maps get crowded.
-- **The mode:** Link: Overworld in the Link chooser. It is offered only
+- **The mode:** Link: NovaBoot (a working name) in the Link chooser. It is offered only
   where the board has a way to the server (`HW_CAP_SERVER`). Today that is
   the hybrid emulator image's UART2 tunnel, which Diagnostics and the
   mode's own page mark as a stand-in for the board's network.
@@ -359,7 +359,7 @@ Tested:
   - fifteen players walking at once through a link of one word a frame.
   - Each fails when what it covers is broken.
 - `qemu/test_mmo_adapter.py`: two touch carriers, each the hybrid image
-  with its own firmware and drivers on qemu_esp32, each in Link: Overworld
+  with its own firmware and drivers on qemu_esp32, each in Link: NovaBoot
   (reached by touch). Each has a model GBA on its link, through one server
   (`qemu/mmo_server.py`):
   - each sees the other where they stand, facing their way;
@@ -368,7 +368,7 @@ Tested:
   - going indoors removes the figure, and coming back out shows it again;
   - no mailbox overflow, no bad frame at either end, no word resent.
   - With the server's departures removed, it fails.
-- `test/mgba/overworld_adapter.py`: the same with Emeralds. The agent
+- `test/mgba/novaboot_adapter.py`: the same with Emeralds. The agent
   (`test/mgba/mmo_agent.py`) is a game Task speaking the link words, and
   the players walk overworld_sync.py's routes. It needs the ROM.
 

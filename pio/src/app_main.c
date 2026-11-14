@@ -226,7 +226,7 @@ void app_main(void) {
 #if defined(GBAGATE_UART_BRIDGE)
     /* The hybrid emulator image's way to the shared overworld's server: a
      * UART tunnel, standing in for the board's own network (Diagnostics
-     * marks it). No other image has one, so no other offers Link: Overworld. */
+     * marks it). No other image has one, so no other offers Link: NovaBoot. */
     {
         extern esp_err_t mmo_net_start(void);
         if (mmo_net_start() == ESP_OK) {

@@ -98,7 +98,7 @@ typedef struct {
 void ui_page_diagnostics(ui_page_t *p, const char *title, const ui_keys_t *keys,
                          const ui_diag_t *d);
 
-/* Link: Overworld, the shared overworld through the board (src/mmo_relay.c). */
+/* Link: NovaBoot, the shared overworld through the board (src/mmo_relay.c). */
 typedef struct {
     const char *server;        /* how the board reaches it: "UART"           */
     bool        server_stand_in; /* ... and whether that stands in for its own network */
@@ -109,10 +109,10 @@ typedef struct {
     int16_t     x, y;
     uint32_t    words, commands, bad;
     int         queued;
-} ui_overworld_t;
+} ui_novaboot_t;
 
-void ui_page_overworld(ui_page_t *p, const char *title, const ui_keys_t *keys,
-                       const ui_overworld_t *o);
+void ui_page_novaboot(ui_page_t *p, const char *title, const ui_keys_t *keys,
+                       const ui_novaboot_t *o);
 
 /* A mode whose enter() refused: why, as app_dispatch_status_t. */
 void ui_page_refused(ui_page_t *p, const char *title, const ui_keys_t *keys,

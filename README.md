@@ -181,7 +181,7 @@ marks a stand-in with `*` and adds a footnote saying so. The capability bits:
 | USB drive / USB adapter | USB came up as the drive, or as the GB-Link adapter (one controller: one or the other) | USB Storage / Link: USB |
 | WiFi | the S3's radio, on hardware only (QEMU's S3 has none) | Link: Wireless, Link: Online |
 | chip reader | an MCP23017 answered on I2C | the Battle Chip applet's reader |
-| MMO server | a way to the shared overworld's server: today only the hybrid emulator image's UART tunnel* | Link: Overworld (`doc/MMO.md`) |
+| MMO server | a way to the shared overworld's server: today only the hybrid emulator image's UART tunnel* | Link: NovaBoot (`doc/MMO.md`) |
 
 What each board offers today, in the gate image (the link and mini images
 leave out some modes: `variant.c`):
@@ -193,7 +193,7 @@ leave out some modes: `variant.c`):
 | Self Test, Battle Chip | yes | yes | yes | yes, over the bridge* |
 | Infrared | no emitter fitted | no | no | no |
 | GB Printer | no 5 V shifter | no | no | no |
-| Link: Overworld | no way to the server yet | no | no; yes in its hybrid emulator image, through the UART tunnel* | no |
+| Link: NovaBoot | no way to the server yet | no | no; yes in its hybrid emulator image, through the UART tunnel* | no |
 | SD card | yes | yes | yes | no |
 | input | encoder or switches | switches (expander) | touch keys* | keys over UART* |
 | panel | ST7735 | ST7735 | ILI9341, the UI at 15/8 | framebuffer over UART* |

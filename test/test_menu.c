@@ -84,22 +84,22 @@ static void test_only_fitted_hardware(void) {
     shell_select(&g_shell);
     bool ow = false;
     for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
-        ow |= strncmp(shell_label_at(&g_shell, i), "Overworld", 9) == 0;
+        ow |= strncmp(shell_label_at(&g_shell, i), "NovaBoot", 8) == 0;
     }
-    check("no Overworld without a server", ow, 0);
+    check("no NovaBoot without a server", ow, 0);
     shell_back(&g_shell);
     shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_WIFI | HW_CAP_SERVER);
     g_shell.mode_cursor = (uint8_t)row_of("Link");
     shell_select(&g_shell);
     int at = -1;
     for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
-        if (strncmp(shell_label_at(&g_shell, i), "Overworld", 9) == 0) at = i;
+        if (strncmp(shell_label_at(&g_shell, i), "NovaBoot", 8) == 0) at = i;
     }
-    check("Overworld with one", at >= 0, 1);
+    check("NovaBoot with one", at >= 0, 1);
     if (at >= 0) {
         g_shell.link_cursor = (uint8_t)at;
         shell_select(&g_shell);
-        check("... as Link: Overworld", g_shell.chosen_mode, APP_MODE_LINK_OVERWORLD);
+        check("... as Link: NovaBoot", g_shell.chosen_mode, APP_MODE_LINK_NOVABOOT);
     }
 
     /* One USB controller: the GB-Link adapter or the drive. Link: USB is the

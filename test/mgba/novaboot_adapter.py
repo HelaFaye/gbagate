@@ -1,11 +1,11 @@
-"""overworld_adapter.py -- Pokemon Emeralds in one overworld, each through
+"""novaboot_adapter.py -- Pokemon Emeralds in one overworld, each through
 its own emulated adapter: the in-game agent's link words go to the touch
-carrier's own firmware on qemu_esp32 (the hybrid image, Link: Overworld,
+carrier's own firmware on qemu_esp32 (the hybrid image, Link: NovaBoot,
 reached by touch), whose relay (src/mmo_relay.c) talks to one server
 (qemu/mmo_server.py). overworld_sync.py checked the same with the test
 script in the board's place; this is the board doing its part.
 
-    python3 -I test/mgba/overworld_adapter.py <emerald.gba> <out-dir> [players]
+    python3 -I test/mgba/novaboot_adapter.py <emerald.gba> <out-dir> [players]
 
 players: 2 (the default) to 4, an emulated adapter for each.
 
@@ -109,7 +109,7 @@ def main(rom, out, n):
         time.sleep(2.5)
         for b in boards:
             srv.connect('127.0.0.1', b.net_port)
-            check('board %d: Link: Overworld, by touch' % b.i, b.start_overworld())
+            check('board %d: Link: NovaBoot, by touch' % b.i, b.start_novaboot())
             check('board %d: its link is up' % b.i, b.connect_link())
         end = time.time() + 5
         while time.time() < end and not all(x.welcomed for x in srv.boards):
@@ -154,9 +154,9 @@ def main(rom, out, n):
         check('no word had to be sent again', not any(b.resent for b in boards), [b.resent for b in boards])
         print('    words %s; server: %s in, %s out' % ([b.words for b in boards], srv.received, srv.sent))
         for g in games:
-            g.c.shot(os.path.join(out, 'overworld-adapter-%d.png' % g.i))
+            g.c.shot(os.path.join(out, 'novaboot-adapter-%d.png' % g.i))
         for b in boards:
-            b.shot(os.path.join(out, 'overworld-adapter-board%d.ppm' % b.i))
+            b.shot(os.path.join(out, 'novaboot-adapter-board%d.ppm' % b.i))
     except (RuntimeError, TimeoutError) as e:
         check('ran to the end', False, '%s: %s' % (type(e).__name__, e))
     finally:

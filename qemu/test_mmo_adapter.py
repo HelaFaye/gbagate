@@ -1,6 +1,6 @@
 """test_mmo_adapter.py -- the shared overworld through two emulated adapters:
 two touch carriers (the hybrid image, the board's own firmware and drivers,
-on qemu_esp32), each in Link: Overworld (reached by touch), each with a
+on qemu_esp32), each in Link: NovaBoot (reached by touch), each with a
 model GBA on its link, both through one server (qemu/mmo_server.py).
 
     python3 -I qemu/test_mmo_adapter.py [out-dir]
@@ -11,10 +11,10 @@ commands into a mailbox of eight, run in order, a walk holding back what
 follows it for 16 frames, a spawn only for its own map, the mailbox emptied
 on a change of map. The words go through the real link_proto bridge on
 UART1, the relay (src/mmo_relay.c) in the firmware, and the server tunnel on
-UART2. test/mgba/overworld_adapter.py does the same with Emerald.
+UART2. test/mgba/novaboot_adapter.py does the same with Emerald.
 
 Checked:
-  - each board offers Link: Overworld (it has a server), and its relay joins
+  - each board offers Link: NovaBoot (it has a server), and its relay joins
     the server;
   - each GBA sees the other's figure where they stand, facing their way;
   - one walks and turns: the other's figure follows, step for step, and ends
@@ -178,7 +178,7 @@ def main(out):
             check('board %d has a way to the server, and says it is a stand-in (caps %#x)' % (b.i, caps),
                   bool(caps & (1 << 13)) and 'stand-in for the board' in b.log())
             srv.connect('127.0.0.1', b.net_port)
-            check('board %d: Link: Overworld, by touch' % b.i, b.start_overworld())
+            check('board %d: Link: NovaBoot, by touch' % b.i, b.start_novaboot())
             check('board %d: its link is up' % b.i, b.connect_link())
         end = time.time() + 5
         while time.time() < end and not all(x.welcomed for x in srv.boards):
@@ -245,7 +245,7 @@ def main(out):
         check('no word had to be sent again', not any(b.resent for b in boards), [b.resent for b in boards])
         print('    %s words; server: %s in, %s out' % ([b.words for b in boards], srv.received, srv.sent))
         for b in boards:
-            b.shot(os.path.join(out, 'board%d-overworld.ppm' % b.i))
+            b.shot(os.path.join(out, 'board%d-novaboot.ppm' % b.i))
     except Exception as e:                       # noqa: BLE001
         check('ran to the end', False, '%s: %s' % (type(e).__name__, e))
     finally:

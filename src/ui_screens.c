@@ -182,8 +182,8 @@ void ui_page_diagnostics(ui_page_t *p, const char *title, const ui_keys_t *keys,
     }
 }
 
-void ui_page_overworld(ui_page_t *p, const char *title, const ui_keys_t *keys,
-                       const ui_overworld_t *o) {
+void ui_page_novaboot(ui_page_t *p, const char *title, const ui_keys_t *keys,
+                       const ui_novaboot_t *o) {
     begin(p, title, keys, NULL);
     ui_page_add(p, o->pid >= 0 ? COL_GOOD : COL_WARN, "server %s%s %s", o->server,
                 o->server_stand_in ? "*" : "", o->pid >= 0 ? "joined" : "waiting");

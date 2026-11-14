@@ -448,21 +448,21 @@ static void test_pages(void) {
     check("touch: the keys are", has_line(&p, "touch keys*"), 1);
     check("touch: the footnote", has_line(&p, "* a stand-in"), 1);
 
-    /* Link: Overworld, waiting and in play, through the emulator's tunnel. */
-    ui_overworld_t ow = { .server = "UART", .server_stand_in = true, .pid = -1 };
-    ui_page_overworld(&p, "Link: Overworld", foot, &ow);
-    page("overworld-waiting", &p);
-    check("overworld: waiting for the server", has_line(&p, "waiting"), 1);
-    check("overworld: no agent yet, said", has_line(&p, "no agent"), 1);
-    check("overworld: the tunnel marked", has_line(&p, "UART*"), 1);
-    ui_overworld_t ow2 = { .server = "UART", .server_stand_in = true, .pid = 3, .here = 2,
+    /* Link: NovaBoot, waiting and in play, through the emulator's tunnel. */
+    ui_novaboot_t ow = { .server = "UART", .server_stand_in = true, .pid = -1 };
+    ui_page_novaboot(&p, "Link: NovaBoot", foot, &ow);
+    page("novaboot-waiting", &p);
+    check("novaboot: waiting for the server", has_line(&p, "waiting"), 1);
+    check("novaboot: no agent yet, said", has_line(&p, "no agent"), 1);
+    check("novaboot: the tunnel marked", has_line(&p, "UART*"), 1);
+    ui_novaboot_t ow2 = { .server = "UART", .server_stand_in = true, .pid = 3, .here = 2,
                            .agent = true, .group = 0, .num = 9, .x = 10, .y = 13,
                            .words = 123456, .commands = 1234, .queued = 7, .bad = 2 };
-    ui_page_overworld(&p, "Link: Overworld", foot, &ow2);
-    page("overworld-playing", &p);
-    check("overworld: joined", has_line(&p, "joined"), 1);
-    check("overworld: where", has_line(&p, "map 0.9 at 10,13"), 1);
-    check("overworld: bad frames shown", has_line(&p, "bad frames 2"), 1);
+    ui_page_novaboot(&p, "Link: NovaBoot", foot, &ow2);
+    page("novaboot-playing", &p);
+    check("novaboot: joined", has_line(&p, "joined"), 1);
+    check("novaboot: where", has_line(&p, "map 0.9 at 10,13"), 1);
+    check("novaboot: bad frames shown", has_line(&p, "bad frames 2"), 1);
 
     const struct { int st; const char *name; } refusals[] = {
         { 1, "refused-no-handler" }, { 2, "refused-hardware" }, { 3, "refused-game" },
