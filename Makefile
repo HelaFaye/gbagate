@@ -62,6 +62,7 @@ DEPS_mpbus     = mp_bus.c mp_link.c mp_relay.c
 DEPS_mponline  = mp_online.c mp_link.c mp_relay.c mp_bus.c
 DEPS_printer_mode = printer_mode.c gbprinter.c gbp_png.c
 DEPS_touchpad  = touch_pad.c ui_theme.c ui_font.c
+DEPS_mmo       = mmo_link.c mmo_net.c mmo_relay.c
 DEPS_applets   = applet.c app_modes.c ui_shell.c hw_caps.c chipgate.c chipdb.c \
                  ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c \
                  ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c mbagent.c gbprinter.c
@@ -75,9 +76,9 @@ DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_
 EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay mpbus mponline gbprinter printer_mode touchpad
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay mpbus mponline gbprinter printer_mode touchpad mmo
 
-.PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image mgba-shim mgba-emerald
+.PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image mgba-shim mgba-emerald mmo-adapter
 all: $(addprefix run-,$(SUITES)) gblink agent-emu
 	@./qemu/lint.sh
 
@@ -114,6 +115,12 @@ mgba-emerald: mgba-shim
 	@# through the real Celio-Server: needs test/gblink_compat/run.sh's bundle (77: skipped without it)
 	@python3 -I test/mgba/link4_online.py "$(EMERALD_ROM)" $(BUILD)/emerald || [ $$? -eq 77 ]
 	@python3 -I test/mgba/overworld_sync.py "$(EMERALD_ROM)" $(BUILD)/emerald
+
+# The shared overworld through two emulated adapters: the hybrid touch
+# carrier image on qemu_esp32 (./qemu/accurate.sh build, then the hybrid
+# build as CI does it), model GBAs, qemu/mmo_server.py (doc/MMO.md).
+mmo-adapter:
+	@python3 -I qemu/test_mmo_adapter.py $(BUILD)/mmo-adapter
 
 # After a change to rom/agent.c or agent_proto.h: rebuild the image and the
 # C array the firmware embeds (lint checks the two are current).

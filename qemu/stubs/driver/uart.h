@@ -22,3 +22,4 @@ static inline esp_err_t uart_param_config(uart_port_t p, const uart_config_t *c)
 static inline esp_err_t uart_set_pin(uart_port_t p, int tx, int rx, int rts, int cts) { (void)p;(void)tx;(void)rx;(void)rts;(void)cts; return ESP_OK; }
 static inline int uart_write_bytes(uart_port_t p, const void *b, size_t n) { (void)p;(void)b; return (int)n; }
 static inline int uart_read_bytes(uart_port_t p, void *b, uint32_t n, TickType_t t) { (void)p;(void)b;(void)n;(void)t; return 0; }
+static inline esp_err_t uart_get_buffered_data_len(uart_port_t p, size_t *n) { (void)p; *n = 0; return ESP_OK; }

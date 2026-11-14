@@ -77,6 +77,31 @@ static void test_only_fitted_hardware(void) {
     check("GB Printer with the shifter", row_of("GB Printer") >= 0, 1);
     check("no Infrared", row_of("Infrared"), -1);
 
+    /* The shared overworld needs a way to its server: without one (every
+     * board today), it is not among the Link choices. */
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_WIFI);
+    g_shell.mode_cursor = (uint8_t)row_of("Link");
+    shell_select(&g_shell);
+    bool ow = false;
+    for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
+        ow |= strncmp(shell_label_at(&g_shell, i), "Overworld", 9) == 0;
+    }
+    check("no Overworld without a server", ow, 0);
+    shell_back(&g_shell);
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_WIFI | HW_CAP_SERVER);
+    g_shell.mode_cursor = (uint8_t)row_of("Link");
+    shell_select(&g_shell);
+    int at = -1;
+    for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
+        if (strncmp(shell_label_at(&g_shell, i), "Overworld", 9) == 0) at = i;
+    }
+    check("Overworld with one", at >= 0, 1);
+    if (at >= 0) {
+        g_shell.link_cursor = (uint8_t)at;
+        shell_select(&g_shell);
+        check("... as Link: Overworld", g_shell.chosen_mode, APP_MODE_LINK_OVERWORLD);
+    }
+
     /* One USB controller: the GB-Link adapter or the drive. Link: USB is the
      * adapter's page, USB Storage the drive's; each only with its own. */
     shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB_GBLINK);
@@ -92,9 +117,9 @@ static void test_every_mode_is_reachable(void) {
 
     /* A fully equipped board must show all of them, self test included. */
     shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB | HW_CAP_USB_GBLINK |
-                         HW_CAP_WIFI | HW_CAP_CHIP_READER | HW_CAP_IR | HW_CAP_GB_5V);
-    /* Every mode, with the three link modes behind one Link entry. */
-    check("all modes offered", shell_item_count(&g_shell), APP_MODE_COUNT - 2);
+                         HW_CAP_WIFI | HW_CAP_CHIP_READER | HW_CAP_IR | HW_CAP_GB_5V | HW_CAP_SERVER);
+    /* Every mode, with the four link modes behind one Link entry. */
+    check("all modes offered", shell_item_count(&g_shell), APP_MODE_COUNT - 3);
 
     /* USB Storage must be there on a board with USB: without a way to hand the
      * volume over, the only way to get files onto it is to guess what the host

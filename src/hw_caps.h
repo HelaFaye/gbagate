@@ -44,7 +44,11 @@ typedef enum {
     HW_CAP_LINK_PINS   = 1u << 11,
     /* USB is the GB-Link adapter: one controller, so it is this or the drive
      * (HW_CAP_USB), never both. */
-    HW_CAP_USB_GBLINK  = 1u << 12
+    HW_CAP_USB_GBLINK  = 1u << 12,
+    /* A way to the shared overworld's server (doc/MMO.md). Today only the
+     * hybrid emulator image's UART tunnel, a stand-in; a board's own
+     * network connection is to come. */
+    HW_CAP_SERVER      = 1u << 13
 } hw_cap_t;
 
 typedef struct {

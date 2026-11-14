@@ -62,8 +62,21 @@ static void uart_rx_task(void *arg) {
     (void)arg;
     uint8_t buf[256];
     for (;;) {
-        int n = uart_read_bytes(TP_UART, buf, sizeof buf, pdMS_TO_TICKS(20));
+        /*
+         * The first byte waits (up to 20 ms, so bridge_tick still runs);
+         * the rest of what has arrived is taken at once. Asking for a whole
+         * buffer made every packet wait out the timeout first: a transfer
+         * took ~50 ms, twenty a second, where the overworld's agent needs
+         * several a frame.
+         */
+        int n = uart_read_bytes(TP_UART, buf, 1, pdMS_TO_TICKS(20));
         if (n > 0) {
+            size_t more = 0;
+            uart_get_buffered_data_len(TP_UART, &more);
+            if (more > sizeof buf - 1) more = sizeof buf - 1;
+            if (more) {
+                n += uart_read_bytes(TP_UART, buf + 1, (uint32_t)more, 0);
+            }
             bridge_feed(s_bridge, buf, (size_t)n, now_us());
         }
         bridge_tick(s_bridge, now_us());

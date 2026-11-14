@@ -43,6 +43,7 @@ const char *hw_cap_name(hw_cap_t cap) {
     case HW_CAP_BLE:         return "Bluetooth";
     case HW_CAP_USB:         return "USB drive";
     case HW_CAP_USB_GBLINK:  return "USB adapter";
+    case HW_CAP_SERVER:      return "MMO server";
     case HW_CAP_LINK_PORT:   return "link port";
     case HW_CAP_IR:          return "infrared";
     case HW_CAP_GB_5V:       return "GB 5V shifter";

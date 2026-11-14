@@ -314,6 +314,77 @@ Next on mGBA:
 - **A custom room** loaded through the header window and the IRQ-table hook.
 - **The ROM-patch route,** for a modded copy.
 
+## Through the emulated adapter
+
+The board now does its own part. Before, the test script sat between the
+games, reading one game's RAM and writing the others' agent mailboxes. Now
+the in-game agent talks to the board over link words, and the board talks
+to the server:
+
+```
+Emerald (agent)  --link words-->  board: Link: Overworld  --mmo_net-->  server
+                 <--commands----  src/mmo_relay.c          <--players--
+```
+
+- **Link words** (`src/mmo_link.h`): frames of 16-bit words, one word each
+  way per link transfer, as Multi-Play moves them, with a checksum. 0xFFFF
+  is never sent, since on the bus it means an empty slot.
+  - The agent sends `MMO_STATE`: its player, plus how many commands it has
+    received and how many mailbox slots are free.
+  - The board sends the commands the agent already runs: `MMO_SPAWN` (for
+    one map), `MMO_MOVE` and `MMO_REMOVE`.
+- **The relay** (`src/mmo_relay.c`) is the server stand-in's logic, moved
+  to the board, as section 3 says. It spawns a figure when a player arrives
+  on this map, walks it a step at a time, turns it in place, places it
+  again after a stall or a warp, and removes it when the player leaves.
+  - Credits: it sends no more commands than the agent has room for.
+  - On this board's own change of map, it starts the figures again.
+  - A queue that overflows marks the players who lost a step, and they are
+    placed again when there is room.
+- **Board to server** (`src/mmo_net.h`): SLIP frames with a CRC.
+  - Board to server: `MN_HELLO`, and `MN_STATE` on every change.
+  - Server to board: `MN_WELCOME` (a player id), `MN_PLAYER` for the
+    players on this board's map, and `MN_GONE`.
+  - Interest is the map; chunks come when maps get crowded.
+- **The mode:** Link: Overworld in the Link chooser. It is offered only
+  where the board has a way to the server (`HW_CAP_SERVER`). Today that is
+  the hybrid emulator image's UART2 tunnel, which Diagnostics and the
+  mode's own page mark as a stand-in for the board's network.
+
+Tested:
+- `test_mmo` (host), against a model agent with the real agent's contract:
+  - the framing at both layers;
+  - arrivals, walks, turns, jumps, departures and changes of map;
+  - credits under pressure (twelve fast steps on a fast link);
+  - fifteen players walking at once through a link of one word a frame.
+  - Each fails when what it covers is broken.
+- `qemu/test_mmo_adapter.py`: two touch carriers, each the hybrid image
+  with its own firmware and drivers on qemu_esp32, each in Link: Overworld
+  (reached by touch). Each has a model GBA on its link, through one server
+  (`qemu/mmo_server.py`):
+  - each sees the other where they stand, facing their way;
+  - a walk is followed at most a step behind and ends on the walker's
+    tile;
+  - going indoors removes the figure, and coming back out shows it again;
+  - no mailbox overflow, no bad frame at either end, no word resent.
+  - With the server's departures removed, it fails.
+- `test/mgba/overworld_adapter.py`: the same with Emeralds. The agent
+  (`test/mgba/mmo_agent.py`) is a game Task speaking the link words, and
+  the players walk overworld_sync.py's routes. It needs the ROM.
+
+Stand-ins, said as such:
+- The test script moves the agent's words between its EWRAM rings and the
+  board's bridge, standing in for the GBA's serial hardware. The agent's own
+  SIO driver, sharing the port with the game's link code, is step 1 below.
+- The server tunnel is a UART. A board's own network, WiFi as Link: Online
+  has, is to come, and until then no real board offers the mode.
+
+Found on the way: each link transfer through QEMU's TCP serial sockets
+took 25-50 ms. Nagle's algorithm met delayed ACKs, and the UART transport
+waited out a 20 ms read for every packet. With `nodelay` and reads that
+take what has arrived, a transfer takes about 4 ms (`qemu/mmo_adapter.py`,
+`port/esp32s3/transport_uart.c`).
+
 ## Two ways to carry other players
 
 **Object events, driven by the agent** (tested: `overworld_sync.py`). The
@@ -407,7 +478,10 @@ above says where to look first.
    game loop: VBlank budget, giving the serial port back.
 2. The map generator from pokeemerald's symbols, and the boot check.
 3. One remote player drawn and walked from a script, on the emulator.
-4. The step protocol and server, two boards, then a simulated crowd.
+4. The step protocol and server, two boards, then a simulated crowd. The
+   protocol, the board's relay and a test server run through emulated
+   adapters (above); next are the board's own network transport and the
+   crowd, which is the scale test.
 5. Commands: interact, trainer card, battle through the existing link relay.
 6. Custom maps from existing tilesets.
 7. Packet inspection on the board (below), before anything is opened to

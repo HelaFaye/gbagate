@@ -182,6 +182,30 @@ void ui_page_diagnostics(ui_page_t *p, const char *title, const ui_keys_t *keys,
     }
 }
 
+void ui_page_overworld(ui_page_t *p, const char *title, const ui_keys_t *keys,
+                       const ui_overworld_t *o) {
+    begin(p, title, keys, NULL);
+    ui_page_add(p, o->pid >= 0 ? COL_GOOD : COL_WARN, "server %s%s %s", o->server,
+                o->server_stand_in ? "*" : "", o->pid >= 0 ? "joined" : "waiting");
+    if (o->pid >= 0) {
+        ui_page_add(p, COL_TEXT, "player %d", o->pid);
+    }
+    if (o->agent) {
+        ui_page_add(p, COL_TEXT, "map %u.%u at %d,%d", o->group, o->num, o->x, o->y);
+        ui_page_add(p, COL_TEXT, "others here %d", o->here);
+    } else {
+        ui_page_add(p, COL_WARN, "no agent in the game");
+    }
+    ui_page_add(p, COL_TEXT, "words %lu", (unsigned long)o->words);
+    ui_page_add(p, COL_TEXT, "cmds %lu queued %d", (unsigned long)o->commands, o->queued);
+    if (o->bad) {
+        ui_page_add(p, COL_WARN, "bad frames %lu", (unsigned long)o->bad);
+    }
+    if (o->server_stand_in) {
+        ui_page_add(p, COL_WARN, "* a stand-in");
+    }
+}
+
 /* Values of app_dispatch_status_t (app_modes.h), which this file need not
  * include to read. */
 enum { ST_OK, ST_NO_HANDLER, ST_MISSING_CAPS, ST_NEEDS_GAME, ST_BUSY, ST_REFUSED };

@@ -19,12 +19,14 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"   /* vTaskDelay */
+#include "freertos/semphr.h"
 #include "esp_rom_sys.h"     /* esp_rom_delay_us, for the memory agent */
 
 #include "chipdb.h"
 #include "chipgate.h"
 #include "board.h"
 #include "link_source.h"
+#include "mmo_relay.h"
 #include "ui_chipview.h"
 #include "ui_list.h"
 #include "ui_render.h"
@@ -495,6 +497,36 @@ bool gate_open_database(const char *label) {
  * runs on the word we just received and stages immediately rather than
  * deferring to the next iteration.
  */
+/* ---- Link: Overworld (doc/MMO.md) ----------------------------------------
+ *
+ * The in-game agent's words go to the relay (src/mmo_relay.c) instead of the
+ * gate, and the server's messages come back to it, from the link task and
+ * the server's task: one lock between them.
+ */
+static mmo_relay_t       s_mmo;
+static volatile bool     s_mmo_on;
+static SemaphoreHandle_t s_mmo_lock;
+static void overworld_gather(ui_overworld_t *o);   /* for the mode's page */
+
+/* The server's transport: the hybrid emulator image's UART tunnel
+ * (port/esp32s3/mmo_uart_esp32s3.c). Weak: no other image has one. */
+void mmo_net_send(const mn_msg_t *m);
+__attribute__((weak)) void mmo_net_send(const mn_msg_t *m) { (void)m; }
+
+static void mmo_send(void *ctx, const mn_msg_t *m) {
+    (void)ctx;
+    mmo_net_send(m);
+}
+
+void mmo_from_server(const mn_msg_t *m) {
+    if (!s_mmo_on || !s_mmo_lock) {
+        return;
+    }
+    xSemaphoreTake(s_mmo_lock, portMAX_DELAY);
+    mmo_relay_net(&s_mmo, m);
+    xSemaphoreGive(s_mmo_lock);
+}
+
 void gba_link_service(void) {
     const link_source_t *src = link_source_active();
     if (!src || !src->poll) {
@@ -526,6 +558,15 @@ void gba_link_service(void) {
     }
 
     s_last_transfer_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+    if (s_mmo_on) {
+        xSemaphoreTake(s_mmo_lock, portMAX_DELAY);
+        uint16_t back = mmo_relay_word(&s_mmo, from_game);
+        xSemaphoreGive(s_mmo_lock);
+        src->stage(back);
+        s_transfers++;
+        return;
+    }
 
     /*
      * Two chips, spaced far enough apart that the first has retired. The
@@ -971,6 +1012,13 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
         ui_page_usb_storage(&page, title, footer, s_exposed);
         break;
 
+    case APP_MODE_LINK_OVERWORLD: {
+        ui_overworld_t ow;
+        overworld_gather(&ow);
+        ui_page_overworld(&page, title, footer, &ow);
+        break;
+    }
+
     case APP_MODE_DIAGNOSTICS: {
         /* Redrawn every call: the counters change on their own, and a screen
          * that only updates on input is indistinguishable from one that has
@@ -1000,6 +1048,10 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
             .gate_id    = s_gate.gate_id,
             .ui_dropped = tasks_ui_events_dropped(),
         };
+#if defined(GBAGATE_UART_BRIDGE)
+        /* The server tunnel is a UART too (port/esp32s3/mmo_uart_esp32s3.c). */
+        d.stand_in |= HW_CAP_SERVER;
+#endif
         ui_page_diagnostics(&page, title, footer, &d);
         break;
     }
@@ -1780,6 +1832,54 @@ static void online_retry(void) {
 #endif
 }
 
+static bool mode_enter_overworld(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    if (!s_mmo_lock) {
+        s_mmo_lock = xSemaphoreCreateMutex();
+        if (!s_mmo_lock) {
+            return false;
+        }
+    }
+    xSemaphoreTake(s_mmo_lock, portMAX_DELAY);
+    mmo_relay_init(&s_mmo, mmo_send, NULL);    /* says hello to the server */
+    s_mmo_on = true;
+    xSemaphoreGive(s_mmo_lock);
+    ESP_LOGI(TAG, "overworld: the agent's words to the server");
+    return true;
+}
+
+static void mode_exit_overworld(void *ctx) {
+    (void)ctx;
+    s_mmo_on = false;
+}
+
+static void mode_tick_overworld(void *ctx) { (void)ctx; }
+
+static void overworld_gather(ui_overworld_t *o) {
+    memset(o, 0, sizeof *o);
+    o->server = "UART";
+    o->server_stand_in = true;              /* the only transport there is */
+    o->pid = -1;
+    if (!s_mmo_lock) {
+        return;
+    }
+    xSemaphoreTake(s_mmo_lock, portMAX_DELAY);
+    o->pid = s_mmo.pid;
+    o->agent = s_mmo.have_me;
+    o->group = s_mmo.me.group;
+    o->num = s_mmo.me.num;
+    o->x = s_mmo.me.x;
+    o->y = s_mmo.me.y;
+    for (int i = 0; i < MMO_MAX_PLAYERS; i++) {
+        o->here += s_mmo.peer[i].shown;
+    }
+    o->words = s_mmo.words;
+    o->commands = s_mmo.commands;
+    o->bad = s_mmo.rx.bad;
+    o->queued = mmo_relay_pending(&s_mmo);
+    xSemaphoreGive(s_mmo_lock);
+}
+
 static bool mode_enter_online(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
     s_online = true;
@@ -1906,6 +2006,7 @@ static const app_mode_handler_t k_handlers[] = {
     { .mode = APP_MODE_LINK_USB, .enter = mode_enter_link, .exit = NULL, .tick = mode_tick_link },
     { .mode = APP_MODE_LINK_WIRELESS, .enter = mode_enter_wireless, .exit = mode_exit_wireless, .tick = mode_tick_link },
     { .mode = APP_MODE_LINK_ONLINE, .enter = mode_enter_online, .exit = mode_exit_online, .tick = mode_tick_online },
+    { .mode = APP_MODE_LINK_OVERWORLD, .enter = mode_enter_overworld, .exit = mode_exit_overworld, .tick = mode_tick_overworld },
     { .mode = APP_MODE_MULTIBOOT, .enter = mode_enter_multiboot, .exit = mode_exit_multiboot, .tick = NULL },
     { .mode = APP_MODE_USB_STORAGE, .enter = mode_enter_usb_storage, .exit = mode_exit_usb_storage, .tick = NULL },
     { .mode = APP_MODE_INFRARED, .enter = mode_enter_infrared, .exit = NULL, .tick = NULL },

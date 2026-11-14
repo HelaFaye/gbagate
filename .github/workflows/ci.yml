@@ -305,6 +305,14 @@ jobs:
             exit 1
           fi
 
+      - name: the shared overworld through two emulated adapters
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          GBAGATE_HYBRID_FLASH="$GITHUB_WORKSPACE/build/hw-gate-carrier-touch-mgba/flash-qemu.bin" \
+            python3 -I qemu/test_mmo_adapter.py "$RUNNER_TEMP/mmo-adapter"
+
       - name: run accurate carrier-touch mGBA regression
         timeout-minutes: 10
         shell: bash

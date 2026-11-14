@@ -36,6 +36,7 @@ typedef enum {
     APP_MODE_INFRARED,      /* Cyber Drive Zoids IR, via the link port   */
     APP_MODE_SELFTEST,      /* run the tester ROM's checks and show them */
     APP_MODE_PRINTER,       /* a Game Boy game prints; the panel shows it */
+    APP_MODE_LINK_OVERWORLD,/* the shared overworld: the agent's words to a server (doc/MMO.md) */
     APP_MODE_SETTINGS,
     APP_MODE_DIAGNOSTICS,
     APP_MODE_COUNT
@@ -88,7 +89,7 @@ typedef struct {
     uint8_t   game_cursor;
 
     /* link interfaces this board has: APP_MODE_LINK_USB, _WIRELESS */
-    app_mode_t links[3];
+    app_mode_t links[4];   /* USB, Wireless, Online, Overworld */
     uint8_t    link_count;
     uint8_t    link_cursor;
 

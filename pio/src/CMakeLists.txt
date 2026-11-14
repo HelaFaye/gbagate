@@ -68,7 +68,8 @@ else()
     # independent of GBAGATE_QEMU, which replaces the panel, input, SD and
     # PHY drivers. This option replaces only the gate's selected link source.
     if(GBAGATE_UART_BRIDGE)
-        list(APPEND SRCS ../../port/esp32s3/transport_uart.c)
+        list(APPEND SRCS ../../port/esp32s3/transport_uart.c
+                         ../../port/esp32s3/mmo_uart_esp32s3.c)   # the server tunnel
     endif()
     # Direct GPIO or an I2C expander, decided by the board rather than the
     # variant: a Supermini has too few pins for ten switches, a 44-pin devkit

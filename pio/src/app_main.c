@@ -112,12 +112,6 @@ void app_main(void) {
      * so no hardware image could have linked. One engine now serves the gate
      * and the GB-Link personality; see gba_link_esp32s3.c.
      */
-    /* The 5 V shifter is a build-time fact of the board (board.h): there is
-     * nothing on the port to probe for it. */
-    if (BOARD_HAS_GB_5V) {
-        caps |= HW_CAP_GB_5V;
-    }
-
     if ((v.resolved & (FEAT_LINK_MASTER | FEAT_LINK_SLAVE)) && BOARD_HAS_LINK) {
         extern void gba_link_start(void);
         gba_link_start();
@@ -225,6 +219,18 @@ void app_main(void) {
             ESP_LOGI(TAG, "infrared ready");
         } else {
             ESP_LOGW(TAG, "infrared init failed; the mode will say so");
+        }
+    }
+#endif
+
+#if defined(GBAGATE_UART_BRIDGE)
+    /* The hybrid emulator image's way to the shared overworld's server: a
+     * UART tunnel, standing in for the board's own network (Diagnostics
+     * marks it). No other image has one, so no other offers Link: Overworld. */
+    {
+        extern esp_err_t mmo_net_start(void);
+        if (mmo_net_start() == ESP_OK) {
+            caps |= HW_CAP_SERVER;
         }
     }
 #endif
