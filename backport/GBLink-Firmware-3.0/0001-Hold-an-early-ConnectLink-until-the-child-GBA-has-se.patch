@@ -1,0 +1,562 @@
+From ed235b8bf715a45f89feddc19ad06c612b60dd08 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 23:22:47 +0000
+Subject: [PATCH] Hold an early ConnectLink until the child GBA has seen the
+ handshake
+
+When the adapter stands in for the parent (the GBA's seat is not 0), a
+ConnectLink that arrives before the adapter has sent any 0xB9A0 switches the
+handshake straight from 0xD15E to 0x8FFF. UsbSection::establishConncection()
+then waits for isHandshakeEnabled(), "the last word sent was 0xB9A0", which
+never becomes true: the link hangs before LinkConnected. It also hangs when
+0xB9A0 was sent for less than the 50 ms poll interval before 0x8FFF replaced
+it, and the GBA is sent 0x8FFF without having seen the handshake.
+
+The host apps avoid it with a delay: the netplay bridge waits 150 ms
+(CONNECT_GRACE_MS), Celio-Client's cable page 150 ms, gen3-poke-multiplayer
+350 ms. Celio-Client's local multi-adapter session has none: it sends
+ConnectLink to the other adapters as soon as seat 0 reports LinkConnected,
+about one handshake round after StartHandshake, which is inside the window.
+
+ConnectLink is now held until eight 0xB9A0 rounds have gone out (about the
+bridge's measured 150 ms), then sent at once. A ConnectLink that comes later
+behaves as before.
+
+tests/host/handshakeTest.cpp runs the real PacketLayer and UsbSection
+against a modelled GBA, over host stand-ins for the Zephyr calls they use,
+with ConnectLink 0, 5, 30, 60 and 200 ms after StartHandshake (seat 1 of 2),
+0 ms in seat 2 of 4, and seat 0 of 2. Before this change the 0, 5 and 30 ms
+cases and the 4-player case hang (eight failed checks); after it every case
+connects, and the GBA sees eight 0xB9A0 before 0x8FFF. Also clean under
+ASan and UBSan. Not built with Zephyr or run on RP2040 hardware.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ .gitignore                             |   5 +-
+ src/layers/packet/packetLayer.cpp      |   7 +
+ src/layers/packet/packetLayer.hpp      |  18 +-
+ tests/host/Makefile                    |  14 +-
+ tests/host/handshakeTest.cpp           | 259 +++++++++++++++++++++++++
+ tests/host/stubs/hardware/pio.h        |   3 +
+ tests/host/stubs/syscalls/kernel.h     |   2 +
+ tests/host/stubs/zephyr/drivers/gpio.h |   1 +
+ tests/host/stubs/zephyr/kernel.h       | 115 +++++++++++
+ 9 files changed, 420 insertions(+), 4 deletions(-)
+ create mode 100644 tests/host/handshakeTest.cpp
+ create mode 100644 tests/host/stubs/hardware/pio.h
+ create mode 100644 tests/host/stubs/syscalls/kernel.h
+ create mode 100644 tests/host/stubs/zephyr/drivers/gpio.h
+ create mode 100644 tests/host/stubs/zephyr/kernel.h
+
+diff --git a/.gitignore b/.gitignore
+index 8e8616b..3649df5 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -6,4 +6,7 @@ build/
+ bootloader/
+ tools/
+ .cache/
+-.clangd
+\ No newline at end of file
++.clangd
++# The host tests' stand-ins for Zephyr headers, not the west workspace
++!/tests/host/stubs/zephyr/
++/tests/host/handshakeTest
+diff --git a/src/layers/packet/packetLayer.cpp b/src/layers/packet/packetLayer.cpp
+index a0cf167..a110482 100644
+--- a/src/layers/packet/packetLayer.cpp
++++ b/src/layers/packet/packetLayer.cpp
+@@ -11,6 +11,13 @@ void PacketLayer::onTransiveDone(uint16_t rxBytes, TxValues txValues)
+         case TransiveState::handshake:
+             m_transmitedHandShake = txValues;
+             m_receivedHandshake = rxBytes;
++            if (txValues[0] == LINK_SLAVE_HANDSHAKE && m_slaveHandshakesSent < 0xFFFF) m_slaveHandshakesSent++;
++            if (m_connectPending && m_handshakeState == HandShakeState::enabled
++                && m_slaveHandshakesSent >= minSlaveHandshakes)
++            {
++                m_connectPending = false;
++                m_handshakeState = HandShakeState::connect;
++            }
+             k_sem_give(&m_handshakeSemaphore);
+             m_timingUs = timingHandshake[m_playerCount-2];
+ 
+diff --git a/src/layers/packet/packetLayer.hpp b/src/layers/packet/packetLayer.hpp
+index 497d20f..08e8da8 100644
+--- a/src/layers/packet/packetLayer.hpp
++++ b/src/layers/packet/packetLayer.hpp
+@@ -123,7 +123,21 @@ public:
+ 
+     void enableHandshake() { m_handshakeState = HandShakeState::enabled; }
+ 
+-    void connectHandshake() { m_handshakeState = HandShakeState::connect; }
++    // A child GBA needs some 0xB9A0 rounds before it takes the connect word
++    // (the netplay bridge measured ~150 ms and waits that long before sending
++    // ConnectLink). Hold a ConnectLink that arrives sooner until the adapter
++    // has sent minSlaveHandshakes of them.
++    static constexpr uint16_t minSlaveHandshakes = 8;
++
++    void connectHandshake()
++    {
++        const unsigned int key = irq_lock();
++        if (m_handshakeState == HandShakeState::enabled && m_slaveHandshakesSent >= minSlaveHandshakes)
++            m_handshakeState = HandShakeState::connect;
++        else
++            m_connectPending = true;
++        irq_unlock(key);
++    }
+ 
+     bool isHandshakeEnabled() { return m_transmitedHandShake[0] == LINK_SLAVE_HANDSHAKE; }
+ 
+@@ -297,6 +311,8 @@ private:
+     TransmitBehaviour m_handler = emptyCommand();
+     TransiveState m_state = TransiveState::handshake;
+     HandShakeState m_handshakeState = HandShakeState::disabled;
++    uint16_t m_slaveHandshakesSent = 0;
++    bool m_connectPending = false;
+ 
+     struct k_timer m_timeoutTimer;
+ 
+diff --git a/tests/host/Makefile b/tests/host/Makefile
+index fc3e013..dcda8d2 100644
+--- a/tests/host/Makefile
++++ b/tests/host/Makefile
+@@ -4,13 +4,23 @@ CXXFLAGS ?= -std=c++20 -Wall -Wextra -O1 -g
+ 
+ all: run
+ 
++SRC := ../../src
++HANDSHAKE_SRCS := handshakeTest.cpp $(SRC)/layers/packet/packetLayer.cpp $(SRC)/sections/usbSection.cpp \
++                  $(wildcard $(SRC)/layers/packet/packetCommands/*.cpp)
++
+ awProtocolTest: awProtocolTest.cpp ../../src/sections/awProtocol.hpp
+ 	$(CXX) $(CXXFLAGS) -o $@ awProtocolTest.cpp
+ 
+-run: awProtocolTest
++# The real packet layer and USB section, over host stand-ins for Zephyr (stubs/)
++# and a modelled GBA in place of the PIO link layer.
++handshakeTest: $(HANDSHAKE_SRCS) $(wildcard stubs/*/*.h stubs/*/*/*.h) $(wildcard $(SRC)/layers/packet/*.hpp $(SRC)/sections/usbSection.hpp)
++	$(CXX) $(CXXFLAGS) -Istubs -I$(SRC) -o $@ $(HANDSHAKE_SRCS) -lpthread
++
++run: awProtocolTest handshakeTest
+ 	./awProtocolTest
++	./handshakeTest
+ 
+ clean:
+-	rm -f awProtocolTest
++	rm -f awProtocolTest handshakeTest
+ 
+ .PHONY: all run clean
+diff --git a/tests/host/handshakeTest.cpp b/tests/host/handshakeTest.cpp
+new file mode 100644
+index 0000000..506252f
+--- /dev/null
++++ b/tests/host/handshakeTest.cpp
+@@ -0,0 +1,259 @@
++// Host test for the link mode's handshake: the real PacketLayer and UsbSection,
++// a modelled GBA on the other end of the cable, and the host's StartHandshake
++// and ConnectLink sent at different distances from each other.
++//
++// The link layer (the PIO programs) is replaced by a thread that runs one
++// transfer at a time at the packet layer's own timing, calling the callbacks
++// exactly as layers/link/gbaLinkLayer.cpp does: transmit, receive, transive
++// done. Zephyr's kernel calls are host stand-ins (stubs/).
++//
++//   make handshakeTest && ./handshakeTest
++
++#include "../../src/sections/usbSection.hpp"
++#include "../../src/layers/link/multiMode/multiMode.hpp"
++#include "../../src/layers/link/gbaLinkLayer.hpp"
++#include "../../src/layers/transport.hpp"
++#include "../../src/linkStatus.hpp"
++#include "../../src/link_defines.h"
++
++#include <atomic>
++#include <chrono>
++#include <cstdio>
++#include <mutex>
++#include <thread>
++#include <vector>
++
++// ---- the kernel calls the stubs leave to us ---------------------------------
++
++static std::recursive_mutex g_irq;
++
++extern "C" unsigned int irq_lock(void) { g_irq.lock(); return 0; }
++extern "C" void irq_unlock(unsigned int) { g_irq.unlock(); }
++extern "C" int32_t k_sleep(k_timeout_t t)
++{
++    std::this_thread::sleep_for(std::chrono::milliseconds(t.ms));
++    return 0;
++}
++
++// ---- Transport: the statuses the host would see ------------------------------
++
++static std::mutex g_statusLock;
++static std::vector<uint16_t> g_statuses;
++
++namespace Transport
++{
++    void setActive(Id) {}
++    Id active() { return Id::Usb; }
++    void registerCommandHandler(ReceiveHandler, void*) {}
++    void registerDataHandler(ReceiveHandler, void*) {}
++
++    bool sendStatus(std::span<const uint8_t, 2> data)
++    {
++        std::lock_guard<std::mutex> lock(g_statusLock);
++        g_statuses.push_back(static_cast<uint16_t>(data[0] | data[1] << 8));
++        return true;
++    }
++
++    bool sendData(std::span<const uint8_t>) { return true; }
++    bool trySendData(std::span<const uint8_t>) { return true; }
++}
++
++static bool sawStatus(LinkStatus status)
++{
++    std::lock_guard<std::mutex> lock(g_statusLock);
++    for (uint16_t s : g_statuses)
++        if (s == static_cast<uint16_t>(status)) return true;
++    return false;
++}
++
++// ---- the link layer: one transfer at a time ----------------------------------
++
++static TransmitHandler g_tx;
++static void* g_txData;
++static ReceiveHandler g_rx;
++static void* g_rxData;
++static TransiveDoneHandler g_done;
++static void* g_doneData;
++static std::atomic<int> g_mode{DISABLED};
++
++void link_setTransmitCallback(TransmitHandler cb, void* userData)
++{
++    std::lock_guard<std::recursive_mutex> lock(g_irq);
++    g_tx = cb;
++    g_txData = userData;
++}
++
++void link_setReceiveCallback(ReceiveHandler cb, void* userData)
++{
++    std::lock_guard<std::recursive_mutex> lock(g_irq);
++    g_rx = cb;
++    g_rxData = userData;
++}
++
++void link_setTransiveDoneCallback(TransiveDoneHandler cb, void* userData)
++{
++    std::lock_guard<std::recursive_mutex> lock(g_irq);
++    g_done = cb;
++    g_doneData = userData;
++}
++
++void multiMode_selectMode(enum MultiMode mode) { g_mode = mode; }
++
++// The GBA. As a child (the adapter is the parent, MASTER) it answers 0xB9A0
++// until it has seen the parent's 0x8FFF, then idles. As the parent (the
++// adapter answers as the children, SLAVE) it sends 0xB9A0 until every child
++// has answered 0xB9A0, then 0x8FFF, then idles.
++struct Gba
++{
++    bool connected = false;
++    int b9a0Seen = 0;              // as a child: 0xB9A0 the parent sent before 0x8FFF
++    int connectAfter = 0;          // ...counted when 0x8FFF arrived
++
++    uint16_t childAnswer(TxValues parentAndOthers)
++    {
++        if (connected) return 0x0000;
++        if (parentAndOthers[0] == LINK_MASTER_HANDSHAKE)
++        {
++            connected = true;
++            connectAfter = b9a0Seen;
++            return LINK_SLAVE_HANDSHAKE;
++        }
++        if (parentAndOthers[0] == LINK_SLAVE_HANDSHAKE) b9a0Seen++;
++        return LINK_SLAVE_HANDSHAKE;
++    }
++
++    uint16_t parentWord(bool childrenReady)
++    {
++        if (connected) return 0x0000;
++        if (childrenReady)
++        {
++            connected = true;
++            return LINK_MASTER_HANDSHAKE;
++        }
++        return LINK_SLAVE_HANDSHAKE;
++    }
++};
++
++static Gba g_gba;
++static std::atomic<bool> g_wireRun{true};
++static std::atomic<int> g_transfers{0};
++
++static void wire()
++{
++    uint32_t waitCycles = 0;
++    bool childrenReady = false;
++    while (g_wireRun)
++    {
++        uint32_t cycles = 29868;   // a handshake round, until the layer says otherwise
++        {
++            std::lock_guard<std::recursive_mutex> lock(g_irq);
++            if (g_mode != DISABLED && g_tx && g_rx && g_done)
++            {
++                NextTransmit next = g_tx(g_txData);
++                uint16_t rx;
++                if (g_mode == MASTER)
++                {
++                    rx = g_gba.childAnswer(next.txValues);
++                }
++                else
++                {
++                    rx = g_gba.parentWord(childrenReady);
++                    // The parent sends 0x8FFF once every child has answered
++                    // 0xB9A0 in a round.
++                    childrenReady = true;
++                    for (uint16_t w : next.txValues)
++                        if (w != LINK_SLAVE_HANDSHAKE) childrenReady = false;
++                }
++                g_rx(rx, g_rxData);
++                g_done(rx, next.txValues, g_doneData);
++                g_transfers++;
++                if (next.timingUs) cycles = next.timingUs;
++            }
++        }
++        waitCycles = cycles;
++        // One PIO cycle is ~0.5425 us.
++        std::this_thread::sleep_for(std::chrono::microseconds(waitCycles * 5425 / 10000));
++    }
++}
++
++// ---- the cases -----------------------------------------------------------------
++
++static int g_failed = 0;
++
++static void check(const char* what, bool ok)
++{
++    std::printf("  %s  %s\n", ok ? "ok  " : "FAIL", what);
++    if (!ok) g_failed++;
++}
++
++static bool waitFor(LinkStatus status, int ms)
++{
++    auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
++    while (std::chrono::steady_clock::now() < end)
++    {
++        if (sawStatus(status)) return true;
++        std::this_thread::sleep_for(std::chrono::milliseconds(5));
++    }
++    return sawStatus(status);
++}
++
++// One session: the adapter in seat `seat` of `players`, the host sending
++// StartHandshake and then ConnectLink `connectDelayMs` later.
++static void session(uint8_t seat, uint8_t players, int connectDelayMs)
++{
++    {
++        std::lock_guard<std::mutex> lock(g_statusLock);
++        g_statuses.clear();
++    }
++    g_gba = Gba{};
++    g_transfers = 0;
++
++    char what[160];
++    std::snprintf(what, sizeof what, "seat %u of %u, ConnectLink %d ms after StartHandshake",
++                  seat, players, connectDelayMs);
++    std::printf("%s\n", what);
++
++    auto* section = new UsbSection(seat, players);
++    std::thread wireThread(wire);
++    std::thread proc([section] { section->process(); });
++
++    // The host waits for the GBA's handshake, as Celio and the netplay bridge do.
++    bool received = waitFor(LinkStatus::HandshakeReceived, 2000);
++    check("HandshakeReceived", received);
++
++    section->startHandshake();
++    if (connectDelayMs) std::this_thread::sleep_for(std::chrono::milliseconds(connectDelayMs));
++    section->connectLink();
++
++    bool connected = waitFor(LinkStatus::LinkConnected, 3000);
++    check("LinkConnected within 3 s", connected);
++    if (seat != 0)
++    {
++        std::snprintf(what, sizeof what, "the GBA saw 0xB9A0 before 0x8FFF (%d rounds)", g_gba.connectAfter);
++        check(what, g_gba.connected && g_gba.connectAfter >= 1);
++    }
++    else
++    {
++        check("the GBA, as parent, connected", g_gba.connected);
++    }
++
++    section->cancel();
++    proc.join();
++    delete section;            // the packet layer turns the link off on the way
++    g_wireRun = false;
++    wireThread.join();
++    g_wireRun = true;
++}
++
++int main()
++{
++    // The adapter as the parent, the GBA a child: ConnectLink matters.
++    for (int delay : {0, 5, 30, 60, 200})
++        session(1, 2, delay);
++    session(2, 4, 0);
++    // The adapter as the children, the GBA the parent: ConnectLink is ignored.
++    session(0, 2, 0);
++
++    std::printf("%s\n", g_failed ? "FAILED" : "all checks passed");
++    return g_failed ? 1 : 0;
++}
+diff --git a/tests/host/stubs/hardware/pio.h b/tests/host/stubs/hardware/pio.h
+new file mode 100644
+index 0000000..409343e
+--- /dev/null
++++ b/tests/host/stubs/hardware/pio.h
+@@ -0,0 +1,3 @@
++// gbaLinkLayer.hpp names the RP2040 PIO program type; the test never loads one.
++#pragma once
++typedef struct pio_program pio_program_t;
+diff --git a/tests/host/stubs/syscalls/kernel.h b/tests/host/stubs/syscalls/kernel.h
+new file mode 100644
+index 0000000..b4939f1
+--- /dev/null
++++ b/tests/host/stubs/syscalls/kernel.h
+@@ -0,0 +1,2 @@
++#pragma once
++#include <zephyr/kernel.h>
+diff --git a/tests/host/stubs/zephyr/drivers/gpio.h b/tests/host/stubs/zephyr/drivers/gpio.h
+new file mode 100644
+index 0000000..6f70f09
+--- /dev/null
++++ b/tests/host/stubs/zephyr/drivers/gpio.h
+@@ -0,0 +1 @@
++#pragma once
+diff --git a/tests/host/stubs/zephyr/kernel.h b/tests/host/stubs/zephyr/kernel.h
+new file mode 100644
+index 0000000..34e525e
+--- /dev/null
++++ b/tests/host/stubs/zephyr/kernel.h
+@@ -0,0 +1,115 @@
++// Host stand-ins for the few Zephyr kernel calls the packet layer and the USB
++// section use, over pthreads. Only what handshakeTest.cpp needs; not a port.
++#pragma once
++
++#include <pthread.h>
++#include <stdint.h>
++#include <string.h>
++#include <time.h>
++#include <errno.h>
++
++typedef struct { int64_t ms; } k_timeout_t;
++#define K_FOREVER ((k_timeout_t){ -1 })
++#define K_NO_WAIT ((k_timeout_t){ 0 })
++#define K_MSEC(n) ((k_timeout_t){ (n) })
++
++typedef long atomic_t;
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++unsigned int irq_lock(void);
++void irq_unlock(unsigned int key);
++int32_t k_sleep(k_timeout_t t);
++#ifdef __cplusplus
++}
++#endif
++
++struct k_sem { pthread_mutex_t m; pthread_cond_t c; unsigned count, limit; };
++
++static inline int k_sem_init(struct k_sem* s, unsigned initial, unsigned limit)
++{
++    pthread_mutex_init(&s->m, nullptr);
++    pthread_cond_init(&s->c, nullptr);
++    s->count = initial;
++    s->limit = limit;
++    return 0;
++}
++
++static inline void k_sem_give(struct k_sem* s)
++{
++    pthread_mutex_lock(&s->m);
++    if (s->count < s->limit) s->count++;
++    pthread_cond_signal(&s->c);
++    pthread_mutex_unlock(&s->m);
++}
++
++static inline int k_sem_take(struct k_sem* s, k_timeout_t t)
++{
++    pthread_mutex_lock(&s->m);
++    if (t.ms < 0)
++    {
++        while (s->count == 0) pthread_cond_wait(&s->c, &s->m);
++    }
++    else
++    {
++        struct timespec end;
++        clock_gettime(CLOCK_REALTIME, &end);
++        end.tv_sec += t.ms / 1000;
++        end.tv_nsec += (t.ms % 1000) * 1000000L;
++        if (end.tv_nsec >= 1000000000L) { end.tv_sec++; end.tv_nsec -= 1000000000L; }
++        while (s->count == 0)
++        {
++            if (pthread_cond_timedwait(&s->c, &s->m, &end) == ETIMEDOUT) break;
++        }
++    }
++    int ret = s->count ? 0 : -EAGAIN;
++    if (s->count) s->count--;
++    pthread_mutex_unlock(&s->m);
++    return ret;
++}
++
++struct k_timer { int unused; };
++
++// A message queue of fixed-size items, enough for usbLinkCommand.cpp.
++struct k_msgq { pthread_mutex_t m; size_t size, max, head, count; uint8_t* buf; };
++
++#define K_MSGQ_DEFINE(name, msg_size, max_msgs, align) \
++    static uint8_t name##_buf[(msg_size) * (max_msgs)]; \
++    struct k_msgq name = { PTHREAD_MUTEX_INITIALIZER, (msg_size), (max_msgs), 0, 0, name##_buf }
++
++static inline int k_msgq_put(struct k_msgq* q, const void* data, k_timeout_t)
++{
++    pthread_mutex_lock(&q->m);
++    int ret = -ENOMSG;
++    if (q->count < q->max)
++    {
++        memcpy(q->buf + ((q->head + q->count) % q->max) * q->size, data, q->size);
++        q->count++;
++        ret = 0;
++    }
++    pthread_mutex_unlock(&q->m);
++    return ret;
++}
++
++static inline int k_msgq_get(struct k_msgq* q, void* data, k_timeout_t)
++{
++    pthread_mutex_lock(&q->m);
++    int ret = -ENOMSG;
++    if (q->count)
++    {
++        memcpy(data, q->buf + q->head * q->size, q->size);
++        q->head = (q->head + 1) % q->max;
++        q->count--;
++        ret = 0;
++    }
++    pthread_mutex_unlock(&q->m);
++    return ret;
++}
++
++static inline void k_msgq_purge(struct k_msgq* q)
++{
++    pthread_mutex_lock(&q->m);
++    q->head = q->count = 0;
++    pthread_mutex_unlock(&q->m);
++}
+-- 
+2.43.0
+

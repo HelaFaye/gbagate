@@ -8,6 +8,32 @@ project's own style, for GB-Link's maintainers to take or leave.
 Every patch was made in a clone of the upstream repository. Each one says in
 its message what was wrong, how it shows on hardware, and how it was found.
 
+## GBLink-Firmware 3.0 (`4-player-combined-refactor`)
+
+Base: `4-player-combined-refactor` at 0ffbcd5 (3.0.0, the firmware the GB-Link
+host apps now require; still the branch head on 14 November 2026). Made in a
+clone of upstream; `git am backport/GBLink-Firmware-3.0/*.patch`.
+
+| # | patch | found by |
+|---|---|---|
+| 1 | Hold an early ConnectLink until the child GBA has seen the handshake | hang, `tests/host/handshakeTest.cpp` (added by the patch) |
+
+Patch 1 is 2.2.7's patch 3 (below) on 3.0's packet layer, where the handshake
+carries one word per simulated player. It adds a host test in upstream's own
+`tests/host`: the real `PacketLayer` and `UsbSection` over stand-ins for the
+Zephyr calls they use, a modelled GBA for the PIO link layer, and ConnectLink
+at 0, 5, 30, 60 and 200 ms after StartHandshake in 2- and 4-player seats.
+Unpatched, the 0, 5 and 30 ms cases and the 4-player case hang (8 failed
+checks); patched, all pass, five runs under ASan and UBSan. From a clean clone
+of 0ffbcd5 the patch applies with `git am` and `make -C tests/host run`
+passes. Celio-Client's local multi-adapter session (`localLinkSession.ts`)
+sends ConnectLink about one handshake round after StartHandshake, inside the
+window; the netplay bridge, Celio-Client's cable page and gen3-poke-multiplayer
+avoid it with 150-350 ms delays. Not built with Zephyr or run on RP2040
+hardware. 2.2.7's wait-loop change is left out: with ConnectLink held for
+eight rounds, the 50 ms poll can no longer miss the window, and the test
+passes without it.
+
 ## GBLink-Firmware
 
 Base: `Wireless-Adapter` at 1b49b76 (2.2.7, the source of the launcher's beta,
