@@ -71,7 +71,8 @@ namespace
             const uint8_t cable = s.led[LED_SLOT_BATTLE_CHIP_GATE][0];
             memcpy(s.led[LED_SLOT_BATTLE_CHIP_GATE],
                    kDefaultColors[LED_SLOT_BATTLE_CHIP_GATE], 3);
-            s.cable = (cable <= CABLE_FORCE_GBC) ? cable : CABLE_FORCE_GBC;
+            // gbagate (PATCHES.md P12): the cast keeps -Wextra quiet; same value.
+            s.cable = (cable <= CABLE_FORCE_GBC) ? cable : static_cast<uint8_t>(CABLE_FORCE_GBC);
             s.version = SETTINGS_VERSION;
         } else if (s.version != SETTINGS_VERSION) {
             fillDefaults(s);

@@ -12,14 +12,18 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { SimDevice } from './sim_transport.mjs';
 
+// test_celio.mjs BUILD [BUILD_B]: the server and A's client come from BUILD;
+// B's client from BUILD_B if given, so two client versions can share a session
+// (a browser can still hold an older Celio-Client than its partner's).
 const out = process.argv[2];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const C = await import(`${out}/celio_client.mjs`);
+const CB = await import(`${process.argv[3] || out}/celio_client.mjs`);
 const { LinkExchangeSession, CommandEmitterSocketIO, StatusEmitterAbstract, LinkDeviceUtils,
         WebSocketService, LinkMode } = C;
 
 /** Celio-Client's StatusEmitterLinkDevice, with the WebUSB service swapped for the simulator. */
-class StatusEmitterSim extends StatusEmitterAbstract {
+const statusEmitterSim = (Base) => class extends Base {
   constructor(dev) {
     super();
     this.dev = dev;
@@ -44,7 +48,9 @@ class StatusEmitterSim extends StatusEmitterAbstract {
     return true;
   }
   destroy() { this.dev.off('usb', this.onUsb); }
-}
+};
+const StatusEmitterSim = statusEmitterSim(StatusEmitterAbstract);
+const StatusEmitterSimB = statusEmitterSim(CB.StatusEmitterAbstract);
 
 const server = spawn(process.execPath, [path.join(out, 'celio_server.mjs')], { stdio: ['ignore', 'pipe', 'pipe'] });
 const serverLog = [];
@@ -69,7 +75,7 @@ const quiet = { log: console.log, warn: console.warn };
 console.log = () => {}; console.warn = () => {};
 try {
   const wsA = new WebSocketService();
-  const wsB = new WebSocketService();
+  const wsB = new CB.WebSocketService();
   if (!(await wsA.connect()) || !(await wsB.connect())) throw new Error('socket.io connect failed');
 
   // As Celio-Client's PlayerSessionService.enterSession(): emit with an ack.
@@ -80,13 +86,13 @@ try {
   if (joined?.variant !== 'Ok') throw new Error(`sessionJoin: ${JSON.stringify(joined)}`);
 
   const seA = new StatusEmitterSim(devA);
-  const seB = new StatusEmitterSim(devB);
+  const seB = new StatusEmitterSimB(devB);
   sessions.push(new LinkExchangeSession(new CommandEmitterSocketIO(wsA), seA));
-  sessions.push(new LinkExchangeSession(new CommandEmitterSocketIO(wsB), seB));
+  sessions.push(new CB.LinkExchangeSession(new CB.CommandEmitterSocketIO(wsB), seB));
 
   await LinkDeviceUtils.tryEnableLinkMode(seA, LinkMode.onlineLink);
   await sleep(300);
-  await LinkDeviceUtils.tryEnableLinkMode(seB, LinkMode.onlineLink);
+  await CB.LinkDeviceUtils.tryEnableLinkMode(seB, CB.LinkMode.onlineLink);
 
   const frame = (tag) => [0xbb, 0xbb, tag & 0xff, tag >> 8, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   const deadline = Date.now() + 25000;

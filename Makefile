@@ -25,18 +25,18 @@ DEPS_encoder   = input_encoder.c ui_list.c
 DEPS_panel     = st7735_panel.c
 DEPS_slot      = chip_slot.c chip_reader.c
 DEPS_chipview  = ui_chipview.c ui_shell.c chipdb.c hw_caps.c chipgate.c
-DEPS_render    = ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c
+DEPS_render    = ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c
 DEPS_multiboot = gba_multiboot.c
-DEPS_catalog   = rom_catalog.c gba_multiboot.c
+DEPS_catalog   = rom_catalog.c gba_multiboot.c gbagent_image.c
 DEPS_variant   = variant.c
 DEPS_ir        = ir_cdz.c
 # The pin map lives in port/esp32s3/board.h and the two boards are checked in
 # separate translation units, so both sets of macros can exist in one run.
 DEPS_board     =
-EXTRA_board    = -Iport/esp32s3 test/test_board_supermini.c
+EXTRA_board    = -Iport/esp32s3 test/test_board_supermini.c test/test_board_carrier_touch.c test/test_board_carrier_knob.c
 DEPS_controls  = controls.c ui_input.c
 DEPS_input     = ui_input.c
-DEPS_uiset     = ui_settings.c settings.c chipgate.c ui_input.c
+DEPS_uiset     = ui_theme.c ui_settings.c settings.c chipgate.c ui_input.c
 DEPS_settings  = settings.c chipgate.c ui_input.c
 DEPS_romview   = ui_romview.c rom_catalog.c gba_multiboot.c
 DEPS_mcp       = mcp23017.c chip_slot.c chip_reader.c
@@ -46,18 +46,80 @@ DEPS_mbe2e     = rom_catalog.c gba_multiboot.c
 # instead: using an actual file, with an actual unpadded length, is the point
 # of it -- that is what found the alignment bug the synthetic fixtures missed.
 ARG_mbe2e      = rom/tester.gba
-DEPS_menu      = ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c ui_shell.c hw_caps.c chipgate.c
+DEPS_menu      = ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c ui_shell.c hw_caps.c chipgate.c
 DEPS_modes     = app_modes.c ui_shell.c hw_caps.c chipgate.c
 DEPS_frame     = gblink_frame.c
 DEPS_usbdesc   = gblink_usbdesc.c
 DEPS_peer      = gbl_peer.c
+DEPS_events    = input_events.c controls.c ui_input.c
+DEPS_wificfg   = wifi_cfg.c settings.c chipgate.c ui_input.c
+DEPS_json      = json_lite.c
+DEPS_celio     = celio.c json_lite.c
+DEPS_mbagent   = mbagent.c
+DEPS_mprelay   = mp_relay.c
+DEPS_gbprinter = gbprinter.c gbp_png.c
+DEPS_mpbus     = mp_bus.c mp_link.c mp_relay.c
+DEPS_mponline  = mp_online.c mp_link.c mp_relay.c mp_bus.c
+DEPS_printer_mode = printer_mode.c gbprinter.c gbp_png.c
+DEPS_touchpad  = touch_pad.c ui_theme.c ui_font.c
+DEPS_applets   = applet.c app_modes.c ui_shell.c hw_caps.c chipgate.c chipdb.c \
+                 ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c \
+                 ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c mbagent.c gbprinter.c
+# The example applets live outside src/, like any applet would.
+EXTRA_applets  = -Iapplets $(wildcard applets/*.c)
+DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c \
+                 ui_shell.c hw_caps.c chipgate.c ir_cdz.c gbl_peer.c link_bridge.c \
+                 link_proto.c link_session.c ui_settings.c settings.c ui_input.c \
+                 controls.c ui_romview.c rom_catalog.c gba_multiboot.c applet.c app_modes.c \
+                 mbagent.c gbprinter.c
+EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay mpbus mponline gbprinter printer_mode touchpad
 
-.PHONY: all strict lint clean chipdb gblink gblink-asan compat
-all: $(addprefix run-,$(SUITES)) gblink
+.PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image mgba-shim mgba-emerald
+all: $(addprefix run-,$(SUITES)) gblink agent-emu
 	@./qemu/lint.sh
+
+# The memory agent's compiled image (rom/agent.mb, what the board sends) on
+# an emulated ARM7, driven by the board's own client through ctypes. Needs
+# the unicorn module; without it the test skips, unless REQUIRE_EMU is set
+# (CI sets it). AGENT_IMAGE= tests another build of it.
+AGENT_IMAGE ?= rom/agent.mb
+agent-emu: | $(BUILD)
+	@$(CC) -std=c11 -O1 -shared -fPIC -Isrc src/mbagent.c test/agent_emu/shim.c -o $(BUILD)/libmbagent_shim.so
+	@python3 -I test/agent_emu/agent_emu.py $(BUILD)/libmbagent_shim.so $(AGENT_IMAGE); st=$$?; \
+	 if [ $$st -eq 77 ] && [ -z "$$REQUIRE_EMU" ]; then exit 0; fi; exit $$st
+
+# The board's Link: Online page from live values (tools/online_screen.c),
+# with the device's renderer: the mGBA link tests draw it from a simulated
+# board's counters.
+$(BUILD)/online_screen: tools/online_screen.c $(addprefix src/,$(DEPS_screens)) $(wildcard applets/*.c) | $(BUILD)
+	@$(CC) $(CFLAGS) $(EXTRA_screens) -o $@ tools/online_screen.c $(addprefix src/,$(DEPS_screens))
+
+# Pokemon Emerald on mGBA (the distribution's libmgba-dev), for the Union
+# Room and memory-agent experiments. The ROM is the user's own, never in the
+# tree: EMERALD_ROM=/path/to/emerald.gba make mgba-emerald
+mgba-shim: | $(BUILD)
+	@$(CC) -std=gnu11 -O1 -shared -fPIC test/mgba/mgba_shim.c -o $(BUILD)/libmgba_shim.so -lmgba
+	@$(CC) -std=gnu11 -O1 -shared -fPIC test/mgba/mgba_multi.c src/mp_relay.c src/mp_link.c src/mp_bus.c src/mp_online.c \
+	      src/celio.c src/json_lite.c -o $(BUILD)/libmgba_multi.so -lmgba -lpthread
+mgba-emerald: mgba-shim
+	@test/mgba/fetch_symbols.sh
+	@$(MAKE) -s -C test/gblink_sim
+	@python3 -I test/mgba/union_room.py "$(EMERALD_ROM)" $(BUILD)/emerald
+	@python3 -I test/mgba/rfu_union.py "$(EMERALD_ROM)" $(BUILD)/emerald
+	@python3 -I test/mgba/rfu_union2.py "$(EMERALD_ROM)" $(BUILD)/emerald
+	@python3 -I test/mgba/link4.py "$(EMERALD_ROM)" $(BUILD)/emerald
+	@# through the real Celio-Server: needs test/gblink_compat/run.sh's bundle (77: skipped without it)
+	@python3 -I test/mgba/link4_online.py "$(EMERALD_ROM)" $(BUILD)/emerald || [ $$? -eq 77 ]
+	@python3 -I test/mgba/overworld_sync.py "$(EMERALD_ROM)" $(BUILD)/emerald
+
+# After a change to rom/agent.c or agent_proto.h: rebuild the image and the
+# C array the firmware embeds (lint checks the two are current).
+agent-image:
+	@$(MAKE) -s -C rom agent $(if $(TOOLCHAIN),TOOLCHAIN=$(TOOLCHAIN))
+	@python3 tools/mb_embed.py rom/agent.mb src/gbagent_image.c
 
 # The GB-Link personality: GB-Link's own firmware (third_party/) on the
 # gbagate shim, driven end to end the way the GB-Link host apps drive it.
@@ -115,8 +177,11 @@ define SUITE_rule
 # Headers are dependencies too: without them a header-only change (a constant,
 # a struct layout) leaves every test binary stale, and a suite reports on code
 # that no longer exists. Found when a corrected descriptor length kept failing.
-$(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) $(wildcard src/*.h) | $(BUILD)
-	@$$(CC) $$(CFLAGS) $$(EXTRA_$(1)) -o $$@ $$< $$(addprefix src/,$$(DEPS_$(1)))
+# The port headers and a suite's own extra files (test_board_*.c) too: a pin
+# map changed in board.h left test_board passing on the old one.
+$(BUILD)/test_$(1): test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) $(wildcard src/*.h) $(wildcard applets/*) \
+                    $(wildcard port/esp32s3/*.h) $(wildcard test/test_$(1)_*.c) | $(BUILD)
+	@$$(CC) $$(CFLAGS) $$(EXTRA_$(1)) -o $$@ $$< $$(addprefix src/,$$(DEPS_$(1))) -lm
 run-$(1): $(BUILD)/test_$(1)
 	@printf '%-14s ' $(1); \
 	if ./$$< $$(ARG_$(1)) > $(BUILD)/$(1).out 2>&1; then \
@@ -145,7 +210,7 @@ strict-$(1): | $(BUILD)
 	for cfg in "-O0" "-O2" "-O3 -flto" "-g -fsanitize=address,undefined"; do \
 	  echo "=== $$$$cfg ===" >> $(BUILD)/s_$(1).log; \
 	  if ! $$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wshadow $$$$cfg -Isrc $$(EXTRA_$(1)) \
-	       -o $(BUILD)/s_$(1) test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) \
+	       -o $(BUILD)/s_$(1) test/test_$(1).c $$(addprefix src/,$$(DEPS_$(1))) -lm \
 	       >> $(BUILD)/s_$(1).log 2>&1; \
 	  then printf ' BUILD  '; \
 	  elif ./$(BUILD)/s_$(1) $$(ARG_$(1)) >> $(BUILD)/s_$(1).log 2>&1; \
@@ -154,6 +219,14 @@ strict-$(1): | $(BUILD)
 .PHONY: strict-$(1)
 endef
 $(foreach s,$(SUITES),$(eval $(call STRICT_rule,$(s))))
+
+# Every screen as a picture: build/screens/<name>.ppm, and gallery.png with
+# all of them side by side. doc/screens-all.png is a copy of that gallery.
+screens: $(BUILD)/test_screens
+	@mkdir -p $(BUILD)/screens
+	@./$< $(DB) $(BUILD)/screens | tail -1
+	@python3 tools/ppm2png.py $(BUILD)/screens/gallery.ppm $(BUILD)/screens/gallery.png
+	@echo "$(BUILD)/screens/gallery.png"
 
 # Compile-check the ESP-IDF-only sources against stub headers. Cheap, and it
 # covers the files no suite can reach.

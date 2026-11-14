@@ -21,12 +21,19 @@ upstream file. The fixes are offered back upstream as patches in
 | # | file | defect | effect on hardware | test |
 |---|---|---|---|---|
 | P9 | `payloads/pokemon.cpp` `tradePkmnAtIndex` | the slot to trade comes from the GBA's `LINKCMD_READY_TO_TRADE` word, unchecked | an index past 5 (a corrupted link word, a homebrew ROM) reads past the partner's party and writes past ours | `trade_emu_party_index_bounded` (`test_party.cpp`, ASan: global-buffer-overflow upstream) |
+| P10 | `module/gb.cpp` printer loop | replies shifted out LSB first, where the Game Boy samples MSB first (received bytes were already assembled MSB first) | none today: the only bytes sent, 0x81 and 0x00, are bit-palindromes; a real status (0x02 busy) would arrive as 0x40 | `backport/verify-printer.sh` (status 0x02: read as 0x40 before, 0x02 after); `printer_stream` unchanged |
+| P11 | `layers/transport.{hpp,cpp}`, `control.hpp`, `module/gb.cpp` | every send went to whichever host last delivered a frame | a USB host only querying (the launcher polling 0x0F) drew a companion MCU's mode traffic to USB; GB-Link-Switch-LDN, hearing nothing, re-entered the mode after 3 s and reset the adapter under the game. Now a mode's status and data go to the host that started it (`claimForMode`), command replies to the host that asked (`sendReply`) | `bridge_companion_keeps_its_mode_while_usb_queries`; `test_ldn.py` with LDN's own `pico_link.c` (two SetModes before, one after) |
+| P12 | `persist.cpp`, `sections/rfuProtocolSection.cpp` | two GCC 14 warnings under `-Wextra` / C++20: an enumerator mixed with `uint8_t` in `?:`, and an assignment chained through a `volatile` | none: same values, same effect | the simulator build is warning-free |
+| P13 | `module/{link,advanceWars,battleChipGate,eReader,emu,rfuWireless}.{cpp,hpp}` | each module clears `m_currentSection` only after its section's block has ended, so a Cancel from the host's thread as a section finishes calls `cancel()` on a destroyed object | the pointer is set, re-checked against `m_cancel` and cleared under `irq_lock`, before the section goes; `cancel()` takes the same lock (every section's `cancel()` only sets flags or gives semaphores) | `link_cancel_while_the_section_ends` (ASan stack-use-after-scope in `LinkModule::cancel`, intermittent) |
+| P14 | `layers/transport.{hpp,cpp}`, `control.hpp` | (extension, not a defect) a way for the device to see what its own adapter is doing: `Transport` records the running mode (`noteMode`, from `executeMode`), the last status word sent and how many, and host frames per transport; `gblink_state()` (port/gblink/gblink_port.h) snapshots them | none upstream; nothing the adapter sends changes. The device's Link: USB page showed the unbound word bridge before | `state_follows_the_mode_and_its_host` |
+| P15 | `layers/transport.{hpp,cpp}`, `layers/serialLayer.hpp` | (extension, not a defect) a fifth host, `Net`: a WebSocket on the board's WiFi carrying the CDC port's framing, as a third `SerialLayer` instance (`getNetInstance()`, over `gblink_net_write()` / `gblink_net_on_receive()`) | none upstream; the other hosts are unchanged, and a frame from it is claimed and refused exactly as a CDC frame is | `wifi_host_runs_a_link_mode` |
+| P16 | `control.hpp` | (board safety, not a defect upstream: GB-Link's own board has the shifter) the printer mode only ever talks to a Game Boy game, at 5 V, and a board without a 5 V level shifter on the port must not invite one. Without `GBX_CAP_GB_5V` (`gbagate_ext_caps()`, from `BOARD_HAS_GB_5V`) mode 0x03 answers `GBSessionFinished` at once and never starts. Mode 0x02 is left alone: it also carries GBA multiboot over Normal mode, at 3.3 V | none on GB-Link's board; on gbagate's, which have no shifter, a printer session the host asked for ends at once | `printer_refused_without_shifter` (fails with the check removed); `printer_stream` and `board_printer` with the simulator's shifter |
 
 P3 also holds a connect that arrives early until the adapter has sent eight
 `0xB9A0` rounds, the margin the netplay bridge measured a child GBA needs. A
 host that already waits is unaffected.
 
-P1-P6 and P9 apply unchanged to 2.2.7: upstream has not touched those files since
+P1-P6 and P9-P12 apply unchanged to 2.2.7: upstream has not touched those files since
 2.2.3.
 
 ## Replaced files
@@ -45,17 +52,15 @@ overflow.
 
 ## Not gbagate's to fix
 
-- **Celio-Client and Celio-Server do not interoperate at their current heads**
-  (the client acks and retries since b057315; the server does not answer
-  acks). Nothing in the firmware is involved; see doc/GBLINK.md.
+- **Celio-Client and Celio-Server do interoperate** -- withdrawn. The
+  incompatibility noted here was against `GB-Link/Celio-Server`, a fork that
+  stopped at 9f02d3e; `Celio-Link/Celio-Server` answers the client's acks
+  since 5ead974 (3 October 2026). `backport/Celio-Server/` is superseded.
 
 ## Known and left alone
 
-- **Printer replies are shifted out LSB first** (`gb.cpp`), where the Game Boy
-  reads MSB first. It works because the only bytes ever sent, 0x81 and 0x00,
-  are bit-palindromes. Left as is so the vendored printer path stays upstream's;
-  noted upstream.
-- **`k_sem_take` on a shared semaphore** in `PacketLayer::getTransmittedHandshake`
-  consumes the handshake semaphore it shares with `getReceivedHandshake`, so the
-  two cannot both be waited on. Every caller uses them in an order where this is
-  harmless.
+- **One semaphore for both handshake values** in `PacketLayer`
+  (`getReceivedHandshake`, `getTransmittedHandshake`). It is given once per
+  handshake word, and both values come from that one exchange, so it means "a
+  handshake word completed"; only one caller waits at a time. Not a defect, so
+  not offered upstream.

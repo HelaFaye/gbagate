@@ -76,14 +76,17 @@ static bool diag_enter(void *ctx, cg_game_t game, bool has_game) {
 static void diag_exit(void *ctx) { ((fakes_t *)ctx)->diag.exits++; }
 
 static const app_mode_handler_t k_handlers[] = {
-    { APP_MODE_CHIP_GATE,  gate_enter,     gate_exit,     gate_tick },
-    { APP_MODE_SETTINGS,   settings_enter, settings_exit, NULL      },
-    { APP_MODE_DIAGNOSTICS, diag_enter,    diag_exit,     NULL      },
+    { .mode = APP_MODE_SELFTEST, .enter = gate_enter, .exit = gate_exit, .tick = gate_tick },
+    { .mode = APP_MODE_SETTINGS, .enter = settings_enter, .exit = settings_exit, .tick = NULL },
+    { .mode = APP_MODE_DIAGNOSTICS, .enter = diag_enter, .exit = diag_exit, .tick = NULL },
 };
 #define HANDLER_COUNT (sizeof k_handlers / sizeof k_handlers[0])
 
-#define FULL_CAPS (HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB | \
-                   HW_CAP_WIFI | HW_CAP_CHIP_READER)
+/* Every capability at once: no real board (USB is the drive or the adapter,
+ * never both), but every mode is listed. */
+#define FULL_CAPS (HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB | \
+                   HW_CAP_USB_GBLINK | HW_CAP_WIFI | HW_CAP_CHIP_READER | HW_CAP_IR | \
+                   HW_CAP_GB_5V)
 
 static void setup(app_dispatch_t *d, fakes_t *f, uint32_t caps) {
     memset(f, 0, sizeof *f);
@@ -102,7 +105,7 @@ static void test_enter_and_exit(void) {
     check("nothing running at init", app_dispatch_running(&d), 0);
 
     check("gate enters",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, CG_GAME_BN5, true),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, CG_GAME_BN5, true),
           APP_DISPATCH_OK);
     check("running", app_dispatch_running(&d), 1);
     check("enter called once", f.gate.enters, 1);
@@ -157,7 +160,7 @@ static void test_missing_caps(void) {
     setup(&d, &f, HW_CAP_DISPLAY);
 
     check("gate refused without a link port",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, CG_GAME_BN4, true),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, CG_GAME_BN4, true),
           APP_DISPATCH_MISSING_CAPS);
     check("enter never called", f.gate.enters, 0);
     check("still idle", app_dispatch_running(&d), 0);
@@ -184,12 +187,12 @@ static void test_needs_game(void) {
      * gate identity, and the console's only symptom is silence.
      */
     check("per-game mode refused without a game",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, CG_GAME_BN6_US, false),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, CG_GAME_BN6_US, false),
           APP_DISPATCH_NEEDS_GAME);
     check("enter never called", f.gate.enters, 0);
 
     check("and refused with an out-of-range game",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, (cg_game_t)42, true),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, (cg_game_t)42, true),
           APP_DISPATCH_NEEDS_GAME);
     check("still never called", f.gate.enters, 0);
 
@@ -226,7 +229,7 @@ static void test_refused(void) {
     f.gate.refuse = true;
 
     check("refusal reported",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, CG_GAME_BN4, true),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, CG_GAME_BN4, true),
           APP_DISPATCH_REFUSED);
     check("not running", app_dispatch_running(&d), 0);
 
@@ -238,7 +241,7 @@ static void test_refused(void) {
     /* And the dispatcher is left usable. */
     f.gate.refuse = false;
     check("recovers",
-          app_dispatch_enter(&d, APP_MODE_CHIP_GATE, CG_GAME_BN4, true),
+          app_dispatch_enter(&d, APP_MODE_SELFTEST, CG_GAME_BN4, true),
           APP_DISPATCH_OK);
 }
 
@@ -259,8 +262,11 @@ static void test_from_shell(void) {
     check("idle while choosing", app_dispatch_running(&d), 0);
     check("nothing entered", f.gate.enters, 0);
 
-    /* Battle Chip is first and needs a game, so this only advances a screen. */
-    check("gate does not start yet", shell_select(&s), 0);
+    /* Self Test needs a game, so this only advances a screen. */
+    while (strcmp(shell_current_label(&s), "Self Test") != 0) {
+        shell_move(&s, 1);
+    }
+    check("self test does not start yet", shell_select(&s), 0);
     app_dispatch_from_shell(&d, &s);
     check("still idle on the game list", app_dispatch_running(&d), 0);
 
@@ -337,9 +343,12 @@ static void test_from_shell_unbound(void) {
 
     ui_shell_t s;
     shell_init(&s, FULL_CAPS);
-    while (strcmp(shell_current_label(&s), "Send Program") != 0) {
+    /* Bounded: a missing entry is a failure, not a hang. */
+    for (uint8_t i = 0; i < shell_item_count(&s) &&
+                        strcmp(shell_current_label(&s), "Send Program") != 0; i++) {
         shell_move(&s, 1);
     }
+    check("Send Program is listed", strcmp(shell_current_label(&s), "Send Program"), 0);
     check("multiboot starts at once", shell_select(&s), 1);
     check("but has no handler",
           app_dispatch_from_shell(&d, &s), APP_DISPATCH_NO_HANDLER);
@@ -347,6 +356,117 @@ static void test_from_shell_unbound(void) {
     check("counted as a rejection", d.rejections, 1);
     check_str("and says why",
               app_dispatch_status_name(d.last_status), "no handler");
+}
+
+/* ---- handlers the mode table does not describe: applets ----------------- */
+
+typedef struct { int enters, exits, ticks; } own_t;
+
+static bool own_enter(void *ctx, cg_game_t game, bool has_game) {
+    (void)game; (void)has_game;
+    ((own_t *)ctx)->enters++;
+    return true;
+}
+static void own_exit(void *ctx) { ((own_t *)ctx)->exits++; }
+static void own_tick(void *ctx) { ((own_t *)ctx)->ticks++; }
+
+/*
+ * A handler's own ctx reaches its callbacks instead of the dispatcher's; its
+ * requires and needs_game guard it like a built-in mode's table entry; and
+ * applet mode numbers are accepted while others past the table are not.
+ */
+static void test_applet_handlers(void) {
+    printf("applet handlers\n");
+    own_t a = {0}, b = {0};
+    const app_mode_t ma = (app_mode_t)APP_MODE_APPLET_FIRST;
+    const app_mode_t mb = (app_mode_t)(APP_MODE_APPLET_FIRST + 1);
+    const app_mode_handler_t hs[] = {
+        { .mode = ma, .enter = own_enter, .exit = own_exit, .tick = own_tick,
+          .ctx = &a, .requires = HW_CAP_DISPLAY },
+        { .mode = mb, .enter = own_enter, .exit = own_exit, .tick = own_tick,
+          .ctx = &b, .needs_game = true },
+    };
+    app_dispatch_t d;
+    fakes_t f;
+    memset(&f, 0, sizeof f);
+    app_dispatch_init(&d, hs, 2, HW_CAP_DISPLAY, &f);
+
+    check("applet enters", app_dispatch_enter(&d, ma, CG_GAME_BN6_US, false), APP_DISPATCH_OK);
+    app_dispatch_tick(&d);
+    app_dispatch_exit(&d);
+    check("its ctx got enter", a.enters, 1);
+    check("and tick", a.ticks, 1);
+    check("and exit", a.exits, 1);
+    check("the other did not", b.enters + b.ticks + b.exits, 0);
+
+    check("needs a game: refused without one",
+          app_dispatch_enter(&d, mb, CG_GAME_BN6_US, false), APP_DISPATCH_NEEDS_GAME);
+    check("runs with one", app_dispatch_enter(&d, mb, CG_GAME_BN5, true), APP_DISPATCH_OK);
+    app_dispatch_exit(&d);
+
+    app_dispatch_init(&d, hs, 2, 0, &f);
+    check("its requires are checked",
+          app_dispatch_enter(&d, ma, CG_GAME_BN6_US, false), APP_DISPATCH_MISSING_CAPS);
+
+    check("an unregistered applet number",
+          app_dispatch_enter(&d, (app_mode_t)(APP_MODE_APPLET_FIRST + 5), CG_GAME_BN6_US, false),
+          APP_DISPATCH_NO_HANDLER);
+    check("a number past both ranges",
+          app_dispatch_enter(&d, (app_mode_t)(APP_MODE_APPLET_FIRST + SHELL_EXTRA_MAX), CG_GAME_BN6_US, false),
+          APP_DISPATCH_NO_HANDLER);
+    check("between the ranges",
+          app_dispatch_enter(&d, (app_mode_t)APP_MODE_COUNT, CG_GAME_BN6_US, false),
+          APP_DISPATCH_NO_HANDLER);
+}
+
+/*
+ * Every mode the menu can reach has a screen. Walked from the shell itself --
+ * every row, and every interface behind Link -- so a mode added to the menu
+ * without a screen fails here, the way Infrared reached a placeholder.
+ */
+static void test_every_menu_entry_has_a_screen(void) {
+    printf("every menu entry has a screen\n");
+    ui_shell_t s;
+    shell_init(&s, 0xFFFFFFFFu);
+    shell_add_entry(&s, (app_mode_t)APP_MODE_APPLET_FIRST, "Applet", 0, NULL, false);
+    int reached = 0;
+    for (uint8_t i = 0; i < s.mode_count; i++) {
+        ui_shell_t t = s;
+        t.mode_cursor = i;
+        bool running = shell_select(&t);
+        if (t.screen == SHELL_SCREEN_GAMES) {
+            running = shell_select(&t);
+        }
+        if (t.screen == SHELL_SCREEN_LINK) {
+            for (uint8_t k = 0; k < t.link_count; k++) {
+                ui_shell_t u = t;
+                u.link_cursor = k;
+                if (shell_select(&u)) {
+                    if (app_mode_route(u.chosen_mode) == APP_ROUTE_NONE) {
+                        printf("  FAIL %s has no screen\n", shell_label_at(&u, k));
+                        g_fail++;
+                    }
+                    reached++;
+                }
+            }
+            continue;
+        }
+        check(s.modes[i]->label, running, 1);
+        if (app_mode_route(t.chosen_mode) == APP_ROUTE_NONE) {
+            printf("  FAIL %s has no screen\n", s.modes[i]->label);
+            g_fail++;
+        }
+        reached++;
+    }
+    /* All ten built-in modes and the applet. */
+    check("modes reached", reached, APP_MODE_COUNT + 1);
+    check("send program: the browser", app_mode_route(APP_MODE_MULTIBOOT), APP_ROUTE_ROMS);
+    check("settings: the editor", app_mode_route(APP_MODE_SETTINGS), APP_ROUTE_SETTINGS);
+    check("infrared: a page", app_mode_route(APP_MODE_INFRARED), APP_ROUTE_PAGE);
+    check("self test: a page", app_mode_route(APP_MODE_SELFTEST), APP_ROUTE_PAGE);
+    check("an applet draws itself",
+          app_mode_route((app_mode_t)APP_MODE_APPLET_FIRST), APP_ROUTE_APPLET);
+    check("not a mode", app_mode_route(APP_MODE_COUNT), APP_ROUTE_NONE);
 }
 
 int main(void) {
@@ -359,6 +479,8 @@ int main(void) {
     test_from_shell();
     test_from_shell_swap();
     test_from_shell_unbound();
+    test_applet_handlers();
+    test_every_menu_entry_has_a_screen();
 
     printf("\n%s\n", g_fail ? "FAILURES" : "all checks passed");
     return g_fail != 0;

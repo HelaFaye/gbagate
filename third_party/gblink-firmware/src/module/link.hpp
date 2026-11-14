@@ -1,4 +1,5 @@
 #include <zephyr/kernel.h>
+#include <zephyr/irq.h>
 
 #include "../sections//usbSection.hpp"
 #include "moduleInterface.hpp"
@@ -25,9 +26,13 @@ public:
 
     void cancel() override
     { 
+        // gbagate (PATCHES.md P13): under the lock execute() publishes and
+        // clears m_currentSection with, so the section cannot go meanwhile.
+        const unsigned int key = irq_lock();
         m_cancel = true;
         k_sem_give(&m_waitForLinkModeCommand);
         if (m_currentSection) m_currentSection->cancel();
+        irq_unlock(key);
     }
 
     bool canHandle(uint8_t command) override { return (command & 0xF0) == 0x10; }

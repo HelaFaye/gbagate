@@ -15,6 +15,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mp_link.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -46,6 +48,8 @@ bool gblink_cdc_write(const uint8_t *data, size_t len);
 /* The bridge UART to a companion MCU (upstream's gblink,bridge-uart: GP8/GP9
  * at 921600 on the RP2040 board). Weak default: no bridge, frames dropped. */
 bool gblink_bridge_write(const uint8_t *data, size_t len);
+/* The WiFi host's stream (P15). Weak default: no network, frames dropped. */
+bool gblink_net_write(const uint8_t *data, size_t len);
 
 /* Board hardware for the 0x4x commands. A board without the part makes the
  * call a no-op; see gblink_hw_caps(). */
@@ -70,6 +74,10 @@ void gblink_cdc_on_receive(const uint8_t *data, size_t len);
 /* Bytes from the bridge UART, any fragmentation, from task context -- not from
  * the UART interrupt: a command can enter a whole link mode. */
 void gblink_bridge_on_receive(const uint8_t *data, size_t len);
+/* A host on the board's WiFi (PATCHES.md P15): the CDC port's byte stream,
+ * framed the same way, carried in WebSocket binary messages. Any
+ * fragmentation, from task context. */
+void gblink_net_on_receive(const uint8_t *data, size_t len);
 
 /* ---- wireless link cable (port/gblink/peer_glue.cpp, src/gbl_peer.c) --------- */
 
@@ -94,6 +102,90 @@ bool gblink_peer_radio_send(const uint8_t *dgram, size_t len);
  * runs, for a UI (or a test) to watch. Weak default does nothing. Called from
  * the firmware's own threads; must not block. */
 void gblink_peer_observe_status(uint16_t status);
+
+/* ---- online play through Celio (port/gblink/celio_glue.cpp, src/celio.c) ----- */
+
+/* Join a Celio session (session id), or create one (NULL or ""), and drive
+ * the adapter for it as the local host, like the wireless cable. Both are
+ * carried out on the client's own thread and return once it has. */
+void gblink_celio_start(const char *session);
+void gblink_celio_stop(void);
+/* A Multi-Play session (src/mp_online.h): `players` GBAs in all when
+ * creating, `gbas` of them on this board's chain (doc/MULTIPLAY.md). */
+void gblink_celio_start_multi(const char *session, uint8_t players, uint8_t gbas);
+
+/* The link port as the Multi-Play bus, from the board's link driver; weak
+ * false where there is none. */
+bool gblink_mp4_bus_start(const mp_bus_layout_t *l, mp_link_t *link);
+void gblink_mp4_bus_stop(void);
+
+/* Supplied by the port's network layer. connect(true): open a WebSocket to
+ * <celio>/socket.io/?EIO=4&transport=websocket, and keep reopening it after a
+ * drop until connect(false). send: one text frame; false if not connected.
+ * Weak defaults: no network. */
+void gblink_celio_ws_connect(bool on);
+bool gblink_celio_ws_send(const char *text, size_t len);
+/* 32 random bits, for the uuids Celio's packets carry. */
+uint32_t gblink_celio_random(void);
+
+/* Called by the network layer, from its own task. */
+void gblink_celio_ws_open(void);
+void gblink_celio_ws_closed(void);
+void gblink_celio_ws_text(const char *text, size_t len);
+
+typedef struct {
+    int      state;              /* celio_state_t                           */
+    char     session[33];        /* the session id, to give the partner     */
+    char     error[40];          /* why it failed                           */
+    uint16_t link_status;        /* the adapter's last status word          */
+    uint32_t up, down, lost, reconnects;
+    uint32_t resent, given_up, max_rtt_ms;  /* acks: resends, abandoned, slowest */
+} gblink_celio_view_t;
+
+/* For the UI, from any task. */
+void gblink_celio_view(gblink_celio_view_t *out);
+
+/* ---- the board's Game Boy Printer (port/gblink/printer_glue.cpp) ------------ */
+
+/* Put the adapter in printer mode (0x03, at 5 V) as the local host, and back
+ * out of it. From the UI's thread. */
+void gblink_printer_start(void);
+void gblink_printer_stop(void);
+/* What the mode has sent since (src/gbprinter.h, gbp_feed_stream): up to cap
+ * bytes, 0 when there is nothing new. One reader. */
+size_t gblink_printer_read(uint8_t *out, size_t cap);
+
+typedef struct {
+    bool     running;
+    uint16_t status;             /* the adapter's last status word (0xFF0B: printer ready) */
+    uint32_t lost;               /* bytes the UI did not drain in time       */
+} gblink_printer_view_t;
+void gblink_printer_view(gblink_printer_view_t *out);
+
+/* ---- what the adapter is doing (PATCHES.md P14) ------------------------------- */
+
+/* The hosts that can drive it, as Transport::Id numbers them. */
+enum {
+    GBLINK_HOST_USB = 0,     /* WebUSB: the GB-Link web apps, the launcher  */
+    GBLINK_HOST_SERIAL,      /* the CDC-ACM port: WebSerial, Celio-Client   */
+    GBLINK_HOST_BRIDGE,      /* the bridge UART to a companion MCU          */
+    GBLINK_HOST_LOCAL,       /* in-firmware: the wireless cable, Celio      */
+    GBLINK_HOST_NET,         /* a WebSocket on the board's WiFi             */
+    GBLINK_HOSTS
+};
+
+typedef struct {
+    bool     usb_configured;   /* a PC has enumerated the adapter           */
+    int      mode;             /* the GB-Link mode running, -1 for none     */
+    uint8_t  owner;            /* GBLINK_HOST_*: whose SetMode started it   */
+    uint16_t last_status;      /* the last 0xFFxx status word; 0 for none   */
+    uint32_t statuses;         /* status words reported since boot          */
+    uint32_t frames[GBLINK_HOSTS]; /* host frames delivered, per host       */
+} gblink_state_t;
+
+/* A snapshot, from any task. Each field is read atomically on its own; a
+ * mode starting mid-call can pair a new mode with the last one's status. */
+void gblink_state(gblink_state_t *out);
 
 /* ---- lifecycle ---------------------------------------------------------------- */
 

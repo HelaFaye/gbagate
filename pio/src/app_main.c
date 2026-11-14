@@ -4,6 +4,8 @@
  * Not yet run on hardware.
  */
 
+#include <string.h>
+
 #include "esp_log.h"
 #include "nvs_flash.h"
 
@@ -19,6 +21,7 @@ extern void tasks_start(uint32_t features);
 extern uint16_t *st7735_framebuffer(void);
 extern esp_err_t st7735_init(int panel);
 #ifndef GBAGATE_QEMU
+#include "driver/spi_common.h"
 /* Weak: the link and mini images have no USB drive (usb_msc_esp32s3.c is
  * built for gate and full only), and the call below is a runtime check. */
 esp_err_t msc_storage_init(void);
@@ -28,6 +31,14 @@ __attribute__((weak)) esp_err_t msc_storage_init(void) { return ESP_ERR_NOT_SUPP
 #ifndef VARIANT
 #error "platformio.ini must define VARIANT"
 #endif
+
+/* What USB became at boot, for the Link: USB page: the setting can change
+ * since, but only a restart applies it. */
+static bool s_gblink;       /* GB-Link's firmware runs on this image */
+static bool s_usb_gblink;   /* ... and USB is its adapter, not the drive */
+
+bool app_gblink_running(void) { return s_gblink; }
+bool app_usb_is_gblink(void) { return s_usb_gblink; }
 
 void app_main(void) {
     ESP_LOGI(TAG, "gbagate %s", GBAGATE_VARIANT_NAME);
@@ -81,6 +92,14 @@ void app_main(void) {
         if (derr == ESP_OK) {
             caps |= HW_CAP_DISPLAY;
             ESP_LOGI(TAG, "display ready, framebuffer %p", st7735_framebuffer());
+#if !defined(GBAGATE_QEMU)
+            /* The card shares the panel's bus, which is up now. No card is
+             * the usual case and not an error: Send Program says so. */
+            if (BOARD_HAS_SD) {
+                extern esp_err_t sd_init(int spi_host);
+                sd_init(SPI2_HOST);
+            }
+#endif
         } else {
             ESP_LOGE(TAG, "display init failed: %s -- the panel will stay black",
                      esp_err_to_name(derr));
@@ -93,6 +112,12 @@ void app_main(void) {
      * so no hardware image could have linked. One engine now serves the gate
      * and the GB-Link personality; see gba_link_esp32s3.c.
      */
+    /* The 5 V shifter is a build-time fact of the board (board.h): there is
+     * nothing on the port to probe for it. */
+    if (BOARD_HAS_GB_5V) {
+        caps |= HW_CAP_GB_5V;
+    }
+
     if ((v.resolved & (FEAT_LINK_MASTER | FEAT_LINK_SLAVE)) && BOARD_HAS_LINK) {
         extern void gba_link_start(void);
         gba_link_start();
@@ -123,10 +148,13 @@ void app_main(void) {
     if (v.resolved & FEAT_GBLINK) {
         extern void gblink_start(void);
         gblink_start();            /* answer before the host can ask */
+        s_gblink = true;
     }
     if (as_gblink) {
         extern esp_err_t usb_gblink_start(void);
         if (usb_gblink_start() == ESP_OK) {
+            s_usb_gblink = true;
+            caps |= HW_CAP_USB_GBLINK;
             ESP_LOGI(TAG, "USB: GB-Link adapter");
         } else {
             ESP_LOGE(TAG, "USB: GB-Link personality failed to start");
@@ -138,9 +166,18 @@ void app_main(void) {
         }
     }
 #endif
+    /* WiFi is the S3's own radio. QEMU's S3 has none, so the emulator image
+     * does not offer Link: Wireless or Link: Online at all. */
+#ifndef GBAGATE_QEMU
     if (v.resolved & FEAT_ESPNOW) {
         caps |= HW_CAP_WIFI;
+        /* A stored network: join it now, so /gblink is there for a PC on the
+         * same WiFi and Link: Online starts at once. Nothing stored: the
+         * radio stays off until Link: Online asks for the setup hotspot. */
+        extern void net_boot(void);
+        net_boot();
     }
+#endif
 
     /*
      * Nothing was setting this, so every mode that needs the link port -- the
@@ -184,6 +221,7 @@ void app_main(void) {
     if ((v.resolved & FEAT_IR) && BOARD_HAS_IR) {
         extern esp_err_t ir_init(void);
         if (ir_init() == ESP_OK) {
+            caps |= HW_CAP_IR;
             ESP_LOGI(TAG, "infrared ready");
         } else {
             ESP_LOGW(TAG, "infrared init failed; the mode will say so");
@@ -191,10 +229,21 @@ void app_main(void) {
     }
 #endif
 
+    /* The 5 V shifter is a build-time fact of the board (board.h): there is
+     * nothing on the port to probe for it. */
+    if (BOARD_HAS_GB_5V) {
+        caps |= HW_CAP_GB_5V;
+    }
+
     if ((v.resolved & (FEAT_LINK_MASTER | FEAT_LINK_SLAVE)) && BOARD_HAS_LINK) {
         const link_source_t *src = link_source_active();
         if (src && src->poll) {
             caps |= HW_CAP_LINK_PORT;
+            /* The pins themselves only with the PHY: the bridge carries the
+             * gate's transfers and nothing a mode drives on the pins. */
+            if (strcmp(src->name, "phy") == 0) {
+                caps |= HW_CAP_LINK_PINS;
+            }
             ESP_LOGI(TAG, "link source: %s", src->name);
         } else {
             ESP_LOGW(TAG, "no link source; link modes will be hidden");

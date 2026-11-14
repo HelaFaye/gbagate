@@ -17,6 +17,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "ui_event.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -35,7 +36,6 @@ static const char *TAG = "tasks";
  */
 #define PRIO_LINK      (configMAX_PRIORITIES - 1)
 #define PRIO_UI        5
-#define PRIO_TRANSPORT 4
 #define PRIO_STORAGE   3
 
 /*
@@ -45,33 +45,16 @@ static const char *TAG = "tasks";
  */
 #define LINK_IDLE_YIELD_TICKS 1
 
-typedef enum {
-    UI_EVENT_ENCODER = 0,
-    UI_EVENT_CHIP_IN,
-    UI_EVENT_CHIP_OUT,
-    UI_EVENT_LINK_UP,
-    UI_EVENT_LINK_DOWN,
-    UI_EVENT_CHIP_SENT,
-    UI_EVENT_USB_ATTACHED,
-    UI_EVENT_USB_DETACHED
-} ui_event_type_t;
-
-typedef struct {
-    ui_event_type_t type;
-    int32_t         a;
-    uint16_t        b;
-} ui_event_t;
+/* The UI events: src/ui_event.h, shared with every driver that posts them. */
 
 static QueueHandle_t s_ui_events;
 static link_bridge_t s_bridge;
 
-#ifdef GBAGATE_QEMU
+#if defined(GBAGATE_QEMU) || defined(GBAGATE_UART_BRIDGE)
 /*
- * Under emulation there is no PHY and no USB host. The game's words arrive over
- * UART1 through the bridge instead, so these three pieces -- the UART transport,
- * the word delivery into the gate's link_source, and an open database to give
- * the gate an identity -- are wired here. On hardware the PHY and the UI do all
- * of this, which is why it is compiled in only for the QEMU images.
+ * The UART bridge supplies the game's words and the gate's identity. In the
+ * normal QEMU image it replaces the PHY; in the hybrid accurate-QEMU image
+ * the physical PHY is still initialized, but the gate uses this host tunnel.
  */
 extern esp_err_t transport_uart_start(link_bridge_t *bridge);
 extern void      link_source_feed(uint16_t seq, uint16_t game_word);
@@ -148,31 +131,17 @@ static void ui_task(void *arg) {
     }
 }
 
-#ifndef GBAGATE_QEMU
-static void transport_task(void *arg) {
-    (void)arg;
-    for (;;) {
-        /* bridge_tick can emit a packet, so it belongs here and not on core 1:
-         * core 1 must never touch a transport. */
-        bridge_tick(&s_bridge, (uint32_t)esp_timer_get_time());
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-}
-#endif
-
 /* ---- setup -------------------------------------------------------------- */
 
 void tasks_start(uint32_t features) {
     s_ui_events = xQueueCreate(16, sizeof(ui_event_t));
     configASSERT(s_ui_events);
 
-#ifdef GBAGATE_QEMU
+#if defined(GBAGATE_QEMU) || defined(GBAGATE_UART_BRIDGE)
     /*
-     * Bring the emulated link up before the tasks that use it: open a default
-     * database so the gate has an identity to announce (MMBN6 US = "bn6g"),
-     * start the UART bridge, and route inbound words into link_source. The
-     * uart_rx task drives bridge_tick itself, so the transport_task below is
-     * not needed here.
+     * Open the default database (MMBN6 US = "bn6g"), start the UART bridge,
+     * and route inbound words into link_source. The UART RX task drives
+     * bridge_tick itself.
      */
     gate_open_database("bn6g");
     if (transport_uart_start(&s_bridge) == ESP_OK) {
@@ -192,10 +161,25 @@ void tasks_start(uint32_t features) {
                                 PRIO_UI, NULL, CORE_APP);
     }
 
-#ifndef GBAGATE_QEMU
-    if (features & (FEAT_ESPNOW | FEAT_USB_CDC)) {
-        xTaskCreatePinnedToCore(transport_task, "transport", 4096, NULL,
-                                PRIO_TRANSPORT, NULL, CORE_APP);
+    /*
+     * No transport task on hardware. It ticked the word bridge, which nothing
+     * binds there (USB is GB-Link's and the radio is the wireless cable's):
+     * with no peer, each tick announced to nobody and the Link: USB page,
+     * which showed the bridge, read "PC found, pairing" with no PC attached.
+     * Under QEMU the UART task drives the bridge itself.
+     */
+
+#if !defined(GBAGATE_QEMU)
+    /*
+     * The buttons and the encoder. Nothing started them: the menu drew on a
+     * real board and nothing could move it. The mode is Settings' (a board
+     * without an encoder falls back to its switches).
+     */
+    if (features & FEAT_DISPLAY) {
+        extern int  input_hw_start(int mode);
+        extern int  gate_input_mode(void);
+        extern void gate_note_input_mode(int actual);
+        gate_note_input_mode(input_hw_start(gate_input_mode()));
     }
 #endif
 

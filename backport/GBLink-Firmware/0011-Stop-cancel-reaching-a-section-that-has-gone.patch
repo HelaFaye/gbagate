@@ -1,0 +1,423 @@
+From 59e75c8cc82b6c80b64e693d3316d3739b304656 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 10:36:23 +0000
+Subject: [PATCH] Stop cancel() reaching a section that has gone
+
+Each module publishes its running section in m_currentSection so that
+cancel(), called from the host's thread, can stop it. The section
+lives in a block (or a switch case) inside execute(), but the pointer
+was cleared only after that block ended, so a Cancel arriving as the
+section finished called cancel() on a destroyed object. Under ASan
+this is a stack-use-after-scope in LinkModule::cancel, reached by
+SetMode 0x10 and Cancel in a loop; on hardware it is a call through
+whatever has since been written to that stack slot.
+
+Publish, re-check m_cancel and clear the pointer under irq_lock, and
+clear it before the section is destroyed; cancel() takes the same
+lock, so the section cannot go while it is being cancelled. Every
+section's cancel() only sets flags or gives semaphores, so nothing
+blocks under the lock. Applies to the GBA link, Advance Wars, Battle
+Chip Gate, e-Reader, trade emulator and Wireless Adapter modules.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ src/module/advanceWars.cpp    | 18 +++++++++++-------
+ src/module/advanceWars.hpp    |  3 +++
+ src/module/battleChipGate.cpp | 16 ++++++++++------
+ src/module/battleChipGate.hpp |  3 +++
+ src/module/eReader.cpp        | 20 +++++++++++++-------
+ src/module/emu.cpp            | 13 ++++++++-----
+ src/module/emu.hpp            | 15 +++++++++++++++
+ src/module/link.cpp           | 20 +++++++++++++++++++-
+ src/module/link.hpp           |  5 +++++
+ src/module/rfuWireless.cpp    | 16 ++++++++++------
+ src/module/rfuWireless.hpp    |  3 +++
+ 11 files changed, 100 insertions(+), 32 deletions(-)
+
+diff --git a/src/module/advanceWars.cpp b/src/module/advanceWars.cpp
+index f3dfdd9..ad5aaa9 100644
+--- a/src/module/advanceWars.cpp
++++ b/src/module/advanceWars.cpp
+@@ -21,14 +21,16 @@ void AdvanceWarsModule::execute()
+     // SLAVE = attached GBA is bus master (P1), MASTER = GBA is bus slave (P2).
+     {
+         AwProtocolSection section(m_variant, m_linkMode);
+-        m_currentSection = &section;
+         // A cancel between the check above and this assignment would miss the
+         // section; re-check now that cancel() can reach it.
+-        if (m_cancel)
+-        {
+-            m_currentSection = nullptr;
+-            return;
+-        }
++        // Set and cleared under the lock cancel() takes,
++        // and cleared before the section is destroyed.
++        unsigned int key = irq_lock();
++        m_currentSection = &section;
++        const bool cancelled = m_cancel;
++        if (cancelled) m_currentSection = nullptr;
++        irq_unlock(key);
++        if (cancelled) return;
+         link_changeMode(m_linkMode);
+         sendLinkStatus(LinkStatus::LinkConnected);
+         section.process();
+@@ -37,8 +39,10 @@ void AdvanceWarsModule::execute()
+         // mid-deregistration. Also stops the GBA from being fed the link
+         // layer's 0xDEAD placeholder after the session ends.
+         link_changeMode(DISABLED);
++        key = irq_lock();
++        m_currentSection = nullptr;
++        irq_unlock(key);
+     }
+-    m_currentSection = nullptr;
+ }
+ 
+ void AdvanceWarsModule::receiveCommand(std::span<const uint8_t> command)
+diff --git a/src/module/advanceWars.hpp b/src/module/advanceWars.hpp
+index 8b37f8b..7ef2327 100644
+--- a/src/module/advanceWars.hpp
++++ b/src/module/advanceWars.hpp
+@@ -1,5 +1,6 @@
+ 
+ #include <zephyr/kernel.h>
++#include <zephyr/irq.h>
+ 
+ #include "../sections/awProtocolSection.hpp"
+ #include "moduleInterface.hpp"
+@@ -27,10 +28,12 @@ public:
+ 
+     void cancel() override
+     {
++        const unsigned int key = irq_lock();   // the section cannot go meanwhile
+         m_cancel = true;
+         k_sem_give(&m_waitForLinkModeCommand);
+         k_sem_give(&m_waitForStart);
+         if (m_currentSection) m_currentSection->cancel();
++        irq_unlock(key);
+     }
+ 
+     bool canHandle(uint8_t command) override { return (command & 0xF0) == 0x10; }
+diff --git a/src/module/battleChipGate.cpp b/src/module/battleChipGate.cpp
+index c5fc470..8a53733 100644
+--- a/src/module/battleChipGate.cpp
++++ b/src/module/battleChipGate.cpp
+@@ -12,18 +12,22 @@ void BattleChipGateModule::execute()
+ 
+     {
+         BattleChipGateSection section(m_gateType);
++        // Set and cleared under the lock cancel() takes,
++        // and cleared before the section is destroyed.
++        unsigned int key = irq_lock();
+         m_currentSection = &section;
+-        if (m_cancel)
+-        {
+-            m_currentSection = nullptr;
+-            return;
+-        }
++        const bool cancelled = m_cancel;
++        if (cancelled) m_currentSection = nullptr;
++        irq_unlock(key);
++        if (cancelled) return;
+ 
+         section.armLink();
+         sendLinkStatus(LinkStatus::LinkConnected);
+         section.process();
+         link_changeMode(DISABLED);
+         link_releasePartnerPins();
++        key = irq_lock();
++        m_currentSection = nullptr;
++        irq_unlock(key);
+     }
+-    m_currentSection = nullptr;
+ }
+diff --git a/src/module/battleChipGate.hpp b/src/module/battleChipGate.hpp
+index 426d913..756d091 100644
+--- a/src/module/battleChipGate.hpp
++++ b/src/module/battleChipGate.hpp
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <zephyr/kernel.h>
++#include <zephyr/irq.h>
+ 
+ #include "../sections/battleChipGateSection.hpp"
+ #include "moduleInterface.hpp"
+@@ -17,8 +18,10 @@ public:
+ 
+     void cancel() override
+     {
++        const unsigned int key = irq_lock();   // the section cannot go meanwhile
+         m_cancel = true;
+         if (m_currentSection) m_currentSection->cancel();
++        irq_unlock(key);
+     }
+ 
+     bool canHandle(uint8_t) override { return false; }
+diff --git a/src/module/eReader.cpp b/src/module/eReader.cpp
+index aef7b65..059e104 100644
+--- a/src/module/eReader.cpp
++++ b/src/module/eReader.cpp
+@@ -16,10 +16,12 @@ EReaderModule::EReaderModule(erproto::Profile profile)
+ 
+ void EReaderModule::cancel()
+ {
++    const unsigned int key = irq_lock();   // the section cannot go meanwhile
+     m_cancel = true;
+     k_sem_give(&m_waitForLinkModeCommand);
+     k_sem_give(&m_waitForStart);
+     if (m_currentSection) m_currentSection->cancel();
++    irq_unlock(key);
+ }
+ 
+ bool EReaderModule::canHandle(uint8_t command)
+@@ -41,21 +43,25 @@ void EReaderModule::execute()
+ 
+     {
+         EReaderProtocolSection section(m_profile);
+-        m_currentSection = &section;
+         // A cancel between the check above and this assignment would miss the
+         // section; re-check now that cancel() can reach it.
+-        if (m_cancel)
+-        {
+-            m_currentSection = nullptr;
+-            return;
+-        }
++        // Set and cleared under the lock cancel() takes,
++        // and cleared before the section is destroyed.
++        unsigned int key = irq_lock();
++        m_currentSection = &section;
++        const bool cancelled = m_cancel;
++        if (cancelled) m_currentSection = nullptr;
++        irq_unlock(key);
++        if (cancelled) return;
+         section.armLink();
+         sendLinkStatus(LinkStatus::LinkConnected);
+         section.process();
+         link_changeMode(DISABLED);
+         link_releasePartnerPins();
++        key = irq_lock();
++        m_currentSection = nullptr;
++        irq_unlock(key);
+     }
+-    m_currentSection = nullptr;
+ }
+ 
+ void EReaderModule::receiveCommand(std::span<const uint8_t> command)
+diff --git a/src/module/emu.cpp b/src/module/emu.cpp
+index 37656a5..9f773bd 100644
+--- a/src/module/emu.cpp
++++ b/src/module/emu.cpp
+@@ -11,29 +11,33 @@ void EmuModule::execute()
+             case NextSection::setup:
+             {
+                 TradeSetup tradeSetup(LINKTYPE_TRADE_SETUP);
+-                m_currentSection = &tradeSetup;
++                publish(&tradeSetup);
+                 nextSection = tradeSetup.process(); // -> exit / -> connection / -> cancel
++                publish(nullptr);   // before tradeSetup goes
+                 break;
+             }
+             case NextSection::connection:
+             {
+                 TradeConnection tradeConnection;
+-                m_currentSection = &tradeConnection;
++                publish(&tradeConnection);
+                 nextSection = tradeConnection.process(); // -> tradeLounge / -> disconnect / -> cancel
++                publish(nullptr);   // before tradeConnection goes
+                 break;
+             }
+             case NextSection::disconnect:
+             {
+                 TradeDisconnect tradeDisconnection;
+-                m_currentSection = &tradeDisconnection;
++                publish(&tradeDisconnection);
+                 nextSection = tradeDisconnection.process(); // -> connection / -> cancel
++                publish(nullptr);   // before tradeDisconnection goes
+                 break;
+             }
+             case NextSection::lounge:
+             {
+                 TradeLounge tradeLounge;
+-                m_currentSection = &tradeLounge;
++                publish(&tradeLounge);
+                 nextSection = tradeLounge.process(); // -> exit / -> connection / -> cancel
++                publish(nullptr);   // before tradeLounge goes
+                 break;
+             }
+             case NextSection::cancel: [[fallthrough]];
+@@ -42,6 +46,5 @@ void EmuModule::execute()
+                 return;
+             }
+         }
+-        m_currentSection = nullptr;
+     }
+ }
+\ No newline at end of file
+diff --git a/src/module/emu.hpp b/src/module/emu.hpp
+index ae794ea..99e5512 100644
+--- a/src/module/emu.hpp
++++ b/src/module/emu.hpp
+@@ -1,5 +1,6 @@
+ #include <span>
+ #include <zephyr/kernel.h>
++#include <zephyr/irq.h>
+ 
+ #include "moduleInterface.hpp"
+ #include "../sections/section.hpp"
+@@ -18,11 +19,25 @@ public:
+ 
+     void cancel() override
+     { 
++        const unsigned int key = irq_lock();   // the section cannot go meanwhile
+         if (m_currentSection != nullptr) m_currentSection->cancel();
+         m_cancel = true;
++        irq_unlock(key);
+     }
+ 
+ private:
+     bool m_cancel = false;
+     Section* m_currentSection = nullptr;
++
++    // Set the section cancel() reaches, under its lock; a Cancel that came
++    // while the section was being built cancels it now. Cleared (nullptr)
++    // before each section is destroyed.
++    void publish(Section* section)
++    {
++        const unsigned int key = irq_lock();
++        m_currentSection = section;
++        const bool cancelled = m_cancel;
++        irq_unlock(key);
++        if (section != nullptr && cancelled) section->cancel();
++    }
+ };
+\ No newline at end of file
+diff --git a/src/module/link.cpp b/src/module/link.cpp
+index 34eaa6d..6bfb9dc 100644
+--- a/src/module/link.cpp
++++ b/src/module/link.cpp
+@@ -18,10 +18,20 @@ void LinkModule::execute()
+     {
+         {
+             UsbSection section(m_packetLayerMode);
++            // cancel() and receiveCommand() run on the host's thread and reach
++            // the section through this pointer, so it is set and cleared under
++            // irq_lock, and cleared before the section is destroyed. A Cancel
++            // that came while the section was being built cancels it now.
++            unsigned int key = irq_lock();
+             m_currentSection = &section;
++            const bool cancelled = m_cancel;
++            irq_unlock(key);
++            if (cancelled) section.cancel();
+             keepAlive = section.process();
++            key = irq_lock();
++            m_currentSection = nullptr;
++            irq_unlock(key);
+         }
+-        m_currentSection = nullptr; //kinda sketch but commands should only arrive when we have a current section
+ 
+         if (keepAlive)
+         {
+@@ -47,11 +57,19 @@ void LinkModule::receiveCommand(std::span<const uint8_t> command)
+         // 400 ms pause between sections; a host retrying at either moment
+         // must not fault the adapter.
+         case LinkModeCommand::StartHandshake:
++        {
++            const unsigned int key = irq_lock();   // the section stays while used
+             if (UsbSection* s = m_currentSection) s->startHandshake();
++            irq_unlock(key);
+             return;
++        }
+         case LinkModeCommand::ConnectLink:
++        {
++            const unsigned int key = irq_lock();
+             if (UsbSection* s = m_currentSection) s->connectLink();
++            irq_unlock(key);
+             return;
++        }
+         default: break;
+     }
+ }
+diff --git a/src/module/link.hpp b/src/module/link.hpp
+index d22d9db..523088a 100644
+--- a/src/module/link.hpp
++++ b/src/module/link.hpp
+@@ -1,4 +1,5 @@
+ #include <zephyr/kernel.h>
++#include <zephyr/irq.h>
+ 
+ #include "../sections//usbSection.hpp"
+ #include "moduleInterface.hpp"
+@@ -25,9 +26,13 @@ public:
+ 
+     void cancel() override
+     { 
++        // Under the lock execute() sets and clears m_currentSection with, so
++        // the section cannot be destroyed while it is cancelled.
++        const unsigned int key = irq_lock();
+         m_cancel = true;
+         k_sem_give(&m_waitForLinkModeCommand);
+         if (m_currentSection) m_currentSection->cancel();
++        irq_unlock(key);
+     }
+ 
+     bool canHandle(uint8_t command) override { return (command & 0xF0) == 0x10; }
+diff --git a/src/module/rfuWireless.cpp b/src/module/rfuWireless.cpp
+index 8567eae..85a2f7b 100644
+--- a/src/module/rfuWireless.cpp
++++ b/src/module/rfuWireless.cpp
+@@ -16,19 +16,23 @@ void RfuWirelessModule::execute()
+ 
+     {
+         RfuProtocolSection section(m_role);
++        // Set and cleared under the lock cancel() takes,
++        // and cleared before the section is destroyed.
++        unsigned int key = irq_lock();
+         m_currentSection = &section;
+-        if (m_cancel)
+-        {
+-            m_currentSection = nullptr;
+-            return;
+-        }
++        const bool cancelled = m_cancel;
++        if (cancelled) m_currentSection = nullptr;
++        irq_unlock(key);
++        if (cancelled) return;
+         rfuLink_enable();
+         section.process();
+         // Stop the PIO before the section destructor deregisters the done
+         // callback, so the PIO ISR cannot fire mid-deregistration.
+         rfuLink_disable();
++        key = irq_lock();
++        m_currentSection = nullptr;
++        irq_unlock(key);
+     }
+-    m_currentSection = nullptr;
+ }
+ 
+ void RfuWirelessModule::receiveCommand(std::span<const uint8_t> command)
+diff --git a/src/module/rfuWireless.hpp b/src/module/rfuWireless.hpp
+index 6519619..5873d9b 100644
+--- a/src/module/rfuWireless.hpp
++++ b/src/module/rfuWireless.hpp
+@@ -1,5 +1,6 @@
+ 
+ #include <zephyr/kernel.h>
++#include <zephyr/irq.h>
+ 
+ #include "../sections/rfuProtocolSection.hpp"
+ #include "moduleInterface.hpp"
+@@ -23,8 +24,10 @@ public:
+ 
+     void cancel() override
+     {
++        const unsigned int key = irq_lock();   // the section cannot go meanwhile
+         m_cancel = true;
+         if (m_currentSection) m_currentSection->cancel();
++        irq_unlock(key);
+     }
+ 
+     bool canHandle(uint8_t command) override { return (command & 0xF0) == 0x10; }
+-- 
+2.43.0
+

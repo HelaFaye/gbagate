@@ -31,7 +31,7 @@ local HOST = os.getenv("LINK_HOST") or "127.0.0.1"
 local PORT = tonumber(os.getenv("LINK_PORT") or "7000")
 local SHOT   = os.getenv("ROMTEST_SHOT")   or "rom_test.png"
 local RESULT = os.getenv("ROMTEST_RESULT") or "rom_test.result"
-local MAX_FRAMES = tonumber(os.getenv("ROMTEST_MAX_FRAMES") or "1500")
+local MAX_FRAMES = tonumber(os.getenv("ROMTEST_MAX_FRAMES") or "30000")
 
 -- link_proto constants, mirroring src/link_proto.h
 local T_HELLO, T_HELLO_ACK = 0x01, 0x02
@@ -57,6 +57,7 @@ local MB_FROM_GATE = RESULT_ADDR + 56   -- gate -> ROM, u16
 local MB_SEQ_FROM  = RESULT_ADDR + 58
 local RESULT_MAGIC = 0x47544247
 local ST_RUNNING, ST_PASS, ST_FAIL = 0, 1, 2
+local REQUIRED_TESTS = 0x3F
 
 local sock, rxbuf, escaped = nil, "", false
 local last_seq_to, seq_from = 0, 0
@@ -113,7 +114,16 @@ local function finish(status, note)
     pcall(function() sock:close() end)
     sock = nil
   end
-  local pass = (status == ST_PASS)
+  local bits = 0
+  local chip = 0
+  if emu then
+    bits = emu:read32(MB_TESTS)
+    chip = emu:read32(MB_CHIP) & 0xFFFF
+  end
+  local pass = status == ST_PASS
+      and (bits & REQUIRED_TESTS) == REQUIRED_TESTS
+      and chip == 0x0101
+  local final_status = pass and ST_PASS or ST_FAIL
   local verdict = pass and "PASS" or "FAIL"
   console:log(string.format("ROM-TEST: %s (%s)", verdict, note or ""))
 
@@ -127,7 +137,7 @@ local function finish(status, note)
     if f then
       f:write(verdict .. "\n")
       if emu and status ~= nil then
-        f:write(string.format("status=%d\n", status))
+        f:write(string.format("status=%d\n", final_status))
         f:write(string.format("frames=%d\n", emu:read32(RESULT_ADDR + 8)))
         f:write(string.format("linked=%d\n", emu:read32(RESULT_ADDR + 12)))
         f:write(string.format("gate_id=%04X\n", emu:read32(RESULT_ADDR + 16) & 0xFFFF))
@@ -221,16 +231,45 @@ local function pump()
   end
 end
 
+local protocol_pass_logged = false
+local last_progress_bits = nil
+
 local function check_result()
   if emu:read32(RESULT_ADDR) ~= RESULT_MAGIC then
     return
   end
+
   local status = emu:read32(RESULT_ADDR + 4)
+  local bits = emu:read32(MB_TESTS)
+
+  if status == ST_FAIL then
+    finish(ST_FAIL, "ROM protocol checks failed")
+    return
+  end
+
   if status == ST_PASS then
-    finish(ST_PASS, string.format("gate %04X, %d linked frames",
-      emu:read32(RESULT_ADDR + 16) & 0xFFFF, emu:read32(RESULT_ADDR + 12)))
-  elseif status == ST_FAIL then
-    finish(ST_FAIL, "ROM reported failure (never linked / rotation wrong)")
+    if not protocol_pass_logged then
+      protocol_pass_logged = true
+      console:log(string.format(
+        "ROM-TEST: PROTOCOL PASS; continuing for both chip deliveries (gate %04X)",
+        emu:read32(RESULT_ADDR + 16) & 0xFFFF))
+    end
+
+    if bits ~= last_progress_bits then
+      last_progress_bits = bits
+      console:log(string.format("ROM-TEST: progress tests=%02X chip=%04X",
+        bits, emu:read32(MB_CHIP) & 0xFFFF))
+    end
+
+    -- CHIP proves delivery. REPEATS now proves the second chip also completed
+    -- its nine rotations and cleared. Keep clocking until both are present.
+    if (bits & REQUIRED_TESTS) == REQUIRED_TESTS
+        and (emu:read32(MB_CHIP) & 0xFFFF) == 0x0101 then
+      finish(ST_PASS, string.format(
+        "all checks passed: gate %04X, %d linked frames",
+        emu:read32(RESULT_ADDR + 16) & 0xFFFF,
+        emu:read32(RESULT_ADDR + 12)))
+    end
   end
 end
 
@@ -279,7 +318,7 @@ local function onFrame()
     else
       note = "timed out; ROM published no result"
     end
-    finish(status, note)
+    finish(ST_FAIL, note)
   end
 end
 

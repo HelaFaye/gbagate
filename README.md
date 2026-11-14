@@ -168,6 +168,47 @@ declare the bits they need and are omitted entirely when unsatisfied.
 `hw_menu_hidden()` exists so a diagnostics screen can explain the omission —
 without it, "the wireless option is missing" is an unfalsifiable bug report.
 
+**Only what the board has.** A mode is listed only when the part it drives
+is fitted, and anything that stands in for hardware says so. Diagnostics
+marks a stand-in with `*` and adds a footnote saying so. The capability bits:
+
+| bit | set when | gates |
+|---|---|---|
+| link port | a source of the game's transfers: the PHY, or the UART bridge* under emulation | Link, Self Test, Battle Chip |
+| link pins | the PHY: the board drives the port's own pins | Send Program, Infrared, GB Printer, GBA Memory |
+| infrared | `BOARD_HAS_IR` and the emitter came up | Infrared |
+| GB 5V shifter | `BOARD_HAS_GB_5V`: a 5 V level shifter on the port | GB Printer (and GB-Link's printer mode 0x03, `PATCHES.md` P16) |
+| USB drive / USB adapter | USB came up as the drive, or as the GB-Link adapter (one controller: one or the other) | USB Storage / Link: USB |
+| WiFi | the S3's radio, on hardware only (QEMU's S3 has none) | Link: Wireless, Link: Online |
+| chip reader | an MCP23017 answered on I2C | the Battle Chip applet's reader |
+
+What each board offers today, in the gate image (the link and mini images
+leave out some modes: `variant.c`):
+
+| | devkit | Supermini | touch carrier | emulator image |
+|---|---|---|---|---|
+| Link: USB / Wireless / Online | yes | yes | yes | no: no USB, no radio |
+| Send Program, GBA Memory | yes | yes | yes | no: the bridge has no pins |
+| Self Test, Battle Chip | yes | yes | yes | yes, over the bridge* |
+| Infrared | no emitter fitted | no | no | no |
+| GB Printer | no 5 V shifter | no | no | no |
+| SD card | yes | yes | yes | no |
+| input | encoder or switches | switches (expander) | touch keys* | keys over UART* |
+| panel | ST7735 | ST7735 | ILI9341, the UI at 15/8 | framebuffer over UART* |
+
+\* Stand-ins, and said so on the device:
+- **The UART bridge** carries the gate's transfers in place of the link PHY.
+- **The touch keys** stand in for buttons until there is a UI made for touch
+  (`doc/CARRIER.md`).
+- **Keys and framebuffer over UART** stand in for the panel and switches
+  that QEMU lacks.
+
+Not stand-ins, but not obvious either:
+- On the touch carrier, the 128x128 UI is scaled into the panel, and the
+  list is repainted where the ST7735 scrolls in hardware.
+- Settings hides the glass offsets and the input mode there, since they do
+  nothing on that board.
+
 `nrf24_probe.{h,c}` detects the radio over SPI with the transfer function
 injected, so it is testable against a simulated part. Presence is not "bytes
 came back" — a floating bus returns those too. It is:
@@ -554,8 +595,56 @@ overlap nor overrun the scrollbar.
 
 ### Mode shell
 
-`Battle Chip · Link: USB · Link: Wireless · Send Program · Read Chip ·
-Settings · Diagnostics`, filtered by `hw_caps`.
+`Link · Send Program · Infrared · GB Printer · USB Storage · Self Test ·
+(applets: Battle Chip · Test Pattern · Chip Dice) · Settings · Diagnostics`,
+filtered by `hw_caps`.
+
+**Battle Chip** is an applet (`applets/battle_chip.c`) and includes what
+used to be Read Chip. Choose a chip and send it, or put a real one in the
+reader board and it goes out as a real gate would send it. It sends each
+chip's wire ID (`chipdb_id_for_slot`). The built-in mode it replaces sent
+the table index, which names a different chip for 203 of BN4's 285 sendable
+chips.
+
+**Link** opens a choice of interface: `USB - PC or mGBA`, `Wireless -
+gbagate` or `Online - Celio`. It shows only what the board has, and a board
+with only one goes straight to it. Back from a running link returns to that
+choice. Online plays a partner anywhere through a Celio server with no PC:
+the board joins your WiFi (set it up from its hotspot page or a `wifi.txt`
+on the USB drive) and is its own Celio client. On the same WiFi it is also a
+GB-Link adapter at `ws://<board>/gblink`. See `doc/ONLINE.md`.
+
+**GB Printer** makes the board a Game Boy Printer that keeps every print.
+A Game Boy game (or a GBA running one) prints to it over the link cable;
+the panel shows the picture (scaled to fit, the encoder scrolls a long one)
+and the board saves it as `PRINTS/PRNT0001.PNG`, `PRNT0002.PNG`, ... on the
+SD card, or on its own USB drive when there is no card. The PNGs are 2-bit
+greyscale, the printer's four shades exactly. A long picture a game prints
+in parts is joined into one file, as the paper would be. It runs GB-Link's
+printer mode (0x03) as the board's own host (`port/gblink/printer_glue.cpp`);
+`src/gbprinter.c` decodes, `src/gbp_png.c` writes the file and
+`src/printer_mode.c` ties them together. Game Boy links are 5 V: the board
+needs a level shifter (`doc/GBLINK.md`, Wiring).
+
+**Applets** are modes added without touching the core: one C file in
+`applets/` and a line in `applets/applets.def`. Battle Chip, Test
+Pattern (panel calibration), Chip Dice and GBA Memory ship as examples;
+`doc/APPLETS.md` is the walkthrough.
+
+**GBA Memory** sends the memory agent (`rom/agent.c`) to a GBA at its boot
+screen, and the board can then read, write, fill and call anything in the
+GBA's memory over the link cable. Try it with Colour: the GBA's screen
+changes. This is the first step of the multiboot preloader. See
+`doc/AGENT.md`.
+
+**Themes**: Settings' first row picks one of five palettes (Classic, Navi,
+DMG, Contrast, Daylight). It applies at once and is saved. `test_screens`
+checks every theme's contrast.
+
+`app_mode_route()` names the screen every mode draws on, and `test_modes`
+walks the whole menu, every row and every interface behind Link, to check
+that none reaches a placeholder. That's how Infrared was found: listed, but
+refused with "no handler".
 
 **Diagnostics requires no capabilities at all**, on purpose: the screen that
 explains why something is missing must not itself be gated on parts being
@@ -567,6 +656,11 @@ than starting. Backing out of a running mode lands on the game list rather than
 the top — changing game is the usual reason to leave.
 
 ## Renderer
+
+`make screens` renders every screen, in every state worth seeing and in
+every theme, to `build/screens/gallery.png`; `doc/screens-all.png` is a
+copy. `test_screens` asserts on them too: the frame, every line drawn, no
+page line clipped, and a list of the titles, footers and menu rows that are.
 
 `ui_render.{h,c}` draws the chip screen into a plain RGB565 array — no SPI, no
 hardware — so `test_render` can render a screen, assert on the pixels, and dump

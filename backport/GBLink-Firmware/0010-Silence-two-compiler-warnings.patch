@@ -1,0 +1,53 @@
+From 84bafd89f7b4904cb997dcb32db56ca08c574e12 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 01:22:02 +0000
+Subject: [PATCH] Silence two compiler warnings
+
+GCC 14 with -Wextra, building as C++20:
+
+- persist.cpp: the v7 cable migration's conditional mixes a uint8_t
+  and an enumerator (-Wextra, enumerated and non-enumerated type in
+  conditional expression). Cast the enumerator; same value.
+- rfuProtocolSection.cpp: g_revRx0 = g_revRx1 = 0 uses the value of
+  an assignment to a volatile (-Wvolatile, deprecated in C++20).
+  Two statements; same effect.
+
+No change in behaviour.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ src/persist.cpp                     | 2 +-
+ src/sections/rfuProtocolSection.cpp | 3 ++-
+ 2 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/persist.cpp b/src/persist.cpp
+index a05b6f5..39fd037 100644
+--- a/src/persist.cpp
++++ b/src/persist.cpp
+@@ -71,7 +71,7 @@ namespace
+             const uint8_t cable = s.led[LED_SLOT_BATTLE_CHIP_GATE][0];
+             memcpy(s.led[LED_SLOT_BATTLE_CHIP_GATE],
+                    kDefaultColors[LED_SLOT_BATTLE_CHIP_GATE], 3);
+-            s.cable = (cable <= CABLE_FORCE_GBC) ? cable : CABLE_FORCE_GBC;
++            s.cable = (cable <= CABLE_FORCE_GBC) ? cable : static_cast<uint8_t>(CABLE_FORCE_GBC);
+             s.version = SETTINGS_VERSION;
+         } else if (s.version != SETTINGS_VERSION) {
+             fillDefaults(s);
+diff --git a/src/sections/rfuProtocolSection.cpp b/src/sections/rfuProtocolSection.cpp
+index b564ac6..7a781d6 100644
+--- a/src/sections/rfuProtocolSection.cpp
++++ b/src/sections/rfuProtocolSection.cpp
+@@ -282,7 +282,8 @@ RfuProtocolSection::RfuProtocolSection(uint8_t role)
+ 
+     rfuLink_setDoneCallback(&pioDoneCallback, nullptr);
+ 
+-    g_revRx0 = g_revRx1 = 0;
++    g_revRx0 = 0;
++    g_revRx1 = 0;
+     g_dbgDelivFail = dfNone;
+     g_dbgDelivSo = 0;
+     g_retriesThisWait = 0;
+-- 
+2.43.0
+

@@ -97,10 +97,21 @@ static void test_which_mode_is_visible(void) {
     check("other rows unbracketed",
           has(uiset_label(&v, SETFIELD_ACCEL), "[") ? 0 : 1, 1);
 
+    ui_keys_t enc = ui_keys_for(0), ab = ui_keys_for(1);
     check("footer says what turning does",
-          strcmp(uiset_footer(&v), "turn to change"), 0);
+          strcmp(uiset_footer(&v, &enc), "turn: set\tclick done"), 0);
+    check("and on buttons", strcmp(uiset_footer(&v, &ab), "up/dn: set\tA done"), 0);
     uiset_toggle_edit(&v);
-    check("and says it changed", strcmp(uiset_footer(&v), "enter to edit"), 0);
+    check("and says it changed", strcmp(uiset_footer(&v, &enc), "click edit\thold back"), 0);
+    check("NULL keys: the encoder's", strcmp(uiset_footer(&v, NULL), "click edit\thold back"), 0);
+
+    /* Every row at the menu's width, its value whole at the right. */
+    for (uint8_t i = 0; i < uiset_count(); i++) {
+        const char *row = uiset_label(&v, i);
+        check("row is 18 glyphs", (long)strlen(row), UI_MENU_COLS);
+    }
+    check("game value short", has(uiset_label(&v, SETFIELD_GAME), "BN6"), 1);
+    check("air link value short", has(uiset_label(&v, SETFIELD_AIR), "Gen 3"), 1);
 }
 
 static void test_clamping_and_wrapping(void) {
@@ -215,13 +226,72 @@ static void test_round_trip_with_storage(void) {
     check("game", back.game, s.game);
 }
 
+/* The theme row: first, so it is the first thing a new owner finds; wraps
+ * both ways; names the palette; and counts as a display change, which is what
+ * makes the device repaint in it at once. */
+static void test_theme_row(void) {
+    printf("theme\n");
+    settings_t s;
+    settings_defaults(&s);
+    ui_settings_t v;
+    uiset_init(&v, &s);
+    check("first row is the theme", strncmp(uiset_label(&v, 0), "theme", 5), 0);
+    check("shows the palette", strstr(uiset_label(&v, 0), "Classic") != NULL, 1);
+    uiset_toggle_edit(&v);
+    uiset_move(&v, 1);
+    check("next palette", s.theme, UI_THEME_NAVI);
+    check("named", strstr(uiset_label(&v, 0), "Navi") != NULL, 1);
+    check("is a display change", uiset_display_affected(&v), 1);
+    check("is saved", uiset_dirty(&v), 1);
+    uiset_move(&v, -1);
+    uiset_move(&v, -1);
+    check("wraps backwards", s.theme, UI_THEME_COUNT - 1);
+    uiset_move(&v, 1);
+    check("and forwards", s.theme, UI_THEME_CLASSIC);
+}
+
+/* The touch carrier's Settings: no glass offsets (the ST7735's) and no input
+ * mode (touch is the only input). They are not listed, not reachable, and
+ * editing the row where one was edits the field now shown there. */
+static void test_hidden_fields(void) {
+    printf("fields a board does not have\n");
+    settings_t s;
+    settings_defaults(&s);
+    ui_settings_t v;
+    uiset_init(&v, &s);
+    check("all rows by default", uiset_rows(&v), SETFIELD_COUNT);
+    uiset_hide(&v, (1u << SETFIELD_COLSTART) | (1u << SETFIELD_ROWSTART) | (1u << SETFIELD_INPUT));
+    check("three fewer rows", uiset_rows(&v), SETFIELD_COUNT - 3);
+    for (uint8_t i = 0; i < uiset_rows(&v); i++) {
+        const char *l = uiset_label(&v, i);
+        if (strstr(l, "offset") || strstr(l, "input")) {
+            printf("  FAIL a hidden field is listed: %s\n", l);
+            g_fail++;
+        }
+    }
+    check("no label past the last row", uiset_label(&v, uiset_rows(&v)) == NULL, 1);
+    check("row 1 is colour now", strstr(uiset_label(&v, 1), "colour") != NULL, 1);
+    uiset_move(&v, -1);
+    check("wraps over the rows shown", v.cursor, uiset_rows(&v) - 1);
+    uiset_move(&v, 1);
+    uiset_move(&v, 1);                      /* to colour */
+    uint8_t col = s.colstart;
+    bool bgr = s.bgr;
+    uiset_toggle_edit(&v);
+    uiset_move(&v, 1);
+    check("editing row 1 changes colour", s.bgr, !bgr);
+    check("not the hidden col offset", s.colstart, col);
+}
+
 int main(void) {
     test_navigation();
+    test_hidden_fields();
     test_edit_mode();
     test_which_mode_is_visible();
     test_clamping_and_wrapping();
     test_acceleration_ignored();
     test_round_trip_with_storage();
+    test_theme_row();
     printf("\n%s\n", g_fail ? "FAILURES" : "all checks passed");
     return g_fail != 0;
 }

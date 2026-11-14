@@ -34,7 +34,14 @@
 
 #include <zephyr/kernel.h>
 
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include "layers/gbLinkLayer.h"
+#include "mp_wire.h"
 #include "link_phy.h"
 #include "sim.h"
 #include "sim_rfu.h"
@@ -45,6 +52,8 @@ enum {
     SIM_GBA_CHILD  = 1,  /* a Gen 3 game, waiting as child               */
     SIM_GBA_PARENT = 2,  /* a Gen 3 game, driving the bus as parent      */
     SIM_GBA_ECHO   = 3,  /* answers every word with the word it was sent */
+    SIM_GBA_WIRE   = 5,  /* GBLINK_MP_WIRE: a real GBA in another process
+                            (an emulator running the game), on mp_wire.h */
     SIM_GBA_MMBN   = 4   /* a Battle Network game polling a chip gate:
                             parent; pings 0x8FFF until a gate answers, echoes
                             the gate's ID to open the session, then clocks */
@@ -208,12 +217,94 @@ static void report_word(uint16_t tx, uint16_t rx) {
     sim_event(SIM_EV_WORD, ev, 4);
 }
 
+/* ---- SIM_GBA_WIRE: the GBA is another process on mp_wire.h ---------------- */
+
+static struct mp_wire *MW;
+
+#define MW_LOCKED(body) do { mp_wire_lock(MW); body; mp_wire_unlock(MW); } while (0)
+
+/* The board drives: post the word and wait for the GBA side to clock it. A
+ * GBA not in Multi-Player mode answers nothing (FFFF, SD idling high). */
+static uint16_t wire_master_word(uint16_t tx) {
+    MW_LOCKED(MW->mode = MP_WIRE_MASTER; MW->rx_ready = false; MW->req_word = tx; MW->req_pending = true);
+    const int64_t give_up = zshim_now_us() + 100000;
+    for (;;) {
+        bool done;
+        uint16_t rx;
+        MW_LOCKED(done = MW->rx_ready; rx = MW->rx_word);
+        if (done) return rx;
+        if (zshim_now_us() >= give_up) {
+            MW_LOCKED(MW->req_pending = false; MW->unanswered++);
+            return 0xFFFF;
+        }
+        sleep_ns(20000);
+    }
+}
+
+/* The GBA is the parent: stage the answer, wait for its next transfer. */
+static bool wire_slave_word(uint16_t tx, uint16_t *rx) {
+    MW_LOCKED(MW->mode = MP_WIRE_SLAVE; MW->staged = tx; MW->staged_valid = true);
+    /* As long as the mode lasts: each next_tx must be followed by a
+     * word_done, or the firmware's transmit side gets ahead of the cable. */
+    for (;;) {
+        bool have = false;
+        MW_LOCKED(if (MW->ring_tail != MW->ring_head) { *rx = MW->ring[MW->ring_tail % MP_WIRE_RING]; MW->ring_tail++; have = true; });
+        if (have) return true;
+        if (atomic_load(&s_phy_mode) != GBL_PHY_SLAVE) return false;
+        sleep_ns(20000);
+    }
+}
+
+static bool wire_init(void) {
+    const char *path = getenv("GBLINK_MP_WIRE");
+    if (!path || !*path) return false;
+    const int fd = open(path, O_RDWR | O_CREAT, 0600);
+    if (fd < 0 || ftruncate(fd, sizeof *MW) != 0) { perror("GBLINK_MP_WIRE"); exit(2); }
+    MW = mmap(NULL, sizeof *MW, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (MW == MAP_FAILED) { perror("GBLINK_MP_WIRE mmap"); exit(2); }
+    if (MW->magic != MP_WIRE_MAGIC) {
+        memset(MW, 0, sizeof *MW);
+        atomic_flag_clear(&MW->lock);
+        MW->version = MP_WIRE_VERSION;
+        MW->magic = MP_WIRE_MAGIC;
+    }
+    atomic_store(&s_model, SIM_GBA_WIRE);
+    atomic_store(&s_gbc_cable, 0);          /* a GBA cable: SI grounded */
+    atomic_store(&s_wire_on_alt, 0);
+    return true;
+}
+
 static void *bus_thread(void *arg) {
     (void)arg;
     uint32_t parent_gap = GAP_HANDSHAKE;
     for (;;) {
         int mode  = atomic_load(&s_phy_mode);
         int model = atomic_load(&s_model);
+
+        if (model == SIM_GBA_WIRE) {
+            if (mode == GBL_PHY_MASTER) {
+                uint32_t gap = 0;
+                uint16_t tx = gbl_phy_next_tx(&gap);
+                /* no SD pin to get wrong on this cable: whichever path the
+                 * firmware chose (its cable setting may say GBC), the word
+                 * reaches the GBA */
+                uint16_t rx = wire_master_word(tx);
+                report_word(tx, rx);
+                gbl_phy_word_done(rx);
+                sleep_ns(gbl_phy_loops_to_ns(gap ? gap : 1000));
+            } else if (mode == GBL_PHY_SLAVE) {
+                uint16_t tx = gbl_phy_next_tx(NULL), rx;
+                if (wire_slave_word(tx, &rx)) {
+                    report_word(tx, rx);
+                    gbl_phy_word_done(rx);
+                }
+            } else {
+                MW_LOCKED(MW->mode = MP_WIRE_OFF; MW->req_pending = false; MW->staged_valid = false);
+                sleep_ns(1000000);
+            }
+            continue;
+        }
 
         if (mode == GBL_PHY_MASTER) {
             uint32_t gap = 0;
@@ -347,7 +438,14 @@ bool gblink_pin_get(gblink_signal_t sig) {
     rp2040_read_cost();
     switch (sig) {
     case GBLINK_SIG_SC: return atomic_load(&s_pin_sc);
-    case GBLINK_SIG_SI: atomic_fetch_add(&s_si_reads, 1); return atomic_load(&s_pin_si);
+    case GBLINK_SIG_SI: {
+        /* the value first, then the count: the Game Boy changes SI for the
+         * next bit as soon as it sees the count move, so counting first let
+         * a slow read return the next bit's value (one wrong bit in a print) */
+        const bool v = atomic_load(&s_pin_si);
+        atomic_fetch_add(&s_si_reads, 1);
+        return v;
+    }
     default:            return true;
     }
 }
@@ -406,6 +504,10 @@ void sim_gba_control(const uint8_t *d, size_t len) {
         sim_rfu_game_control(d, len);
         return;
     }
+    /* A real GBA on the wire is the GBA: a test asking for a modelled one
+     * (the compat harness sets the model from the session's roles) must not
+     * swap it out from under the firmware. */
+    if (MW && (d[0] == 0x01 || d[0] == 0x06 || d[0] == 0x07)) return;
     pthread_mutex_lock(&s_mx);
     switch (d[0]) {
     case 0x01:
@@ -450,6 +552,7 @@ void sim_gba_control(const uint8_t *d, size_t len) {
 
 void sim_gba_init(void) {
     reset_link();
+    wire_init();
     gbl_phy_install(&s_drv);
     pthread_t a, b;
     pthread_create(&a, NULL, bus_thread, NULL);

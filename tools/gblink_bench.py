@@ -246,9 +246,10 @@ class Board:
             return None
         caps = struct.unpack('<I', d[8:12])[0]
         names = ['chip gate', 'SD_ALT', 'RGB LED', 'VCC switch', 'display', 'storage',
-                 'ESP-NOW', 'multiboot', 'bridge UART']
+                 'ESP-NOW', 'multiboot', 'bridge UART', 'GB 5 V shifter']
         return {'gbagate': '%d.%d.%d' % (d[5], d[6], d[7]),
-                'board': {0: 'host simulator', 1: 'devkit', 2: 'Supermini'}.get(d[12], d[12]),
+                'board': {0: 'host simulator', 1: 'devkit', 2: 'Supermini',
+                          3: 'touch carrier', 4: 'knob carrier'}.get(d[12], d[12]),
                 'image': {0: 'link', 1: 'gate', 2: 'full', 3: 'mini'}.get(d[13], d[13]),
                 'caps': [n for i, n in enumerate(names) if caps & (1 << i)]}
 

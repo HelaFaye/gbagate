@@ -9,6 +9,7 @@ means a real GB-Link host would fail the same way.
     python3 -I test/gblink_sim/test_gblink.py -k cable only matching tests
 """
 import os
+import random
 import struct
 import subprocess
 import sys
@@ -72,6 +73,96 @@ def firmware_info_layout():
         check(not s.status, 'no status word for a query')
     finally:
         s.close()
+
+
+@test
+def state_follows_the_mode_and_its_host():
+    """gblink_state(), behind the device's Link: USB page: idle until a host
+    starts a mode, that mode and that host while it runs, idle after Cancel;
+    the USB bus state as the port reports it."""
+    s = Sim()
+    try:
+        st = s.state()
+        check(st['configured'], 'the sim enumerates at boot')
+        check(st['mode'] == -1, 'no mode before a host asks: %r' % st)
+        check(st['status'] == 0 and st['statuses'] == 0, 'no status yet: %r' % st)
+        mark = len(s.status)
+        s.cmd(0x00, 0x01)
+        s.wait_status(ST['AwaitMode'], start=mark)
+        st = s.state()
+        check(st['mode'] == 1 and st['owner'] == 0, 'Gen 3 link, started over USB: %r' % st)
+        check(st['status'] == ST['AwaitMode'], 'the last word the mode sent: %r' % st)
+        check(st['frames'][0] >= 1 and st['frames'][1] == 0, 'one USB frame, none on CDC: %r' % st)
+        s.cmd(0x01)
+        eventually(lambda: s.state()['mode'] == -1, 3, 'Cancel ends the mode')
+        s._send('U', 0xFF)
+        eventually(lambda: not s.state()['configured'], 3, 'unplugged')
+    finally:
+        s.close()
+
+    s = Sim(serial=True)
+    try:
+        mark = len(s.status)
+        s.cmd(0x00, 0x01)
+        s.wait_status(ST['AwaitMode'], start=mark)
+        st = s.state()
+        check(st['mode'] == 1 and st['owner'] == 1, 'started over CDC: %r' % st)
+    finally:
+        s.close()
+
+
+@test
+def wifi_host_runs_a_link_mode():
+    """PATCHES.md P15: a host on the board's WiFi speaks the CDC framing over a
+    WebSocket and gets the same adapter: SetMode starts the relay, its status
+    and data come back on that host and no other."""
+    s = Sim(net=True)
+    try:
+        s.cmd(0x0F)
+        d = s.wait_data(lambda d: d[0] == 0x0F)
+        check(tuple(d[1:4]) == (2, 2, 7), 'firmware info over WiFi: %s' % d.hex())
+        mark = len(s.status)
+        s.cmd(0x00, 0x01)
+        s.wait_status(ST['AwaitMode'], start=mark)
+        st = s.state()
+        check(st['owner'] == 4 and st['mode'] == 1, 'the WiFi host owns the mode: %r' % st)
+        check(st['frames'][4] >= 2 and st['frames'][0] == 0, 'frames counted per host: %r' % st)
+        check(not s.cdc, 'nothing on the CDC port')
+        check(s.net_bytes > 0, 'replies on the WebSocket')
+        s.cmd(0x01)
+        eventually(lambda: s.state()['mode'] == -1, 3, 'Cancel over WiFi ends it')
+    finally:
+        s.close()
+
+
+@test
+def wifi_host_latency_sweep():
+    """A GB-Link host on the board's WiFi (/gblink) through a slow line: the
+    netplay bridge's link-up sequence (link_up_master) with delay on the
+    WebSocket only. Up to 100 ms one way it must work; past that the table
+    reports where the host's own timeouts give out -- the board answers at
+    once, so the limit is the host's, which this measures for it."""
+    cases = [(0.0, 0.0), (0.01, 0.005), (0.05, 0.02), (0.1, 0.05), (0.25, 0.1),
+             (0.5, 0.2), (1.0, 0.3), (2.0, 0.5)]
+    must = 4
+    print('  WiFi one-way  jitter   link up')
+    bad = []
+    for i, (delay, jitter) in enumerate(cases):
+        s = Sim(net=True, net_delay=delay, net_jitter=jitter)
+        s.gba(0x01, CHILD)       # a child GBA: the adapter is master
+        t0 = time.time()
+        try:
+            link_up_master(s, grace=0.15)
+            ok, took = True, time.time() - t0
+        except (TimeoutError, AssertionError):
+            ok, took = False, None
+        finally:
+            s.close()
+        print('  %s %6.0f ms  %5.0f ms   %s' % ('ok  ' if ok else ('FAIL' if i < must else 'gone'),
+              delay * 1000, jitter * 1000, ('%.1fs' % took) if ok else '-'))
+        if not ok and i < must:
+            bad.append(delay)
+    check(not bad, 'a WiFi host must link through 100 ms one way')
 
 
 @test
@@ -156,8 +247,8 @@ def hardware_commands():
     try:
         s.cmd(0x41)
         check(s.wait_event(EV_VCC) == b'\x01', '5 V')
+        n = len(s.events)          # before the command: its answer can beat the next line
         s.cmd(0x40)
-        n = len(s.events)
         check(s.wait_event(EV_VCC, start=n) == b'\x00', '3.3 V')
         s.cmd(0x42, 1, 2, 3, 1)
         check(s.wait_event(EV_LED, lambda b: b == b'\x01\x02\x03\x01'), 'live LED')
@@ -460,6 +551,22 @@ def printer_packet(cmd, data=b'', compressed=0):
 
 
 @test
+def printer_refused_without_shifter():
+    """P16: a board with no 5 V level shifter (every gbagate board) refuses the
+    printer mode, which only ever talks to a Game Boy: the session ends at once,
+    printer mode never starts, and the board says why in its 0x4F capabilities."""
+    s = Sim(env={'GBLINK_SIM_NO_GB_5V': '1'})
+    try:
+        s.cmd(0x00, 0x03)
+        s.wait_status(ST['GBSessionFinished'], 2.0)          # the session ends at once
+        time.sleep(0.4)
+        check(ST['GBPrinterModeActive'] not in s.status, 'printer mode never started')
+        check(not s.data, 'nothing streamed: %s' % s.data[:2])
+    finally:
+        s.close()
+
+
+@test
 def printer_stream():
     """gb.cpp printer: FF at entry, then cmd, comp, len lo/hi, data per packet,
     FE after PRINT; the device answers 0x81 then status 0x00."""
@@ -479,6 +586,84 @@ def printer_stream():
         check(stream.endswith(b'\xfe'), 'print marker: %s' % stream[-8:].hex())
         replies = [b[1] for c, b in s.events if c == EV_GB and len(b) == 2]
         check(replies.count(0x81) == 3, 'device id per packet: %d' % replies.count(0x81))
+    finally:
+        s.close()
+
+
+def gb_band(seed):
+    """640 bytes of tile data, and the colour index of each of its 160 x 16
+    pixels, as gbprinter.c lays a band out."""
+    r = random.Random(seed)
+    data = bytes(r.randrange(256) for _ in range(640))
+    px = [[0] * 160 for _ in range(16)]
+    for t in range(40):
+        tx, ty = (t % 20) * 8, (t // 20) * 8
+        for y in range(8):
+            lo, hi = data[16 * t + 2 * y], data[16 * t + 2 * y + 1]
+            for x in range(8):
+                px[ty + y][tx + x] = ((lo >> (7 - x)) & 1) | (((hi >> (7 - x)) & 1) << 1)
+    return data, px
+
+
+def rle(data):
+    """The printer's compression, as games write it: runs of 2+, literals."""
+    out, i = bytearray(), 0
+    while i < len(data):
+        j = i
+        while j < len(data) and data[j] == data[i] and j - i < 129:
+            j += 1
+        if j - i >= 2:
+            out += bytes([0x80 | (j - i - 2), data[i]])
+            i = j
+        else:
+            k = i
+            while k < len(data) and k - i < 128 and not (k + 1 < len(data) and data[k + 1] == data[k]):
+                k += 1
+            k = max(k, i + 1)
+            out += bytes([k - i - 1]) + data[i:k]
+            i = k
+    return bytes(out)
+
+
+@test
+def board_printer():
+    """The board as a Game Boy Printer (printer_glue.cpp): it takes the
+    adapter as its local host, a Game Boy prints a 160 x 144 picture over the
+    bit-banged pins, one band compressed, in two parts (no margin after the
+    first), and the board's decoder ends with the picture, shade for shade
+    through each part's palette."""
+    s = Sim()
+    try:
+        s.printer(0)
+        # the mode's status goes to its host, the board, not to USB
+        eventually(lambda: s.printer(2)['status'] == ST['GBPrinterModeActive'], 5, 'printer mode')
+        s.wait_event(EV_VCC, lambda b: b[:1] == b'\x01')
+        bands = [gb_band(i) for i in range(9)]
+        part1, part2 = bands[:4], bands[4:]
+        script = printer_packet(0x01) + printer_packet(0x0F)
+        for i, (data, _) in enumerate(part1):
+            script += printer_packet(0x04, rle(data), 1) if i == 2 else printer_packet(0x04, data)
+        script += printer_packet(0x04) + printer_packet(0x02, b'\x01\x10\xe4\x40')
+        s.gba(0x05, *script)
+        eventually(lambda: s.printer(2)['rows'] == 64, 30, 'the first part arrives')
+        v = s.printer(2)
+        check(v['pictures'] == 0, 'no margin after the first part: not finished')
+        script = printer_packet(0x01)
+        for data, _ in part2:
+            script += printer_packet(0x04, data)
+        script += printer_packet(0x04) + printer_packet(0x02, b'\x01\x03\x1b\x40')
+        s.gba(0x05, *script)
+        eventually(lambda: s.printer(2)['pictures'] == 1, 30, 'the picture finishes')
+        v = s.printer(2)
+        want = sum(sum(c for c in row) for _, px in part1 for row in px)
+        want += sum(sum((0x1B >> (2 * c)) & 3 for c in row) for _, px in part2 for row in px)
+        check(v['rows'] == 144, '160 x 144: %r' % v)
+        check(v['shades'] == want, 'every shade: %d, want %d' % (v['shades'], want))
+        check(v['lost'] == 0 and v['aborts'] == 0, 'nothing lost: %r' % v)
+        check(v['packets'] == 8 + 8, 'every packet: %r' % v)
+        s.printer(1)
+        eventually(lambda: s.state()['status'] == ST['GBSessionFinished'], 30, lambda: 'left: %r' % s.state())
+        s.wait_event(EV_VCC, lambda b: b[:1] == b'\x00')
     finally:
         s.close()
 
@@ -554,6 +739,15 @@ def trade_emu_party_index_bounded():
     exe = os.path.join(os.path.dirname(SIM), 'party_check')
     r = subprocess.run([exe], capture_output=True, text=True, timeout=30)
     check(r.returncode == 0, 'party_check: %s%s' % (r.stdout, r.stderr[-800:]))
+
+
+@test
+def link_core_quiet_once_disabled():
+    """A word the PHY finishes after link_changeMode(DISABLED) must not reach
+    the packet layer, whose section is gone (test_link_core.c, alone)."""
+    exe = os.path.join(os.path.dirname(SIM), 'link_core_check')
+    r = subprocess.run([exe], capture_output=True, text=True, timeout=30)
+    check(r.returncode == 0, 'link_core_check: %s%s' % (r.stdout, r.stderr[-800:]))
 
 
 # ---- gbagate extensions (src/gbx_proto.h) ------------------------------------------
@@ -690,6 +884,64 @@ def bridge_uart_companion():
         s.cmd(0x0F)
         d = s.wait_data(lambda d: d[0] == 0x0F, start=usb_before)
         check(tuple(d[1:4]) == (2, 2, 7), 'a USB host is answered on USB')
+    finally:
+        s.close()
+
+
+@test
+def bridge_companion_keeps_its_mode_while_usb_queries():
+    """PATCHES.md P11. A companion on the bridge UART (GB-Link-Switch-LDN)
+    runs the Wireless Adapter mode while a USB host -- the launcher -- polls
+    GetFirmwareInfo. Each query is answered on USB, and the mode's telemetry
+    and status keep going to the companion. Upstream sent everything to the
+    host that spoke last, so the companion lost the adapter's telemetry,
+    took it for gone after 3 s, and re-entered the mode under the game."""
+    s = Sim()
+    try:
+        s.bridge_send(0, [0x00, 0x07, 0x00])
+        eventually(lambda: any(ch == 2 and p == bytes([0x02, 0xFF]) for ch, p in s.bridge_frames), 3,
+                   'AwaitMode on the bridge')
+        usb_status, usb_data = len(s.status), len(s.data)
+        mark = len(s.bridge_frames)
+        for _ in range(6):
+            s.cmd(0x0F)
+            time.sleep(0.25)
+        replies = [d for d in s.data[usb_data:] if d[:1] == b'\x0f']
+        check(len(replies) == 6 and all(tuple(d[1:4]) == (2, 2, 7) for d in replies),
+              'every query answered on USB: %d' % len(replies))
+        tele = [p for ch, p in s.bridge_frames[mark:] if ch == 1 and p[:1] == b'\x0e']
+        check(len(tele) >= 2, 'the companion kept the telemetry: %d frames' % len(tele))
+        check(not any(d[:1] == b'\x0e' for d in s.data[usb_data:]), 'none of it went to USB')
+        check(len(s.status) == usb_status, 'nor any status word')
+        # A USB host that starts a mode does take the adapter over.
+        mark = len(s.status)
+        s.cmd(0x00, 0x07, 0x00)
+        s.wait_status(ST['AwaitMode'], start=mark)
+    finally:
+        s.close()
+
+
+@test
+def link_cancel_while_the_section_ends():
+    """PATCHES.md P13. A Cancel that lands while the link module tears its
+    section down (the first Cancel just ended it, or the link dropped) used
+    to reach the section through a pointer cleared only after the section
+    was gone: ASan, stack-use-after-scope in PacketLayer::cancel. Two Cancels
+    back to back, many times over, to land one in that window."""
+    s = Sim()
+    try:
+        rng = random.Random(1)
+        for _ in range(300):
+            mark = len(s.status)
+            s.cmd(0x00, 0x01)
+            s.wait_status(ST['AwaitMode'], start=mark)
+            s.cmd(0x10)                      # master, no GBA: waits for a handshake
+            time.sleep(0.002)
+            s.cmd(0x01)
+            time.sleep(rng.random() * 0.0006)
+            s.cmd(0x01)                      # while the section ends
+            s.wait_status(ST['LinkClosed'], 3, start=mark)
+        check(s.p.poll() is None, 'the adapter survived')
     finally:
         s.close()
 

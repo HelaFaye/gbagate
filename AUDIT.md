@@ -129,8 +129,12 @@ Each has a test that fails on upstream's file. Details are in
 
 ### Not gbagate's to fix
 
-- **Celio-Client and Celio-Server do not interoperate at their current heads.**
-  Since b057315 the client acks; the server does not answer.
+- ~~Celio-Client and Celio-Server do not interoperate at their current
+  heads.~~ **Withdrawn**: measured against `GB-Link/Celio-Server`, a fork that
+  stopped at 9f02d3e. `Celio-Link/Celio-Server` acks since 5ead974, and the
+  suite now pins it. The board's own client had been written to the fork's
+  protocol and would have had its data refused by the real server (single
+  `deviceData` objects; upstream takes batches); it now speaks upstream's.
 - **The launcher offers RP2040 firmware to a gbagate.** Its one-click update
   sends 0x43, which on an ESP32-S3 is the ROM bootloader, not BOOTSEL. Fixed by
   `backport/gblink-launcher` 0002.

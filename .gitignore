@@ -15,3 +15,4 @@ rom/*.map
 rom/*.bak
 rom/tester.sav
 __pycache__/
+.ccache/

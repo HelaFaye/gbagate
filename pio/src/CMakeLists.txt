@@ -23,6 +23,12 @@ if(PORTABLE STREQUAL "")
     message(FATAL_ERROR "no sources found in src/ -- wrong path?")
 endif()
 
+# Applets: applets/*.c, globbed for the same reason as src/. Which of them are
+# in the menu is applets/applets.def's business, not the build's: an applet
+# that is compiled but not listed is dropped by --gc-sections.
+file(GLOB APPLETS ${CMAKE_CURRENT_LIST_DIR}/../../applets/*.c)
+list(APPEND PORTABLE ${APPLETS})
+
 # The application layer. Not globbed: pio/src holds the CMakeLists and the
 # generated files too, so a glob here would sweep up things that are not
 # sources.
@@ -45,11 +51,25 @@ if(GBAGATE_QEMU)
                      ../../port/esp32s3/st7735_qemu.c
                      ../../port/esp32s3/input_qemu.c)
 else()
+    # The panel: the ST7735 on every board but the touch carrier, whose
+    # 320x240 ILI9341 (or ST7789) draws the same 128x128 UI scaled, through
+    # the same st7735_* calls, with the touch keys beside it.
+    if(GBAGATE_BOARD STREQUAL "carrier-touch")
+        set(PANEL ../../port/esp32s3/lcd_ili9341_esp32s3.c)
+    else()
+        set(PANEL ../../port/esp32s3/st7735_esp32s3.c)
+    endif()
     list(APPEND SRCS
-        ../../port/esp32s3/st7735_esp32s3.c
+        ${PANEL}
         ../../port/esp32s3/sd_esp32s3.c
         ../../port/esp32s3/gba_link_esp32s3.c
         ../../port/esp32s3/transport_esp32s3.c)
+    # Optional host link tunnel alongside the real board drivers. This is
+    # independent of GBAGATE_QEMU, which replaces the panel, input, SD and
+    # PHY drivers. This option replaces only the gate's selected link source.
+    if(GBAGATE_UART_BRIDGE)
+        list(APPEND SRCS ../../port/esp32s3/transport_uart.c)
+    endif()
     # Direct GPIO or an I2C expander, decided by the board rather than the
     # variant: a Supermini has too few pins for ten switches, a 44-pin devkit
     # has plenty. Only one is built, because both define input_active().
@@ -59,11 +79,16 @@ else()
     # are evaluated, so it looked for a file literally named
     # "port/esp32s3/buttons_esp32s3.c>" and no hardware image could configure.
     # A plain if() is evaluated when the list is built, which is what was meant.
-    if(BUTTONS_ON_EXPANDER)
+    # The touch carrier has no switches: its touch keys are the buttons.
+    if(GBAGATE_BOARD STREQUAL "carrier-touch")
+        list(APPEND SRCS ../../port/esp32s3/touch_xpt2046_esp32s3.c)
+    elseif(BUTTONS_ON_EXPANDER)
         list(APPEND SRCS ../../port/esp32s3/buttons_mcp.c)
     else()
         list(APPEND SRCS ../../port/esp32s3/buttons_esp32s3.c)
     endif()
+    # The input task: the encoder, the switches, and the events they make.
+    list(APPEND SRCS ../../port/esp32s3/input_esp32s3.c)
     # The GB-Link personality, in every hardware image (FEAT_GBLINK): GB-Link's
     # firmware from third_party/, the Zephyr shim it runs on, and this board's
     # USB, PHY and hardware glue. Listed rather than globbed for the same reason
@@ -114,6 +139,10 @@ else()
         ../../port/gblink/gblink_glue.cpp
         ../../port/gblink/gbagate_ext.cpp
         ../../port/gblink/peer_glue.cpp
+        ../../port/gblink/celio_glue.cpp
+        ../../port/gblink/printer_glue.cpp
+        ../../port/esp32s3/print_store_esp32s3.c
+        ../../port/esp32s3/net_esp32s3.c
         ../../port/esp32s3/peer_espnow_esp32s3.c
         ../../port/esp32s3/usb_gblink_esp32s3.c
         ../../port/esp32s3/gblink_hw_esp32s3.c
@@ -175,6 +204,9 @@ if(NOT GBAGATE_QEMU)
     # transport_esp32s3.c's ESP-NOW backend. Missing from the list since the
     # file was written, so it had never compiled.
     list(APPEND REQS esp_wifi esp_netif esp_event)
+    # net_esp32s3.c: the setup page and /gblink (esp_http_server), and the
+    # Celio socket (tcp_transport's WebSocket, TLS with mbedtls' bundle).
+    list(APPEND REQS esp_http_server tcp_transport esp-tls mbedtls nvs_flash)
 endif()
 
 # The chip reader's expander sits on I2C, and IDF 6.0 split that out too.

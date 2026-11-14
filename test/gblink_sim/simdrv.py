@@ -5,6 +5,8 @@ on background threads, so tests can wait for a status word or a data packet
 the way a host would.
 """
 import os
+import heapq
+import random
 import struct
 import subprocess
 import sys
@@ -16,6 +18,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 SIM = os.environ.get('GBLINK_SIM') or os.path.join(ROOT, 'build', 'gblink_sim', 'gblink_sim')
 
 EV_VCC, EV_LED, EV_REBOOT, EV_BOOTLOADER, EV_FLASH, EV_PHY, EV_WORD, EV_GB, EV_READY = range(1, 10)
+EV_STATE = 12
+EV_PRINTER = 14
 
 ST = dict(AwaitMode=0xFF02, HandshakeReceived=0xFF03, LinkConnected=0xFF05,
           LinkReconnecting=0xFF06, LinkClosed=0xFF07, DeviceReady=0xFF08,
@@ -97,9 +101,10 @@ def run_tests(name, tests, argv):
 
 
 class Sim:
-    def __init__(self, flash=None, serial=False):
+    def __init__(self, flash=None, serial=False, net=False, net_delay=0.0, net_jitter=0.0, env=None):
         args = [SIM] + ([flash] if flash else [])
-        self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  env=dict(os.environ, **env) if env else None)
         self.cv = threading.Condition()
         self._wlock = threading.Lock()
         self.status = []      # u16 words, in order
@@ -109,6 +114,18 @@ class Sim:
         self.bridge = bytearray()   # raw bytes on the bridge UART
         self.bridge_frames = []     # (channel, payload) parsed from them
         self.serial = serial
+        self.net = net         # host frames over the WiFi WebSocket ('N')
+        self.netbuf = bytearray()
+        self.net_bytes = 0     # bytes the board sent that way
+        # The WiFi host's WebSocket, slowed: seconds one way, plus up to
+        # jitter more, in order (it is TCP). Zero: a straight wire.
+        self.net_delay, self.net_jitter = net_delay, net_jitter
+        self._net_rng = random.Random(7)
+        self._net_last = [0.0, 0.0]   # up, down: no frame overtakes another
+        self._net_q = []
+        self._net_cv = threading.Condition()
+        if net_delay or net_jitter:
+            threading.Thread(target=self._net_pump, daemon=True).start()
         self.on_radio = None   # callable(bytes): datagrams the peer engine sends
         self.on_bridge = None  # callable(bytes): raw bridge UART bytes, as they come
         self.t = threading.Thread(target=self._reader, daemon=True)
@@ -138,6 +155,11 @@ class Sim:
                 elif kind == ord('C'):
                     self.cdc += body
                     self._parse_cdc()
+                elif kind == ord('N'):
+                    if self.net_delay or self.net_jitter:
+                        self._net_later(1, body)
+                    else:
+                        self._net_in(body)
                 elif kind == ord('B'):
                     if self.on_bridge:
                         self.on_bridge(body)
@@ -150,17 +172,51 @@ class Sim:
                     self.events.append((ep, body))
                 self.cv.notify_all()
 
-    def _parse_cdc(self):
+    def _net_in(self, body):
+        self.net_bytes += len(body)
+        self.netbuf += body
+        self._parse_stream(self.netbuf)
+
+    def _net_later(self, way, body):
+        """Queue body for one direction of the slowed WebSocket: way 0 up to
+        the board, 1 down from it."""
+        with self._net_cv:
+            due = time.time() + self.net_delay + self._net_rng.random() * self.net_jitter
+            due = max(due, self._net_last[way])
+            self._net_last[way] = due
+            heapq.heappush(self._net_q, (due, len(self._net_q), way, bytes(body)))
+            self._net_cv.notify()
+
+    def _net_pump(self):
         while True:
-            i = self.cdc.find(b'GB')
-            if i < 0 or len(self.cdc) < i + 5:
+            with self._net_cv:
+                while not self._net_q or self._net_q[0][0] > time.time():
+                    self._net_cv.wait(max(0.0005, self._net_q[0][0] - time.time()) if self._net_q else 0.1)
+                _, _, way, body = heapq.heappop(self._net_q)
+            if way == 0:
+                try:
+                    self._send('N', 0, body)
+                except (BrokenPipeError, ValueError, OSError):
+                    return
+            else:
+                with self.cv:
+                    self._net_in(body)
+                    self.cv.notify_all()
+
+    def _parse_cdc(self):
+        self._parse_stream(self.cdc)
+
+    def _parse_stream(self, buf):
+        while True:
+            i = buf.find(b'GB')
+            if i < 0 or len(buf) < i + 5:
                 return
-            ch = self.cdc[i + 2]
-            n = self.cdc[i + 3] | (self.cdc[i + 4] << 8)
-            if len(self.cdc) < i + 5 + n:
+            ch = buf[i + 2]
+            n = buf[i + 3] | (buf[i + 4] << 8)
+            if len(buf) < i + 5 + n:
                 return
-            body = bytes(self.cdc[i + 5:i + 5 + n])
-            del self.cdc[:i + 5 + n]
+            body = bytes(buf[i + 5:i + 5 + n])
+            del buf[:i + 5 + n]
             if ch == 2:
                 self.status.append(body[0] | (body[1] << 8))
             elif ch == 1:
@@ -208,17 +264,27 @@ class Sim:
     # -- host side -------------------------------------------------------
     def cmd(self, *b):
         body = bytes(b[0]) if len(b) == 1 and not isinstance(b[0], int) else bytes(b)
-        if self.serial:
+        if self.net:
+            self._net_send(b'GB\x00' + struct.pack('<H', len(body)) + body)
+        elif self.serial:
             self._send('C', 0, b'GB\x00' + struct.pack('<H', len(body)) + body)
         else:
             self._send('U', 0x01, body)
 
     def write_data(self, body):
         body = bytes(body)
-        if self.serial:
+        if self.net:
+            self._net_send(b'GB\x01' + struct.pack('<H', len(body)) + body)
+        elif self.serial:
             self._send('C', 0, b'GB\x01' + struct.pack('<H', len(body)) + body)
         else:
             self._send('U', 0x02, body)
+
+    def _net_send(self, framed):
+        if self.net_delay or self.net_jitter:
+            self._net_later(0, framed)
+        else:
+            self._send('N', 0, framed)
 
     def raw_cdc(self, body):
         self._send('C', 0, bytes(body))
@@ -231,6 +297,30 @@ class Sim:
 
     def gba(self, *b):
         self._send('G', 0, bytes(b))
+
+    def state(self, timeout=3.0):
+        """gblink_state(), what the device's own Link: USB page shows."""
+        with self.cv:
+            mark = len(self.events)
+        self._send('I', 0)
+        b = self.wait_event(EV_STATE, timeout=timeout, start=mark)
+        conf, mode, owner, status, statuses = struct.unpack('<BbBHI', b[:9])
+        frames = struct.unpack('<5I', b[9:29])
+        return dict(configured=bool(conf), mode=mode, owner=owner, status=status,
+                    statuses=statuses, frames=frames)
+
+    def printer(self, ep, timeout=3.0):
+        """The board's own printer (printer_glue.cpp): ep 0 start, 1 stop,
+        2 the decoder's view of what it has sent (src/gbprinter.h)."""
+        with self.cv:
+            mark = len(self.events)
+        self._send('p', ep)
+        if ep != 2:
+            return None
+        b = self.wait_event(EV_PRINTER, timeout=timeout, start=mark)
+        packets, rows, pictures, aborts, lost, status, shades = struct.unpack('<5IHI', b[:26])
+        return dict(packets=packets, rows=rows, pictures=pictures, aborts=aborts, lost=lost,
+                    status=status, shades=shades)
 
     # -- waiting ---------------------------------------------------------
     def _wait(self, pred, timeout):

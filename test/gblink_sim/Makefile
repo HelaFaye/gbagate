@@ -23,9 +23,11 @@ VSRC_CPP := $(V)/layers/packetLayer.cpp $(V)/layers/transport.cpp \
             $(wildcard $(V)/sections/*.cpp) $(wildcard $(V)/module/*.cpp) \
             $(V)/persist.cpp
 VSRC_C   := $(wildcard $(V)/payloads/*.c) $(V)/linkWrongPinWatchdog.c
-PSRC_CPP := $(P)/serial_layer.cpp $(P)/hardware_port.cpp $(P)/gblink_glue.cpp $(P)/gbagate_ext.cpp $(P)/peer_glue.cpp
-PSRC_C   := $(P)/zshim_common.c $(P)/link_layer_core.c $(P)/rfu_link_core.c $(ROOT)/src/gblink_frame.c $(ROOT)/src/chipgate.c $(ROOT)/src/gbl_peer.c
-SSRC_C   := zshim_posix.c sim_port.c sim_gba.c sim_rfu.c sim_main.c
+PSRC_CPP := $(P)/serial_layer.cpp $(P)/hardware_port.cpp $(P)/gblink_glue.cpp $(P)/gbagate_ext.cpp $(P)/peer_glue.cpp $(P)/celio_glue.cpp $(P)/printer_glue.cpp
+PSRC_C   := $(P)/zshim_common.c $(P)/link_layer_core.c $(P)/rfu_link_core.c $(ROOT)/src/gblink_frame.c $(ROOT)/src/chipgate.c $(ROOT)/src/gbl_peer.c \
+            $(ROOT)/src/celio.c $(ROOT)/src/json_lite.c $(ROOT)/src/gbprinter.c \
+            $(ROOT)/src/mp_online.c $(ROOT)/src/mp_link.c $(ROOT)/src/mp_relay.c $(ROOT)/src/mp_bus.c
+SSRC_C   := zshim_posix.c sim_port.c sim_gba.c sim_rfu.c sim_rfu_wire.c sim_main.c sim_mp4.c
 SSRC_CPP := rfu_game.cpp
 
 # pret's librfu, when fetch_librfu.sh has put it here: the wireless adapter
@@ -39,7 +41,7 @@ LIBRFU_SRC := $(OUT)/librfu/librfu_stwi.cpp $(OUT)/librfu/librfu_intr.cpp $(OUT)
 GAME_FLAGS += -DSIM_LIBRFU -I$(LIBRFU)/include -D__STDC_VERSION__=202311L
 endif
 
-all: $(OUT)/gblink_sim $(OUT)/usbdesc_dump $(OUT)/party_check
+all: $(OUT)/gblink_sim $(OUT)/usbdesc_dump $(OUT)/party_check $(OUT)/link_core_check
 
 # The flags the simulator was built with: a change (SAN, CFLAGS) rebuilds it,
 # so a sanitized build is never reused as a plain one or the other way round.
@@ -48,6 +50,11 @@ $(OUT)/.flags: FORCE
 	@mkdir -p $(OUT)
 	@[ "$$(cat $@ 2>/dev/null)" = '$(FLAGS_NOW)' ] || printf '%s' '$(FLAGS_NOW)' > $@
 FORCE:
+
+# The link layer core alone, always sanitized (test_link_core.c).
+$(OUT)/link_core_check: test_link_core.c $(P)/link_layer_core.c $(P)/zshim_common.c zshim_posix.c $(wildcard $(P)/*.h)
+	@mkdir -p $(OUT)
+	@$(CC) -std=gnu11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all $(WARN) $(INC) $(DEFS) -o $@ test_link_core.c $(P)/link_layer_core.c $(P)/zshim_common.c zshim_posix.c -lpthread
 
 # The trade emulator's party store alone, always sanitized (test_party.cpp).
 $(OUT)/party_check: test_party.cpp $(V)/payloads/pokemon.cpp $(V)/payloads/pokemon.hpp

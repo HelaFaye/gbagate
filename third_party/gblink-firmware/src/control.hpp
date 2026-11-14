@@ -64,6 +64,7 @@ public:
         // must not clobber it below. The variant travels with the mode.
         const Mode mode = m_mode;
         const uint8_t modeVariant = m_modeVariant;
+        Transport::noteMode(static_cast<int>(mode));   // gbagate (PATCHES.md P14)
         sendLinkStatus(LinkStatus::DeviceReady);
 
         switch (mode)
@@ -111,6 +112,15 @@ public:
 
             case Mode::gbPrinter:
             {
+                // gbagate (PATCHES.md P16): a printer only ever talks to a Game
+                // Boy game, whose link is 5 V; without a level shifter on the
+                // port the mode is not offered. Refused at once, the same way
+                // a finished session ends.
+                if (!(gbagate_ext_caps() & GBX_CAP_GB_5V))
+                {
+                    sendLinkStatus(LinkStatus::GBSessionFinished);
+                    break;
+                }
                 GBModule gbModule;
                 m_currentModule = &gbModule;
                 gbModule.executePrinterMode();  // Sets purple LED internally
@@ -213,6 +223,7 @@ public:
         }
 
         m_currentModule = nullptr;
+        Transport::noteMode(-1);   // gbagate (PATCHES.md P14)
         applyLedForSlot(LED_SLOT_IDLE); // green = connected, no active mode
     }
 
@@ -273,10 +284,13 @@ private:
             // for older clients that send only [command, mode]).
             case ControlCommand::SetMode:
                 if (data.size() < 2) return;
+                Transport::claimForMode();   // gbagate (PATCHES.md P11)
                 return callSetMode(static_cast<Mode>(data[1]),
                                    data.size() >= 3 ? data[2] : 0);
             case ControlCommand::Cancel: return callCancel();
-            case ControlCommand::EnterGBPrinter: return callSetMode(Mode::gbPrinter);
+            case ControlCommand::EnterGBPrinter:
+                Transport::claimForMode();   // gbagate (PATCHES.md P11)
+                return callSetMode(Mode::gbPrinter);
             case ControlCommand::GetFirmwareInfo: return callGetFirmwareInfo();
             default: return;
         }
@@ -340,7 +354,7 @@ private:
                 for (unsigned i = 0; i < 5; i++)
                     for (unsigned b = 0; b < 4; b++)
                         resp[1 + i * 4 + b] = static_cast<uint8_t>(v[i] >> (8 * b));
-                Transport::sendData(std::span<const uint8_t>(resp, sizeof(resp)));
+                Transport::sendReply(std::span<const uint8_t>(resp, sizeof(resp)));
                 break;
             }
             case HardwareCommand::GetCableType:
@@ -349,7 +363,7 @@ private:
                 // already in link mode drives SO low, which would poison a
                 // re-sample); the override command changes the path instead.
                 uint8_t resp[2] = { 0x4a, link_getDetectedCableType() };
-                Transport::sendData(std::span<const uint8_t>(resp, sizeof(resp)));
+                Transport::sendReply(std::span<const uint8_t>(resp, sizeof(resp)));
                 break;
             }
             case HardwareCommand::SetCableSelection:
@@ -376,7 +390,7 @@ private:
         for (uint8_t slot = 0; slot < LED_SLOT_COUNT; slot++) {
             getLedColor(slot, &info[2 + slot * 3]);
         }
-        Transport::sendData(std::span<const uint8_t>(info, sizeof(info)));
+        Transport::sendReply(std::span<const uint8_t>(info, sizeof(info)));
     }
 
     //-////////////////////////////////////////////////////////////////////////////////////////////////////////-//
@@ -415,7 +429,7 @@ private:
             // Byte 5: persisted cable selection (CABLE_*).
             getCableSelection()
         };
-        Transport::sendData(std::span<const uint8_t>(info, sizeof(info)));
+        Transport::sendReply(std::span<const uint8_t>(info, sizeof(info)));
     }
 
     //-////////////////////////////////////////////////////////////////////////////////////////////////////////-//

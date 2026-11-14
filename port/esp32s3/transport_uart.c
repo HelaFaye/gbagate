@@ -31,8 +31,14 @@ static const char *TAG = "uart_tp";
  * gives UART1 its own socket.
  */
 #define TP_UART      UART_NUM_1
-#define TP_TX_PIN    17
-#define TP_RX_PIN    18
+#ifndef GBAGATE_UART_TX_GPIO
+#define GBAGATE_UART_TX_GPIO 17
+#endif
+#ifndef GBAGATE_UART_RX_GPIO
+#define GBAGATE_UART_RX_GPIO 18
+#endif
+#define TP_TX_PIN    GBAGATE_UART_TX_GPIO
+#define TP_RX_PIN    GBAGATE_UART_RX_GPIO
 #define TP_BAUD      921600
 #define TP_BUF       2048
 

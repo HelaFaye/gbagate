@@ -230,15 +230,15 @@ static void test_move_mode(void) {
 static void test_shell(void) {
     printf("mode shell\n");
 
-    /* A bare board: display and link port, no USB, no WiFi, no reader. */
+    /* A bare board: display and the link port with its pins; no USB, no
+     * WiFi, no reader, no IR emitter, no 5 V shifter. */
     ui_shell_t s;
-    shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
-    /* Battle Chip, Send Program, Self Test, Settings, Diagnostics -- the two
-     * needing USB and WiFi are absent on this board. */
-    /* Battle Chip, Send Program, Infrared, Self Test, Settings, Diagnostics.
-     * The two needing USB and WiFi are absent on this board. */
-    check("modes offered", shell_item_count(&s), 6);
-    check_str("first is the gate", shell_label_at(&s, 0), "Battle Chip");
+    shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS);
+    /* Send Program, Self Test, Settings, Diagnostics. Not Infrared or GB
+     * Printer, whose parts it lacks; Link needs USB or WiFi; Battle Chip is
+     * an applet (applets/), which the firmware adds after shell_init. */
+    check("modes offered", shell_item_count(&s), 4);
+    check_str("first is Send Program", shell_label_at(&s, 0), "Send Program");
 
     for (uint8_t i = 0; i < shell_item_count(&s); i++) {
         if (strcmp(shell_label_at(&s, i), "Link: USB") == 0) {
@@ -258,18 +258,23 @@ static void test_shell(void) {
     check("diagnostics always present", diag, 1);
 
     /* Full board. */
-    shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB |
-                   HW_CAP_WIFI | HW_CAP_CHIP_READER);
-    check("everything offered", shell_item_count(&s), APP_MODE_COUNT);
+    shell_init(&s, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB |
+                   HW_CAP_USB_GBLINK | HW_CAP_WIFI | HW_CAP_CHIP_READER | HW_CAP_IR |
+                   HW_CAP_GB_5V);
+    /* The three link modes share one Link entry. */
+    check("everything offered", shell_item_count(&s), APP_MODE_COUNT - 2);
 
     /* Wrapping, for a rotary encoder. */
     shell_move(&s, -1);
-    check("wraps backwards", shell_cursor(&s), APP_MODE_COUNT - 1);
+    check("wraps backwards", shell_cursor(&s), APP_MODE_COUNT - 3);
     shell_move(&s, 1);
     check("wraps forwards", shell_cursor(&s), 0);
 
-    /* Gate mode needs a game, so selecting it advances rather than starting. */
-    check("gate does not start yet", shell_select(&s), 0);
+    /* Self Test needs a game, so selecting it advances rather than starting. */
+    while (strcmp(shell_current_label(&s), "Self Test") != 0) {
+        shell_move(&s, 1);
+    }
+    check("self test does not start yet", shell_select(&s), 0);
     check("on the game screen", s.screen, SHELL_SCREEN_GAMES);
     check("four games", shell_item_count(&s), CG_GAME_COUNT);
 

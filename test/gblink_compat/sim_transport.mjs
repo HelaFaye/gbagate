@@ -14,9 +14,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SIM = path.resolve(HERE, '../../build/gblink_sim/gblink_sim');
 
 export class SimDevice extends EventEmitter {
-  constructor({ flash } = {}) {
+  constructor({ flash, env } = {}) {
     super();
-    this.proc = spawn(SIM, flash ? [flash] : [], { stdio: ['pipe', 'pipe', 'inherit'] });
+    this.proc = spawn(SIM, flash ? [flash] : [], { stdio: ['pipe', 'pipe', 'inherit'],
+                                                  env: env ? { ...process.env, ...env } : process.env });
+    // A write after the simulator exits fails asynchronously (EPIPE), which a
+    // try/catch around write() cannot see; without a listener it kills node.
+    this.proc.stdin.on('error', () => {});
     this.buf = Buffer.alloc(0);
     this.words = [];
     this.proc.stdout.on('data', (d) => this.onData(d));
@@ -32,6 +36,7 @@ export class SimDevice extends EventEmitter {
       const ep = this.buf[1];
       const body = Buffer.from(this.buf.subarray(4, 4 + n));
       this.buf = this.buf.subarray(4 + n);
+      this.emit('record', kind, ep, body);
       if (kind === 'U') this.emit('usb', ep, body);
       else if (kind === 'E') {
         if (ep === 9) this.emit('ready');

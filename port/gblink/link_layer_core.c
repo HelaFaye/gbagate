@@ -57,11 +57,16 @@ void link_setTransiveDoneCallback(TransiveDoneHandler cb, void *ud) {
     unsigned k = irq_lock(); s_done_cb = cb; s_done_ud = ud; irq_unlock(k);
 }
 
+/* A driver can finish a word it started before link_changeMode(DISABLED) (it
+ * read the mode, then the mode changed). Its callbacks belong to a packet
+ * layer that may be gone by then -- each UsbSection's lives on the module's
+ * stack -- so once the mode is DISABLED, under the lock that changes it,
+ * nothing reaches them. (Upstream's PIO stops with the state machine.) */
 uint16_t gbl_phy_next_tx(uint32_t *gap_loops) {
     /* Upstream's placeholder when nothing is registered: 0xDEAD, 50000 loops. */
     struct NextTransmit next = { 0xDEAD, 50000 };
     unsigned k = irq_lock();
-    if (s_tx_cb) next = s_tx_cb(s_tx_ud);
+    if (s_tx_cb && s_mode != DISABLED) next = s_tx_cb(s_tx_ud);
     s_last_tx = next.value;
     irq_unlock(k);
     if (gap_loops) *gap_loops = next.timingUs;
@@ -71,8 +76,10 @@ uint16_t gbl_phy_next_tx(uint32_t *gap_loops) {
 void gbl_phy_word_done(uint16_t rx) {
     unsigned k = irq_lock();
     s_rx_words++;
-    if (s_rx_cb)   s_rx_cb(rx, s_rx_ud);
-    if (s_done_cb) s_done_cb(rx, s_last_tx, s_done_ud);
+    if (s_mode != DISABLED) {
+        if (s_rx_cb)   s_rx_cb(rx, s_rx_ud);
+        if (s_done_cb) s_done_cb(rx, s_last_tx, s_done_ud);
+    }
     irq_unlock(k);
 }
 

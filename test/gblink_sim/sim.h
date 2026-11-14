@@ -20,11 +20,23 @@ enum {
                                 link mode clocks it; the printer's GB does) */
     SIM_EV_READY       = 9,  /* the firmware thread is running          */
     SIM_EV_PEER_STATUS = 10, /* [lo hi] status seen by the wireless cable */
-    SIM_EV_RFU         = 11  /* the librfu game: see rfu_game.c           */
+    SIM_EV_RFU         = 11, /* the librfu game: see rfu_game.c           */
+    SIM_EV_STATE       = 12, /* gblink_state(), on an 'I' record: [configured,
+                              * mode i8, owner, status lo hi, u32 statuses,
+                              * u32 frames x4]                              */
+    SIM_EV_CELIO       = 13, /* gblink_celio_view(), on a 'K' record: [state,
+                              * status lo hi, u32 up down lost reconnects
+                              * resent given_up max_rtt_ms,
+                              * session NUL, error NUL]                     */
+    SIM_EV_PRINTER     = 14, /* the board's printer, on a 'p' ep 2 record:
+                              * [u32 packets rows pictures aborts lost,
+                              * u16 status, u32 sum of the shades]          */
+    SIM_EV_MP4         = 15  /* the Multi-Play bus, on an 'm' record (sim_mp4.c) */
 };
 
 void sim_emit(char kind, uint8_t ep, const uint8_t *data, size_t len);
 void sim_event(uint8_t code, const void *data, size_t len);
+void sim_mp4_report(void);
 void sim_storage_init(const char *path);
 
 /* sim_gba.c */

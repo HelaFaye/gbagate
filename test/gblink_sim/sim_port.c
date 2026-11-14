@@ -63,6 +63,12 @@ bool gblink_bridge_write(const uint8_t *data, size_t len) {
     return true;
 }
 
+/* The WiFi host's WebSocket stream (PATCHES.md P15): raw bytes, 'N'. */
+bool gblink_net_write(const uint8_t *data, size_t len) {
+    sim_emit('N', 0, data, len);
+    return true;
+}
+
 /* ---- hardware ------------------------------------------------------------- */
 
 static uint8_t s_led[4];
@@ -135,7 +141,13 @@ int zshim_storage_erase(size_t off, size_t len) {
 
 #include "gbx_proto.h"
 
-uint32_t gbagate_ext_caps(void)  { return GBX_CAP_SD_ALT | GBX_CAP_RGB_LED; }
+/* The simulator is a board with GB-Link's DIY wiring, 5 V shifter included,
+ * so the printer tests run; GBLINK_SIM_NO_GB_5V=1 makes it one without, as
+ * every gbagate board is (PATCHES.md P16). */
+uint32_t gbagate_ext_caps(void) {
+    const char *no5v = getenv("GBLINK_SIM_NO_GB_5V");
+    return GBX_CAP_SD_ALT | GBX_CAP_RGB_LED | (no5v && *no5v == '1' ? 0 : GBX_CAP_GB_5V);
+}
 uint8_t  gbagate_ext_board(void) { return GBX_BOARD_HOST; }
 uint8_t  gbagate_ext_image(void) { return 1; /* gate */ }
 

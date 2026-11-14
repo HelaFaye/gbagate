@@ -72,6 +72,9 @@ typedef enum {
  * transfer, since Normal mode is full duplex.
  */
 typedef uint32_t (*mb_xfer_fn)(void *ctx, uint32_t word);
+/* Wait up to timeout_us for the GBA's SO to go low ("ready", GBATEK SIO
+ * Normal Mode). True if it did. Used by the memory agent's client. */
+typedef bool (*mb_ready_fn)(void *ctx, uint32_t timeout_us);
 
 /* Optional progress hook: bytes sent, total. Safe to leave NULL. */
 typedef void (*mb_progress_fn)(void *ctx, uint32_t sent, uint32_t total);

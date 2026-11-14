@@ -49,6 +49,8 @@ static wl_handle_t s_wl = WL_INVALID_HANDLE;
 static volatile bool s_host_owns;   /* true while the PC has the volume */
 static volatile bool s_dirty;       /* host wrote something; rescan needed */
 
+void msc_on_app_mounted(void);
+
 /* ---- ownership -------------------------------------------------------- */
 
 bool msc_storage_available(void) {
@@ -98,10 +100,40 @@ static void msc_on_mount_changed(tinyusb_msc_event_t *event) {
         s_host_owns = false;
         s_dirty     = true; /* assume the host changed something */
         ESP_LOGI(TAG, "volume returned to the device");
+        msc_on_app_mounted();   /* from TinyUSB's task: the hook only flags it */
     } else {
         s_host_owns = true;
         ESP_LOGI(TAG, "volume handed to the host");
     }
+}
+
+/*
+ * The volume has just become the firmware's: at boot, or when a PC handed it
+ * back. net_esp32s3.c reads wifi.txt then. Weak, for images without a network.
+ */
+__attribute__((weak)) void msc_on_app_mounted(void) {}
+
+/* A small text file from the volume's root, whole, NUL-terminated. False if
+ * the volume is the host's, the file is absent, or it is larger than cap-1. */
+bool msc_read_text(const char *name, char *buf, size_t cap, size_t *len) {
+    if (cap == 0 || !msc_storage_available()) {
+        return false;
+    }
+    char path[96];
+    snprintf(path, sizeof path, MOUNT_POINT "/%s", name);
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return false;
+    }
+    size_t n = fread(buf, 1, cap - 1, f);
+    bool whole = n < cap - 1 || fgetc(f) == EOF;
+    fclose(f);
+    if (!whole) {
+        return false;
+    }
+    buf[n] = '\0';
+    if (len) *len = n;
+    return true;
 }
 
 /* ---- setup ------------------------------------------------------------ */
@@ -153,6 +185,7 @@ esp_err_t msc_storage_init(void) {
     s_host_owns = false;
     s_dirty     = true;
     ESP_LOGI(TAG, "storage ready at %s", MOUNT_POINT);
+    msc_on_app_mounted();
     return ESP_OK;
 }
 
@@ -305,6 +338,7 @@ esp_err_t msc_claim_from_host(void) {
         s_host_owns = false;
         s_dirty     = true;
         ESP_LOGI(TAG, "volume reclaimed");
+        msc_on_app_mounted();
     }
     return err;
 }

@@ -358,7 +358,7 @@ uint16_t chipview_held(const chipview_t *v) {
 const char *chipview_tab_name(chip_tab_t tab) {
     switch (tab) {
     case CHIP_TAB_FAVORITES: return "*";
-    case CHIP_TAB_STANDARD:  return "Standrd";
+    case CHIP_TAB_STANDARD:  return "Standard";
     case CHIP_TAB_MEGA:      return "Mega";
     case CHIP_TAB_GIGA:      return "Giga";
     case CHIP_TAB_DARK:      return "Dark";

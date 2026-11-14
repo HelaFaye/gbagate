@@ -276,3 +276,22 @@ const char *rom_status_name(rom_status_t s) {
     default:             return "?";
     }
 }
+
+bool rom_borrow_logo(uint8_t *image, size_t image_len, const uint8_t *donor, size_t donor_len) {
+    if (!image || !donor || image_len < 0xC0 || donor_len < 0xC0) {
+        return false;
+    }
+    bool blank = true;
+    for (size_t i = ROM_LOGO_START; i < ROM_LOGO_START + ROM_LOGO_LEN; i++) {
+        if (donor[i] != 0x00 && donor[i] != 0xFF) {
+            blank = false;
+            break;
+        }
+    }
+    if (blank) {
+        return false;
+    }
+    memcpy(image + ROM_LOGO_START, donor + ROM_LOGO_START, ROM_LOGO_LEN);
+    image[0xBD] = rom_header_checksum(image);
+    return true;
+}

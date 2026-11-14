@@ -1,0 +1,207 @@
+From 6345a5fd2a590512b47f405521c2c3359006e6dc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 01:14:55 +0000
+Subject: [PATCH] Keep a mode's traffic with the host that started it
+
+Every send went to whichever transport last delivered a frame. With a
+companion MCU running a mode over the bridge UART (GB-Link-Switch-LDN
+runs the Wireless Adapter mode for a Switch), a USB host that only
+queries the adapter -- the launcher polling GetFirmwareInfo -- drew
+everything after it to USB: the adapter's 0x0E telemetry, status
+words, data. The companion heard nothing, took the adapter for gone
+after its 3 s timeout, and sent SetMode again, which resets the
+adapter under the game.
+
+Transport now keeps two: the host whose frame is being handled
+(setActive, as before), which replies go to, and the host whose
+SetMode or EnterGBPrinter started the running mode (claimForMode),
+which the mode's sendStatus/sendData go to. The four command replies
+in Control (GetFirmwareInfo, GetLedConfig, GetCableType,
+GetRfuIsrStats) use the new sendReply. A host that starts a mode
+still takes the adapter over. With one host, as before, the two are
+always the same transport, so nothing changes; the USB and serial
+layers are untouched. The printer's WebUSB flush test asks the owner.
+
+Checked in gbagate's simulator, with this tree's firmware and a
+companion on the bridge UART in mode 0x07: six GetFirmwareInfo
+queries over USB are each answered on USB while the telemetry keeps
+reaching the companion; before this change the telemetry moved to
+USB at the first query. The rest of the suite is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
+---
+ src/control.hpp          | 13 ++++++++-----
+ src/layers/transport.cpp | 37 ++++++++++++++++++++++++-------------
+ src/layers/transport.hpp | 13 ++++++++++++-
+ src/module/gb.cpp        |  4 ++--
+ 4 files changed, 46 insertions(+), 21 deletions(-)
+
+diff --git a/src/control.hpp b/src/control.hpp
+index 0ee8f0e..22be305 100644
+--- a/src/control.hpp
++++ b/src/control.hpp
+@@ -265,10 +265,13 @@ private:
+             // for older clients that send only [command, mode]).
+             case ControlCommand::SetMode:
+                 if (data.size() < 2) return;
++                Transport::claimForMode();
+                 return callSetMode(static_cast<Mode>(data[1]),
+                                    data.size() >= 3 ? data[2] : 0);
+             case ControlCommand::Cancel: return callCancel();
+-            case ControlCommand::EnterGBPrinter: return callSetMode(Mode::gbPrinter);
++            case ControlCommand::EnterGBPrinter:
++                Transport::claimForMode();
++                return callSetMode(Mode::gbPrinter);
+             case ControlCommand::GetFirmwareInfo: return callGetFirmwareInfo();
+             default: return;
+         }
+@@ -332,7 +335,7 @@ private:
+                 for (unsigned i = 0; i < 5; i++)
+                     for (unsigned b = 0; b < 4; b++)
+                         resp[1 + i * 4 + b] = static_cast<uint8_t>(v[i] >> (8 * b));
+-                Transport::sendData(std::span<const uint8_t>(resp, sizeof(resp)));
++                Transport::sendReply(std::span<const uint8_t>(resp, sizeof(resp)));
+                 break;
+             }
+             case HardwareCommand::GetCableType:
+@@ -341,7 +344,7 @@ private:
+                 // already in link mode drives SO low, which would poison a
+                 // re-sample); the override command changes the path instead.
+                 uint8_t resp[2] = { 0x4a, link_getDetectedCableType() };
+-                Transport::sendData(std::span<const uint8_t>(resp, sizeof(resp)));
++                Transport::sendReply(std::span<const uint8_t>(resp, sizeof(resp)));
+                 break;
+             }
+             case HardwareCommand::SetCableSelection:
+@@ -365,7 +368,7 @@ private:
+         for (uint8_t slot = 0; slot < LED_SLOT_COUNT; slot++) {
+             getLedColor(slot, &info[2 + slot * 3]);
+         }
+-        Transport::sendData(std::span<const uint8_t>(info, sizeof(info)));
++        Transport::sendReply(std::span<const uint8_t>(info, sizeof(info)));
+     }
+ 
+     //-////////////////////////////////////////////////////////////////////////////////////////////////////////-//
+@@ -404,7 +407,7 @@ private:
+             // Byte 5: persisted cable selection (CABLE_*).
+             getCableSelection()
+         };
+-        Transport::sendData(std::span<const uint8_t>(info, sizeof(info)));
++        Transport::sendReply(std::span<const uint8_t>(info, sizeof(info)));
+     }
+ 
+     //-////////////////////////////////////////////////////////////////////////////////////////////////////////-//
+diff --git a/src/layers/transport.cpp b/src/layers/transport.cpp
+index d344f5e..4cec311 100644
+--- a/src/layers/transport.cpp
++++ b/src/layers/transport.cpp
+@@ -7,12 +7,33 @@ namespace Transport
+ {
+     namespace
+     {
++        // The host whose frame is being handled: replies go back to it.
+         Id g_active = Id::Usb;
++        // The host whose SetMode started the running mode: the mode's status
++        // and data go to it, whichever host spoke since.
++        Id g_owner = Id::Usb;
++
++        bool sendStatusTo(Id id, std::span<const uint8_t, 2> data)
++        {
++            if (id == Id::Serial) return SerialLayer::getInstance().sendStatus(data);
++            if (id == Id::BridgeUart) return SerialLayer::getBridgeInstance().sendStatus(data);
++            return UsbLayer::getInstance().sendStatus(data);
++        }
++
++        bool sendDataTo(Id id, std::span<const uint8_t> data)
++        {
++            if (id == Id::Serial) return SerialLayer::getInstance().sendData(data);
++            if (id == Id::BridgeUart) return SerialLayer::getBridgeInstance().sendData(data);
++            return UsbLayer::getInstance().sendData(data);
++        }
+     }
+ 
+     void setActive(Id id) { g_active = id; }
+     Id active() { return g_active; }
+ 
++    void claimForMode() { g_owner = g_active; }
++    Id owner() { return g_owner; }
++
+     void registerCommandHandler(ReceiveHandler handler, void* userData)
+     {
+         UsbLayer::getInstance().setReceiveCommandHandler(handler, userData);
+@@ -27,17 +48,7 @@ namespace Transport
+         SerialLayer::getBridgeInstance().setReceiveDataHandler(handler, userData);
+     }
+ 
+-    bool sendStatus(std::span<const uint8_t, 2> data)
+-    {
+-        if (g_active == Id::Serial) return SerialLayer::getInstance().sendStatus(data);
+-        if (g_active == Id::BridgeUart) return SerialLayer::getBridgeInstance().sendStatus(data);
+-        return UsbLayer::getInstance().sendStatus(data);
+-    }
+-
+-    bool sendData(std::span<const uint8_t> data)
+-    {
+-        if (g_active == Id::Serial) return SerialLayer::getInstance().sendData(data);
+-        if (g_active == Id::BridgeUart) return SerialLayer::getBridgeInstance().sendData(data);
+-        return UsbLayer::getInstance().sendData(data);
+-    }
++    bool sendStatus(std::span<const uint8_t, 2> data) { return sendStatusTo(g_owner, data); }
++    bool sendData(std::span<const uint8_t> data) { return sendDataTo(g_owner, data); }
++    bool sendReply(std::span<const uint8_t> data) { return sendDataTo(g_active, data); }
+ }
+diff --git a/src/layers/transport.hpp b/src/layers/transport.hpp
+index 84b89f6..7d75723 100644
+--- a/src/layers/transport.hpp
++++ b/src/layers/transport.hpp
+@@ -18,12 +18,23 @@ namespace Transport
+     void setActive(Id id);
+     Id active();
+ 
++    // The host whose frame is being handled (setActive) starts a mode: the
++    // mode's status and data now go to it, until another host starts one.
++    // So a second host only querying the adapter -- a launcher polling
++    // GetFirmwareInfo while a companion MCU runs it over the bridge UART --
++    // neither takes the mode's traffic nor gets it.
++    void claimForMode();
++    Id owner();
++
+     // Register the same handler on every transport so the device accepts host
+     // commands/data regardless of which one is open.
+     void registerCommandHandler(ReceiveHandler handler, void* userData);
+     void registerDataHandler(ReceiveHandler handler, void* userData);
+ 
+-    // Route a send to whichever transport the host last spoke on.
++    // A running mode's status and data: to the host that started it.
+     bool sendStatus(std::span<const uint8_t, 2> data);
+     bool sendData(std::span<const uint8_t> data);
++
++    // The answer to the command being handled: to the host that sent it.
++    bool sendReply(std::span<const uint8_t> data);
+ }
+diff --git a/src/module/gb.cpp b/src/module/gb.cpp
+index 3feaa39..1a9329b 100644
+--- a/src/module/gb.cpp
++++ b/src/module/gb.cpp
+@@ -318,7 +318,7 @@ void GBModule::printerModeLoop()
+         // USB streams every 64 bytes as before. WebSerial accumulates the
+         // whole image and flushes once at PRINT to keep IRQs off the
+         // bit-bang loop during clocking.
+-        if (usbBufPos >= 64 && Transport::active() == Transport::Id::Usb) {
++        if (usbBufPos >= 64 && Transport::owner() == Transport::Id::Usb) {
+             flushUsbBuf();
+         }
+     };
+@@ -481,7 +481,7 @@ void GBModule::printerModeLoop()
+                 if (command == 0x02) {  // PRINT command
+                     bufferUsbByte(0xFE);  // Print marker
+                     flushUsbBuf();        // Always flush at PRINT (both transports)
+-                } else if (Transport::active() == Transport::Id::Usb) {
++                } else if (Transport::owner() == Transport::Id::Usb) {
+                     // WebUSB: original behaviour, flush at every protocol packet.
+                     flushUsbBuf();
+                 }
+-- 
+2.43.0
+

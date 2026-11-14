@@ -1,5 +1,6 @@
 
 #include <zephyr/kernel.h>
+#include <zephyr/irq.h>
 
 #include "../sections/rfuProtocolSection.hpp"
 #include "moduleInterface.hpp"
@@ -23,8 +24,10 @@ public:
 
     void cancel() override
     {
+        const unsigned int key = irq_lock();   // gbagate (PATCHES.md P13): the section cannot go meanwhile
         m_cancel = true;
         if (m_currentSection) m_currentSection->cancel();
+        irq_unlock(key);
     }
 
     bool canHandle(uint8_t command) override { return (command & 0xF0) == 0x10; }

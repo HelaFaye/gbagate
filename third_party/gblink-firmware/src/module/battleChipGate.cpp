@@ -12,18 +12,22 @@ void BattleChipGateModule::execute()
 
     {
         BattleChipGateSection section(m_gateType);
+        // gbagate (PATCHES.md P13): set and cleared under the lock cancel() takes,
+        // and cleared before the section is destroyed.
+        unsigned int key = irq_lock();
         m_currentSection = &section;
-        if (m_cancel)
-        {
-            m_currentSection = nullptr;
-            return;
-        }
+        const bool cancelled = m_cancel;
+        if (cancelled) m_currentSection = nullptr;
+        irq_unlock(key);
+        if (cancelled) return;
 
         section.armLink();
         sendLinkStatus(LinkStatus::LinkConnected);
         section.process();
         link_changeMode(DISABLED);
         link_releasePartnerPins();
+        key = irq_lock();
+        m_currentSection = nullptr;
+        irq_unlock(key);
     }
-    m_currentSection = nullptr;
 }

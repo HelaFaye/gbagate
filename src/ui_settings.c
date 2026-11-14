@@ -15,14 +15,29 @@ static bool s_display_dirty;
 void uiset_init(ui_settings_t *v, settings_t *s) {
     memset(v, 0, sizeof *v);
     v->s = s;
+    uiset_hide(v, 0);
     s_dirty = false;
     s_display_dirty = false;
 }
 
 uint8_t uiset_count(void) { return SETFIELD_COUNT; }
 
+void uiset_hide(ui_settings_t *v, uint32_t fields) {
+    v->rows = 0;
+    for (uint8_t f = 0; f < SETFIELD_COUNT; f++) {
+        if (!(fields & (1u << f))) {
+            v->field[v->rows++] = f;
+        }
+    }
+    v->cursor = 0;
+    v->editing = false;
+}
+
+uint8_t uiset_rows(const ui_settings_t *v) { return v->rows; }
+
 static const char *field_name(setfield_t f) {
     switch (f) {
+    case SETFIELD_THEME:    return "theme";
     case SETFIELD_COLSTART: return "col offset";
     case SETFIELD_ROWSTART: return "row offset";
     case SETFIELD_COLOUR:   return "colour";
@@ -38,12 +53,21 @@ static const char *field_name(setfield_t f) {
 
 static void field_value(const settings_t *s, setfield_t f, char *out, size_t cap) {
     switch (f) {
+    case SETFIELD_THEME:
+        snprintf(out, cap, "%s", ui_theme_name((ui_theme_id_t)s->theme));
+        break;
     case SETFIELD_COLSTART: snprintf(out, cap, "%u", s->colstart); break;
     case SETFIELD_ROWSTART: snprintf(out, cap, "%u", s->rowstart); break;
     case SETFIELD_COLOUR:   snprintf(out, cap, "%s", s->bgr ? "BGR" : "RGB"); break;
-    case SETFIELD_GAME:
-        snprintf(out, cap, "%s", chipgate_game_name((cg_game_t)s->game));
+    case SETFIELD_GAME: {
+        /* Short: the menu's game list has the full names. */
+        static const char *const k_short[CG_GAME_COUNT] = {
+            [CG_GAME_BN4] = "BN4", [CG_GAME_BN5] = "BN5",
+            [CG_GAME_BN6_JP] = "EXE6 JP", [CG_GAME_BN6_US] = "BN6",
+        };
+        snprintf(out, cap, "%s", s->game < CG_GAME_COUNT ? k_short[s->game] : "?");
         break;
+    }
     case SETFIELD_ACCEL:    snprintf(out, cap, "%u", s->accel); break;
     case SETFIELD_WRAP:     snprintf(out, cap, "%s", s->wrap ? "on" : "off"); break;
     case SETFIELD_INPUT:
@@ -52,20 +76,26 @@ static void field_value(const settings_t *s, setfield_t f, char *out, size_t cap
     case SETFIELD_USB:
         snprintf(out, cap, "%s", usb_mode_name((usb_mode_t)s->usb_mode));
         break;
-    case SETFIELD_AIR:
-        snprintf(out, cap, "%s", air_link_name((air_link_t)s->air_link));
+    case SETFIELD_AIR: {
+        static const char *const k_short[AIR_LINK_COUNT] = {
+            [AIR_GEN3] = "Gen 3", [AIR_ADAPTER] = "Adapter",
+            [AIR_AW1] = "AW1", [AIR_AW2] = "AW2",
+        };
+        snprintf(out, cap, "%s", s->air_link < AIR_LINK_COUNT ? k_short[s->air_link] : "?");
         break;
+    }
     default:                snprintf(out, cap, "?"); break;
     }
 }
 
 const char *uiset_label(void *ctx, uint8_t index) {
     ui_settings_t *v = ctx;
-    if (index >= SETFIELD_COUNT) {
+    if (index >= v->rows) {
         return NULL;
     }
+    setfield_t f = (setfield_t)v->field[index];
     char val[24];
-    field_value(v->s, (setfield_t)index, val, sizeof val);
+    field_value(v->s, f, val, sizeof val);
 
     /*
      * Brackets around the value being edited. With one encoder doing both jobs
@@ -74,8 +104,11 @@ const char *uiset_label(void *ctx, uint8_t index) {
      * state.
      */
     bool active = v->editing && index == v->cursor;
-    snprintf(v->scratch, sizeof v->scratch, active ? "%-11s[%s]" : "%-11s %s",
-             field_name((setfield_t)index), val);
+    char shown[28];
+    snprintf(shown, sizeof shown, active ? "[%s]" : "%s", val);
+    /* The value right-aligned and kept whole; the name gives way. */
+    ui_two_col(v->scratch, sizeof v->scratch, field_name(f), shown,
+               UI_MENU_COLS);
     return v->scratch;
 }
 
@@ -85,6 +118,13 @@ const char *uiset_label(void *ctx, uint8_t index) {
 static void adjust(settings_t *s, setfield_t f, int32_t d) {
     int32_t v;
     switch (f) {
+    case SETFIELD_THEME:
+        /* Wraps, and redraws at once: a palette is chosen by looking at it. */
+        v = ((int32_t)s->theme + d) % UI_THEME_COUNT;
+        if (v < 0) v += UI_THEME_COUNT;
+        s->theme = (uint8_t)v;
+        s_display_dirty = true;
+        break;
     case SETFIELD_COLSTART:
         v = (int32_t)s->colstart + d;
         s->colstart = (uint8_t)(v < 0 ? 0 : (v > 8 ? 8 : v));
@@ -147,11 +187,17 @@ void uiset_move(ui_settings_t *v, int32_t delta) {
         return;
     }
     if (!v->editing) {
-        int32_t pos = ((int32_t)v->cursor + delta) % SETFIELD_COUNT;
+        if (v->rows == 0) {
+            return;
+        }
+        int32_t pos = ((int32_t)v->cursor + delta) % v->rows;
         if (pos < 0) {
-            pos += SETFIELD_COUNT;
+            pos += v->rows;
         }
         v->cursor = (uint8_t)pos;
+        return;
+    }
+    if (v->cursor >= v->rows) {
         return;
     }
     /*
@@ -159,7 +205,7 @@ void uiset_move(ui_settings_t *v, int32_t delta) {
      * acceleration that helps across 400 chips makes an offset unsettable:
      * a flick moves it the whole range and back.
      */
-    adjust(v->s, (setfield_t)v->cursor, delta > 0 ? 1 : -1);
+    adjust(v->s, (setfield_t)v->field[v->cursor], delta > 0 ? 1 : -1);
 }
 
 bool uiset_toggle_edit(ui_settings_t *v) {
@@ -175,6 +221,16 @@ bool uiset_display_affected(const ui_settings_t *v) {
     return s_display_dirty;
 }
 
-const char *uiset_footer(const ui_settings_t *v) {
-    return v->editing ? "turn to change" : "enter to edit";
+const char *uiset_footer(ui_settings_t *v, const ui_keys_t *keys) {
+    ui_keys_t k = keys ? *keys : ui_keys_for(0);
+    char left[24], right[24];
+    if (v->editing) {
+        snprintf(left, sizeof left, "%s: set", k.move);
+        ui_key_verb(right, sizeof right, k.confirm, "done");
+    } else {
+        ui_key_verb(left, sizeof left, k.confirm, "edit");
+        ui_key_verb(right, sizeof right, k.back, "back");
+    }
+    ui_footer_join(v->footer, sizeof v->footer, left, right);
+    return v->footer;
 }

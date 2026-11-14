@@ -42,7 +42,7 @@ also checks the descriptors.
 | 0x00 | Trade emulator (Pokemon Gen 3) | |
 | 0x01 | GBA link relay (Celio, netplay bridge) | |
 | 0x02 | GB/GBC SPI link | needs a 5 V level shifter, see Wiring |
-| 0x03 | GB printer | likewise |
+| 0x03 | GB printer | likewise; the board's own GB Printer mode runs it too (README, Mode shell) |
 | 0x04 | Advance Wars 1/2 (variant 1/2) | |
 | 0x05 | e-Reader (variants 1-13, including Emerald US/JP/FR/DE) | |
 | 0x06 | Battle Chip Gate (upstream's, as megaman.gblink.io drives it) | |
@@ -130,7 +130,7 @@ Reply, 16 bytes:
 | 4 | extension version 1 |
 | 5-7 | gbagate firmware version (0.4.0) |
 | 8-11 | capabilities, u32 LE |
-| 12 | board: 0 host simulator, 1 devkit, 2 Supermini |
+| 12 | board: 0 host simulator, 1 devkit, 2 Supermini, 3 touch carrier, 4 knob carrier |
 | 13 | image: 0 link, 1 gate, 2 full, 3 mini |
 
 Capability bits:
@@ -146,6 +146,7 @@ Capability bits:
 | 6 | ESP-NOW |
 | 7 | standalone multiboot |
 | 8 | bridge UART wired |
+| 9 | 5 V level shifter on the link port: Game Boy partners, printer mode 0x03 |
 
 The layout is in `src/gbx_proto.h`.
 
@@ -230,7 +231,7 @@ checks LDN's own `pico_link_test.c` makes of its scripted adapter:
 | GB-Link software | status | tested by |
 |---|---|---|
 | gblink-netplay-bridge (engine) | gen3, AW, rfu all work | `test_adapter.mjs`, `test_netplay_e2e.mjs`, `test_rfu_netplay.mjs` |
-| Celio-Server + Celio-Client | relay works with the client from before b057315 (see below) | `test_celio.mjs` |
+| Celio-Server + Celio-Client | relay works with the client from before b057315; with the current client after `backport/Celio-Server` (see below) | `test_celio.mjs`, `backport/verify-celio.sh` |
 | gblink-ereader | e-Reader mode, preload, scan | `test_webapps.mjs` |
 | gb-pokemon-web | GB link mode | `test_webapps.mjs` |
 | gblink-distributor | GB link entry, byte exchange | `test_webapps.mjs` |
@@ -252,10 +253,12 @@ as root or after `sysctl -w net.ipv4.ip_unprivileged_port_start=0`, as CI does
   `backport/gblink-launcher` teaches the launcher to recognise gbagate and hide
   the updater. Until that is merged, flash gbagate with `pio run -t upload` or
   esptool.
-- **Celio.** The newest public Celio-Client (b057315, 3 October 2026) sends
-  with Socket.IO acks and retries. The newest public Celio-Server (9f02d3e) does
-  not answer acks. The two current heads therefore do not interoperate, with
-  any adapter. The relay test uses the client from just before that change.
+- **Celio is Celio-Link's.** The client (since b057315) and the server
+  (since 5ead974) both moved to acked Socket.IO emits on 3 October 2026, and
+  link fine together. `GB-Link/Celio-Server` is a fork that stopped at
+  9f02d3e, before that; an earlier note here took it for the current server
+  and called the two incompatible. The compat suite now pins
+  `Celio-Link/Celio-Server` and `Celio-Link/Celio-Client` (run.sh).
 - **USB is GB-Link or a drive, not both.** The ESP32-S3 has four IN endpoints
   besides EP0, and GB-Link's interface plus CDC use them all. The `usb` setting
   chooses one, and the board reboots to apply it.
@@ -278,6 +281,13 @@ whatever is plugged in, which is the truth for that board.
 5 V tolerant. The GB SPI and printer modes (0x02, 0x03) need a bidirectional
 level shifter between the board and the port, as the GB-Link DIY board has
 (a SparkFun BOB-12009). The GBA modes are 3.3 V.
+
+None of gbagate's boards has one. So the printer mode, which only ever
+talks to a Game Boy game, is refused without one (PATCHES.md P16): it
+answers `GBSessionFinished` at once. Capability bit 9 tells a host which
+it is. Mode 0x02 stays, because it also carries GBA multiboot over Normal
+mode, which is 3.3 V; a Game Boy or Game Boy Color on it still needs the
+shifter. A board built with one sets `-DBOARD_HAS_GB_5V=1`.
 
 ---
 

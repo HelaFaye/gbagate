@@ -49,13 +49,52 @@ static void draw(void) {
                    shell_item_count(&g_shell), shell_cursor(&g_shell), "gate");
 }
 
+/* Find a menu row by label; -1 if absent. */
+static int row_of(const char *label) {
+    for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
+        if (!strcmp(shell_label_at(&g_shell, i), label)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/*
+ * Only what is fitted. Every board today has a link port and no IR emitter
+ * and no 5 V shifter: Infrared and GB Printer were listed on all of them,
+ * the printer inviting a 5 V Game Boy onto a bare 3.3 V port.
+ */
+static void test_only_fitted_hardware(void) {
+    printf("only what the board has\n");
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_WIFI | HW_CAP_USB | HW_CAP_USB_GBLINK);
+    check("no Infrared without the emitter", row_of("Infrared"), -1);
+    check("no GB Printer without the 5V shifter", row_of("GB Printer"), -1);
+    check("Send Program is a GBA's, 3.3 V: listed", row_of("Send Program") >= 0, 1);
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_IR);
+    check("Infrared with it", row_of("Infrared") >= 0, 1);
+    check("still no GB Printer", row_of("GB Printer"), -1);
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_GB_5V);
+    check("GB Printer with the shifter", row_of("GB Printer") >= 0, 1);
+    check("no Infrared", row_of("Infrared"), -1);
+
+    /* One USB controller: the GB-Link adapter or the drive. Link: USB is the
+     * adapter's page, USB Storage the drive's; each only with its own. */
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB_GBLINK);
+    check("adapter: no USB Storage", row_of("USB Storage"), -1);
+    check("adapter: Link, for Link: USB", row_of("Link") >= 0, 1);
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB);
+    check("drive: USB Storage", row_of("USB Storage") >= 0, 1);
+    check("drive: no Link: USB, and no other link, so no Link", row_of("Link"), -1);
+}
+
 static void test_every_mode_is_reachable(void) {
     printf("every mode is offered\n");
 
     /* A fully equipped board must show all of them, self test included. */
-    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB |
-                         HW_CAP_WIFI | HW_CAP_CHIP_READER);
-    check("all modes offered", shell_item_count(&g_shell), APP_MODE_COUNT);
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB | HW_CAP_USB_GBLINK |
+                         HW_CAP_WIFI | HW_CAP_CHIP_READER | HW_CAP_IR | HW_CAP_GB_5V);
+    /* Every mode, with the three link modes behind one Link entry. */
+    check("all modes offered", shell_item_count(&g_shell), APP_MODE_COUNT - 2);
 
     /* USB Storage must be there on a board with USB: without a way to hand the
      * volume over, the only way to get files onto it is to guess what the host
@@ -108,30 +147,60 @@ static void test_every_mode_is_reachable(void) {
  * app_main sets DISPLAY, LINK_PORT, USB, WIFI and CHIP_READER; a QEMU image
  * gets the first four. Nothing here can call app_main, but it can assert that
  * the modes worth having survive that mask -- which is what silently failed
- * when HW_CAP_LINK_PORT was never set and the menu collapsed to two entries.
+ * when HW_CAP_LINK_PORT | HW_CAP_LINK_PINS was never set and the menu collapsed to two entries.
  */
 static void test_realistic_caps(void) {
     printf("the caps a real boot produces\n");
 
-    /* A QEMU gate image: display, link source, wifi. No USB, no reader. */
-    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_WIFI);
+    /* A hardware gate image (the PHY: port and pins), WiFi; no USB drive, no
+     * reader, no IR emitter, no 5 V shifter. */
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_WIFI);
 
     bool gate = false, selftest = false, wireless = false, diag = false;
     for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
         const char *l = shell_label_at(&g_shell, i);
-        if (!strcmp(l, "Battle Chip"))    gate = true;
         if (!strcmp(l, "Self Test"))      selftest = true;
-        if (!strcmp(l, "Link: Wireless")) wireless = true;
+        if (!strcmp(l, "Link"))           wireless = true;
         if (!strcmp(l, "Diagnostics"))    diag = true;
     }
-    check("chip gate offered", gate, 1);
+    /* Battle Chip is an applet: the firmware adds it after shell_init, and
+     * test_applets checks it is listed. */
+    (void)gate;
     check("self test offered", selftest, 1);
-    check("wireless offered", wireless, 1);
+    check("link offered", wireless, 1);
+    /* WiFi but no USB: the wireless cable or online play, a choice of two. */
+    for (uint8_t i = 0; i < shell_item_count(&g_shell); i++) {
+        if (!strcmp(shell_label_at(&g_shell, i), "Link")) {
+            g_shell.mode_cursor = i;
+        }
+    }
+    check("WiFi only: a choice", shell_select(&g_shell), 0);
+    check("of two", shell_item_count(&g_shell), 2);
+    check("wireless first", strncmp(shell_label_at(&g_shell, 0), "Wireless", 8), 0);
+    check("then online", strncmp(shell_label_at(&g_shell, 1), "Online", 6), 0);
+    check("choosing it", shell_select(&g_shell), 1);
+    check("and it is wireless", g_shell.chosen_mode, APP_MODE_LINK_WIRELESS);
+    shell_back(&g_shell);
+    shell_back(&g_shell);
     check("diagnostics offered", diag, 1);
 
-    /* Six of eight: everything but USB and the reader. A two-entry menu means
-     * a capability is not being set. */
-    check("most modes survive", shell_item_count(&g_shell) >= 6, 1);
+    /* Link, Send Program, Self Test, Settings, Diagnostics: everything this
+     * board has. Not USB Storage (no USB), Infrared (no emitter) or GB
+     * Printer (no 5 V shifter), which used to be listed here regardless. A
+     * two-entry menu would mean a capability is not being set. */
+    check("what this board has, and only that", shell_item_count(&g_shell), 5);
+
+    /*
+     * The emulator image: the UART bridge carries the gate's transfers (link
+     * port, no pins) and QEMU's S3 has no radio. So Self Test, Settings and
+     * Diagnostics -- and none of Link (nothing to choose: no USB, no WiFi),
+     * Send Program (multiboot is driven on the pins) or the GB modes.
+     */
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
+    check("emulator: self test, over the bridge", row_of("Self Test") >= 0, 1);
+    check("emulator: no Link (no radio, no USB)", row_of("Link"), -1);
+    check("emulator: no Send Program (no pins)", row_of("Send Program"), -1);
+    check("emulator: three entries", shell_item_count(&g_shell), 3);
 
     /* Without a link source, the link modes must disappear -- but Settings and
      * Diagnostics must not, or there is no way to find out why. */
@@ -147,7 +216,7 @@ static void test_realistic_caps(void) {
 static void test_it_actually_draws(void) {
     printf("the menu reaches the framebuffer\n");
 
-    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS);
     draw();
 
     check("header painted", px(64, 4), COL_HEADER);
@@ -168,7 +237,7 @@ static void test_it_actually_draws(void) {
 static void test_cursor_follows(void) {
     printf("cursor and scrolling\n");
 
-    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_USB |
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB | HW_CAP_USB_GBLINK |
                          HW_CAP_WIFI | HW_CAP_CHIP_READER);
     shell_move(&g_shell, 2);
     draw();
@@ -235,8 +304,9 @@ static void test_scrolling(void) {
 static void test_game_screen(void) {
     printf("game chooser\n");
 
-    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT);
-    /* Chip gate is first, and it needs a game. */
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS);
+    /* Self Test needs a game. */
+    g_shell.mode_cursor = (uint8_t)row_of("Self Test");
     check("does not start immediately", shell_select(&g_shell), 0);
     check("moved to the game list", g_shell.screen, SHELL_SCREEN_GAMES);
 
@@ -266,14 +336,138 @@ static void test_blank_rows(void) {
     check("blank rows painted", 1, 1);
 }
 
+
+/*
+ * One Link entry; the interface is chosen inside it. Only the interfaces the
+ * board has are offered, and with one there is nothing to choose. Back from a
+ * running link lands on the choice, the way Back from a gate lands on the
+ * game list.
+ */
+static void test_link_chooser(void) {
+    printf("link chooser\n");
+    const uint32_t full = HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB | HW_CAP_USB_GBLINK | HW_CAP_WIFI;
+    shell_init(&g_shell, full);
+    check("no Link: USB in the menu", row_of("Link: USB"), -1);
+    check("no Link: Wireless in the menu", row_of("Link: Wireless"), -1);
+    int link = row_of("Link");
+    check("Link is first", link, 0);
+
+    g_shell.mode_cursor = (uint8_t)link;
+    check("three interfaces: a choice", shell_select(&g_shell), 0);
+    check("on the link screen", g_shell.screen, SHELL_SCREEN_LINK);
+    check("titled", strcmp(shell_screen_title(&g_shell), "Link over"), 0);
+    check("three offered", shell_item_count(&g_shell), 3);
+    check("USB first", strncmp(shell_label_at(&g_shell, 0), "USB", 3), 0);
+    check("then wireless", strncmp(shell_label_at(&g_shell, 1), "Wireless", 8), 0);
+    check("then online", strcmp(shell_label_at(&g_shell, 2), "Online - Celio"), 0);
+    check("past the end", shell_label_at(&g_shell, 3) == NULL, 1);
+
+    shell_move(&g_shell, 1);
+    check("cursor moves", shell_cursor(&g_shell), 1);
+    shell_move(&g_shell, 2);
+    check("and wraps", shell_cursor(&g_shell), 0);
+    shell_move(&g_shell, -1);
+    check("both ways", shell_cursor(&g_shell), 2);
+    check("online chosen", shell_select(&g_shell), 1);
+    check("... as Link: Online", g_shell.chosen_mode, APP_MODE_LINK_ONLINE);
+    check("named for its title", strcmp(shell_chosen_name(&g_shell), "Link: Online"), 0);
+    shell_back(&g_shell);
+    check("back on the choice", g_shell.screen, SHELL_SCREEN_LINK);
+    shell_move(&g_shell, -1);
+    check("to wireless", shell_cursor(&g_shell), 1);
+    check("choosing starts it", shell_select(&g_shell), 1);
+    check("wireless chosen", g_shell.chosen_mode, APP_MODE_LINK_WIRELESS);
+    check("named for its title", strcmp(shell_chosen_name(&g_shell), "Link: Wireless"), 0);
+    check("no game", g_shell.has_game, 0);
+
+    check("back", shell_back(&g_shell), 1);
+    check("lands on the choice", g_shell.screen, SHELL_SCREEN_LINK);
+    check("cursor kept", shell_cursor(&g_shell), 1);
+    shell_move(&g_shell, -1);
+    shell_select(&g_shell);
+    check("USB chosen", g_shell.chosen_mode, APP_MODE_LINK_USB);
+    shell_back(&g_shell);
+    check("back again", shell_back(&g_shell), 1);
+    check("at the menu", g_shell.screen, SHELL_SCREEN_MODES);
+    check("on Link", g_shell.mode_cursor, link);
+    check("and no further", shell_back(&g_shell), 0);
+
+    /* USB only. */
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS | HW_CAP_USB | HW_CAP_USB_GBLINK);
+    g_shell.mode_cursor = (uint8_t)row_of("Link");
+    check("USB only: straight in", shell_select(&g_shell), 1);
+    check("USB", g_shell.chosen_mode, APP_MODE_LINK_USB);
+    shell_back(&g_shell);
+    check("back skips the choice", g_shell.screen, SHELL_SCREEN_MODES);
+
+    /* Neither: no Link at all, rather than a Link with nothing behind it. */
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS);
+    check("no interface, no Link", row_of("Link"), -1);
+    /* An interface but no link port: no Link either. */
+    shell_init(&g_shell, HW_CAP_DISPLAY | HW_CAP_USB | HW_CAP_USB_GBLINK | HW_CAP_WIFI);
+    check("no link port, no Link", row_of("Link"), -1);
+}
+
+/* Applets join the menu between the built-in modes and Settings. */
+static void test_applet_entries(void) {
+    printf("applet entries\n");
+    const uint32_t caps = HW_CAP_DISPLAY | HW_CAP_LINK_PORT | HW_CAP_LINK_PINS;
+    shell_init(&g_shell, caps);
+    uint8_t before = shell_item_count(&g_shell);
+    app_mode_t a = (app_mode_t)APP_MODE_APPLET_FIRST, b = (app_mode_t)(APP_MODE_APPLET_FIRST + 1);
+    check("added", shell_add_entry(&g_shell, a, "Toy", HW_CAP_DISPLAY, NULL, false), 1);
+    check("listed", shell_item_count(&g_shell), before + 1);
+    int settings = row_of("Settings");
+    check("just before Settings", row_of("Toy"), settings - 1);
+    check("Diagnostics stays last", row_of("Diagnostics"), shell_item_count(&g_shell) - 1);
+    check("same mode twice refused",
+          shell_add_entry(&g_shell, a, "Toy2", HW_CAP_DISPLAY, NULL, false), 0);
+    check("not an applet's number refused",
+          shell_add_entry(&g_shell, APP_MODE_SETTINGS, "X", 0, NULL, false), 0);
+    check("NULL label refused", shell_add_entry(&g_shell, b, NULL, 0, NULL, false), 0);
+    check("hidden when its hardware is absent",
+          shell_add_entry(&g_shell, b, "Radio", HW_CAP_NRF24, "no nRF24", false), 1);
+    check("so not listed", row_of("Radio"), -1);
+
+    /* Selecting one runs it; one that needs a game asks first. */
+    g_shell.mode_cursor = (uint8_t)row_of("Toy");
+    check("runs", shell_select(&g_shell), 1);
+    check("its mode", g_shell.chosen_mode, a);
+    check("its name", strcmp(shell_chosen_name(&g_shell), "Toy"), 0);
+    shell_back(&g_shell);
+    check("back to the menu", g_shell.screen, SHELL_SCREEN_MODES);
+
+    shell_init(&g_shell, caps);
+    shell_add_entry(&g_shell, a, "Dice", HW_CAP_DISPLAY, NULL, true);
+    g_shell.mode_cursor = (uint8_t)row_of("Dice");
+    check("needs a game: asks", shell_select(&g_shell), 0);
+    check("game list", g_shell.screen, SHELL_SCREEN_GAMES);
+    check("then runs", shell_select(&g_shell), 1);
+    check("with a game", g_shell.has_game, 1);
+    shell_back(&g_shell);
+    check("back lands on the games", g_shell.screen, SHELL_SCREEN_GAMES);
+
+    /* A full menu refuses the next one rather than overrunning. */
+    shell_init(&g_shell, caps);
+    int added = 0;
+    for (int i = 0; i < SHELL_EXTRA_MAX + 2; i++) {
+        added += shell_add_entry(&g_shell, (app_mode_t)(APP_MODE_APPLET_FIRST + (i % SHELL_EXTRA_MAX)),
+                                 "x", 0, NULL, false);
+    }
+    check("at most SHELL_EXTRA_MAX", added, SHELL_EXTRA_MAX);
+}
+
 int main(void) {
     test_every_mode_is_reachable();
+    test_only_fitted_hardware();
     test_realistic_caps();
     test_it_actually_draws();
     test_cursor_follows();
     test_scrolling();
     test_game_screen();
     test_blank_rows();
+    test_link_chooser();
+    test_applet_entries();
     printf("\n%s\n", g_fail ? "FAILURES" : "all checks passed");
     return g_fail != 0;
 }

@@ -278,7 +278,14 @@ static inline void hs_observe(hs_t *h, uint16_t answer) {
              * "device stays busy" failure.
              */
             h->chip_cleared = true;
-            if (h->chip_rotations == HS_CHIP_REPEATS) {
+            /*
+             * The firmware self-test deliberately sends two chips. Do not
+             * report the repeat/retirement check until the second chip has
+             * also completed exactly nine rotations and cleared. This proves
+             * that the first chip retired and the slot was reusable.
+             */
+            if (h->chip_rotations == HS_CHIP_REPEATS &&
+                h->chip_events >= 2) {
                 h->tests |= HS_T_REPEATS;
             }
         }

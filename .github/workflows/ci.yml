@@ -31,10 +31,59 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
-      # mbe2e loads the real tester ROM, built from rom/ with a bare ARM toolchain
-      - run: sudo apt-get update -q && sudo apt-get install -y -q gcc-arm-none-eabi
+      # mbe2e loads the real tester ROM, built from rom/ with a bare ARM toolchain.
+      # Its packages are cached per runner image: a hit installs them from the
+      # cache with no mirror at all (twice an update hung on a stalled mirror
+      # for the whole job, before any of this repository's code ran).
+      - name: cache gcc-arm-none-eabi's packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ~/apt-debs
+          key: apt-gcc-arm-none-eabi-v1-${{ env.ImageOS }}-${{ env.ImageVersion }}
+      - name: install gcc-arm-none-eabi
+        timeout-minutes: 12
+        run: |
+          D="$HOME/apt-debs"
+          if ls "$D"/*.deb >/dev/null 2>&1 && sudo apt-get install -y -q --no-download "$D"/*.deb; then
+            echo "installed from the cache"; exit 0
+          fi
+          mkdir -p "$D/partial"
+          A="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Dir::Cache::archives=$D"
+          for i in 1 2 3; do
+            sudo timeout 180 apt-get $A update -q &&
+              sudo timeout 240 apt-get $A install -y -q gcc-arm-none-eabi &&
+              sudo chown -R "$USER" "$D" && exit 0
+            echo "apt attempt $i failed; retrying"; sleep 10
+          done
+          exit 1
       - run: make rom
+      # agent-emu runs the memory agent on an emulated ARM7
+      # System-wide: the tests run python3 -I, which ignores the user site a
+      # plain pip install would use.
+      # pip as root uses a cache only if root owns it: root's for the install,
+      # the runner's again for the cache step to save
+      - name: cache pip's wheels
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: /tmp/pip-ci
+          key: pip-unicorn-2.1.1-${{ env.ImageOS }}-${{ env.ImageVersion }}
+      - run: |
+          sudo mkdir -p /tmp/pip-ci && sudo chown -R root:root /tmp/pip-ci
+          sudo python3 -m pip install --break-system-packages -q --cache-dir /tmp/pip-ci unicorn==2.1.1
+          sudo chown -R "$USER" /tmp/pip-ci
+      # pret's librfu, which fetch_librfu.sh clones at the commit it pins
+      - name: cache librfu
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: build/ref/pokefirered
+          key: librfu-${{ hashFiles('test/gblink_sim/fetch_librfu.sh') }}
       - run: make
+        env:
+          REQUIRE_EMU: '1'
+      # ... and the agent built here with GCC, not only the committed image
+      - run: make -C rom agent AGENT=../build/agent-gcc.mb && make agent-emu AGENT_IMAGE=build/agent-gcc.mb
+        env:
+          REQUIRE_EMU: '1'
       - run: make strict
       - run: make gblink-asan
 
@@ -50,6 +99,16 @@ jobs:
           node-version: 22
       # Celio-Server listens on 443, fixed in its source; let it, unmodified.
       - run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0
+      # the GB-Link and Celio clones at run.sh's pins, and npm's downloads;
+      # run.sh checks every pin out again, so a stale cache costs a fetch
+      - name: cache the GB-Link clones and npm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: |
+            build/gblink_compat/src
+            ~/.npm
+          key: compat-${{ hashFiles('test/gblink_compat/run.sh', 'test/gblink_compat/build.mjs') }}
+          restore-keys: compat-
       - run: make compat
         env:
           CHROMIUM: /usr/bin/google-chrome
@@ -65,6 +124,16 @@ jobs:
         with:
           node-version: 22
       - run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0
+      # the GB-Link and Celio clones at run.sh's pins, and npm's downloads;
+      # run.sh checks every pin out again, so a stale cache costs a fetch
+      - name: cache the GB-Link clones and npm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: |
+            build/gblink_compat/src
+            ~/.npm
+          key: compat-${{ hashFiles('test/gblink_compat/run.sh', 'test/gblink_compat/build.mjs') }}
+          restore-keys: compat-
       - run: make compat
         env:
           CHROMIUM: /usr/bin/google-chrome
@@ -85,11 +154,183 @@ jobs:
           - { variant: mini, board: devkit }
           - { variant: mini, board: supermini }
           - { variant: gate, board: devkit, bridge: 1 }
+          - { variant: gate, board: carrier-touch }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      # compiled objects, per image: a push that touches a few files rebuilds
+      # those, not ESP-IDF
+      - name: cache ccache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: .ccache
+          key: ccache-${{ matrix.variant }}-${{ matrix.board }}-${{ matrix.bridge }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.variant }}-${{ matrix.board }}-${{ matrix.bridge }}-
       - name: build ${{ matrix.variant }} (${{ matrix.board }}${{ matrix.bridge && ', bridge' || '' }})
         shell: bash
         run: |
           . "$IDF_PATH/export.sh" >/dev/null
+          if command -v ccache >/dev/null; then
+            export IDF_CCACHE_ENABLE=1 CCACHE_DIR="$PWD/.ccache" CCACHE_MAXSIZE=400M
+          fi
           if [ -n "${{ matrix.bridge }}" ]; then export BOARD_HAS_BRIDGE=1; fi
           BOARD=${{ matrix.board }} tools/build_hw.sh ${{ matrix.variant }}
+
+  emulator:
+    # The hardware images on qemu_esp32 (Espressif's QEMU with HelaFaye's S3
+    # patches): the board's own drivers against emulated parts, the picture
+    # read back from the glass and the touch pressed (qemu/accurate.sh).
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.6
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: QEMU build dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq cmake ninja-build pkg-config libglib2.0-dev libpixman-1-dev \
+            libgcrypt20-dev libslirp-dev flex bison python3-venv mtools gcc-arm-none-eabi \
+            iproute2 procps xvfb xauth python3-tk lua5.4 liblua5.4-dev lua-socket >/dev/null
+      - name: which fork commit
+        id: fork
+        shell: bash
+        run: echo "rev=$(sed -n 's/^FORK_REV="${FORK_REV:-\([0-9a-f]*\)}".*/\1/p' qemu/accurate.sh)" >> "$GITHUB_OUTPUT"
+      # The emulator, per pinned fork commit: twenty minutes to build, so built once
+      - name: cache the emulator
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: build/esp-qemu
+          key: esp-qemu-${{ steps.fork.outputs.rev }}
+      - name: cache ccache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: .ccache
+          key: ccache-emulator-${{ github.sha }}
+          restore-keys: ccache-emulator-
+      - name: build the emulator
+        shell: bash
+        run: ./qemu/accurate.sh build
+      - name: build the carrier-touch SD-card test ROM
+        run: make rom
+      - name: boot the touch carrier and the devkit
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh" >/dev/null
+          if command -v ccache >/dev/null; then
+            export IDF_CCACHE_ENABLE=1 CCACHE_DIR="$PWD/.ccache" CCACHE_MAXSIZE=400M
+          fi
+          ./qemu/accurate.sh boot gate carrier-touch
+          ./qemu/accurate.sh boot gate devkit
+      - name: build hybrid carrier-touch UART bridge firmware
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          set -e
+          . "$IDF_PATH/export.sh" >/dev/null
+          if command -v ccache >/dev/null; then
+            export IDF_CCACHE_ENABLE=1 CCACHE_DIR="$PWD/.ccache" CCACHE_MAXSIZE=400M
+          fi
+          GBAGATE_BUILD_DIR="$PWD/build/hw-gate-carrier-touch-mgba" \
+          GBAGATE_UART_BRIDGE=1 \
+          GBAGATE_UART_TX_GPIO=37 \
+          GBAGATE_UART_RX_GPIO=38 \
+          BOARD=carrier-touch tools/build_hw.sh gate
+          # Build the complete flash image expected by QEMU.
+          # This mirrors the merge operation in qemu/accurate.sh.
+          (
+            cd build/hw-gate-carrier-touch-mgba
+            python -m esptool --chip esp32s3 merge_bin \
+              --fill-flash-size 4MB \
+              -o flash-qemu.bin @flash_args
+          )
+          test -s build/hw-gate-carrier-touch-mgba/flash-qemu.bin
+
+      - name: build pinned headless mGBA with Lua 5.4
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          MGBA_REV=d58ea8a86f30598fbf3958585de3d33028535072
+
+          git clone --filter=blob:none \
+            https://github.com/mgba-emu/mgba.git \
+            build/mgba-headless-src
+          git -C build/mgba-headless-src checkout --detach "$MGBA_REV"
+
+          cmake -S build/mgba-headless-src \
+            -B build/mgba-headless-build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_HEADLESS=ON \
+            -DBUILD_QT=OFF \
+            -DBUILD_SDL=OFF \
+            -DBUILD_GL=OFF \
+            -DENABLE_SCRIPTING=ON \
+            -DUSE_LUA=5.4 \
+            -DUSE_FFMPEG=OFF \
+            -DUSE_ZLIB=OFF \
+            -DUSE_MINIZIP=OFF \
+            -DUSE_PNG=OFF \
+            -DUSE_LIBZIP=OFF \
+            -DUSE_SQLITE3=OFF \
+            -DUSE_ELF=OFF \
+            -DUSE_JSON_C=OFF \
+            -DUSE_FREETYPE=OFF \
+            -DUSE_LZMA=OFF \
+            -DUSE_DISCORD_RPC=OFF
+
+          cmake --build build/mgba-headless-build \
+            --target mgba-headless --parallel 2
+
+          test -x build/mgba-headless-build/mgba-headless
+
+          LUA_PATH='/usr/share/lua/5.4/?.lua;/usr/share/lua/5.4/?/init.lua;;' \
+          LUA_CPATH='/usr/lib/x86_64-linux-gnu/lua/5.4/?.so;;' \
+          lua5.4 -e 'local s=require("socket"); assert(type(s.tcp)=="function"); print("LuaSocket 5.4 OK")'
+
+          if ldd build/mgba-headless-build/mgba-headless | grep -q 'not found'; then
+            echo "mGBA has unresolved shared-library dependencies."
+            ldd build/mgba-headless-build/mgba-headless
+            exit 1
+          fi
+
+      - name: run accurate carrier-touch mGBA regression
+        timeout-minutes: 10
+        shell: bash
+        env:
+          LUA_PATH: "/usr/share/lua/5.4/?.lua;/usr/share/lua/5.4/?/init.lua;;"
+          LUA_CPATH: "/usr/lib/x86_64-linux-gnu/lua/5.4/?.so;;"
+        run: |
+          set -euo pipefail
+          command -v ss
+          command -v pgrep
+          command -v ps
+          python3 -c 'import tkinter; print("Tkinter OK")'
+          xvfb-run -a -s "-screen 0 1280x800x24" env \
+            GBAGATE_LINK_PORT=5557 \
+            GBAGATE_TEST_TIMEOUT=180 \
+            GBAGATE_LIVE_OUT="$RUNNER_TEMP/gbagate-accurate-mgba" \
+            GBAGATE_LIVE_DIR="$RUNNER_TEMP/gbagate-accurate-mgba-state" \
+            GBAGATE_SOURCE_FLASH="$GITHUB_WORKSPACE/build/hw-gate-carrier-touch-mgba/flash-qemu.bin" \
+            GBAGATE_MGBA="$GITHUB_WORKSPACE/build/mgba-headless-build/mgba-headless" \
+            bash qemu/test_accurate_mgba.sh
+
+      - name: upload accurate mGBA regression artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: accurate-mgba-regression-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/gbagate-accurate-mgba/**
+            ${{ runner.temp }}/gbagate-accurate-mgba-state/**
+            build/hw-gate-carrier-touch-mgba/flash-qemu.bin
+            build/mgba-headless-build/CMakeCache.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: emulator-screens
+          path: build/hw-gate-*/accurate/*.ppm
+          if-no-files-found: ignore

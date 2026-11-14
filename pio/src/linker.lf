@@ -9,3 +9,12 @@ entries:
     rfuProtocolSection (noflash)
     rfu_link_core (noflash)
     rfu_link_esp32s3 (noflash)
+
+# The four-player bus engine runs inside the link port's SC interrupt for a
+# whole transfer (up to ~800 us), where a flash access may find the cache
+# disabled by a flash write elsewhere: it lives in IRAM, as the PHY's own
+# interrupt code does (IRAM_ATTR in gba_link_esp32s3.c).
+[mapping:gbagate_mp_bus]
+archive: libsrc.a
+entries:
+    mp_bus (noflash)

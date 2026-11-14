@@ -44,14 +44,19 @@ void st7735_mark_all_dirty(void);
 
 /* ---- wiring ----------------------------------------------------------
  *
- * Supermini GPIO is tight, so the display gets four pins and no more:
- * RST ties to the board's EN line, and the backlight is hardwired to 3V3.
- * Leaves the link port, I2C for the chip reader, and the encoder.
+ * The display gets four pins and no more: RST ties to the board's EN line,
+ * and the backlight is hardwired to 3V3. Which four is board.h's: this file
+ * used to carry its own -- CS on 10, DC on 9 -- which on the devkit are the
+ * SD card's chip select and I2C's SCL, the very collisions board.h was
+ * written to end, and on the Supermini put DC on a pin that board routes
+ * nowhere near the panel.
  */
-#define PIN_SCK 12
-#define PIN_SDA 11  /* MOSI; the panel is write-only, MISO is not connected */
-#define PIN_CS  10
-#define PIN_DC   9
+#include "board.h"
+
+#define PIN_SCK PIN_SPI_SCK
+#define PIN_SDA PIN_SPI_MOSI  /* the panel is write-only; MISO is the card's */
+#define PIN_CS  PIN_LCD_CS
+#define PIN_DC  PIN_LCD_DC
 
 #define SPI_HOST_ID SPI2_HOST
 
@@ -129,6 +134,33 @@ static esp_err_t st_data(const uint8_t *d, size_t n) {
     return st_write(d, n, true);
 }
 
+/*
+ * Pixels. The framebuffer is native uint16 RGB565, little endian on the S3,
+ * and the panel takes each pixel high byte first. They used to go out as
+ * they lie in memory, low byte first, so every colour on the glass was
+ * wrong (qemu/accurate.sh boot gate devkit shows it: the theme's background
+ * came out a pale purple). Swapped through a bounce buffer, a row of the
+ * list (the largest span either path sends) at a time.
+ */
+static uint16_t *s_tx;           /* UI_SCREEN_W * UI_ROW_H, DMA-capable */
+
+static esp_err_t st_pixels(const uint16_t *px, size_t count) {
+    const size_t cap = (size_t)UI_SCREEN_W * UI_ROW_H;
+    while (count) {
+        size_t n = count < cap ? count : cap;
+        for (size_t i = 0; i < n; i++) {
+            s_tx[i] = __builtin_bswap16(px[i]);
+        }
+        esp_err_t err = st_data((const uint8_t *)s_tx, n * 2);
+        if (err != ESP_OK) {
+            return err;
+        }
+        px += n;
+        count -= n;
+    }
+    return ESP_OK;
+}
+
 static esp_err_t st_cmd_args(uint8_t cmd, const uint8_t *args, size_t n) {
     esp_err_t err = st_cmd(cmd);
     if (err == ESP_OK && n) {
@@ -200,6 +232,10 @@ esp_err_t st7735_init(st7735_panel_t panel) {
         return ESP_ERR_NO_MEM;
     }
     memset(s_fb, 0, UI_FRAME_BYTES);
+    s_tx = heap_caps_malloc((size_t)UI_SCREEN_W * UI_ROW_H * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!s_tx) {
+        return ESP_ERR_NO_MEM;
+    }
     memset(s_dirty, 0, sizeof s_dirty);
 
     gpio_config_t io = {
@@ -213,7 +249,9 @@ esp_err_t st7735_init(st7735_panel_t panel) {
 
     spi_bus_config_t bus = {
         .mosi_io_num     = PIN_SDA,
-        .miso_io_num     = -1,      /* write-only panel */
+        /* The panel is write-only, but the SD card on the same bus reads:
+         * without MISO, sd_esp32s3.c could never have mounted a card. */
+        .miso_io_num     = PIN_SPI_MISO,
         .sclk_io_num     = PIN_SCK,
         .quadwp_io_num   = -1,
         .quadhd_io_num   = -1,
@@ -335,8 +373,7 @@ static esp_err_t st_flush_span(uint8_t y, uint8_t rows) {
     if ((err = st_cmd(CMD_RAMWR)) != ESP_OK) {
         return err;
     }
-    return st_data((const uint8_t *)(s_fb + (size_t)y * UI_SCREEN_W),
-                   (size_t)rows * UI_SCREEN_W * 2);
+    return st_pixels(s_fb + (size_t)y * UI_SCREEN_W, (size_t)rows * UI_SCREEN_W);
 }
 
 /*
@@ -416,15 +453,15 @@ esp_err_t st7735_scroll_rows(int32_t delta_rows, uint8_t fb_row_y) {
     st7735_window_raw(&s_panel, mem_row, UI_ROW_H, &y0, &y1, &before_wrap);
 
     esp_err_t err = ESP_OK;
-    const uint8_t *src = (const uint8_t *)(s_fb + (size_t)fb_row_y * UI_SCREEN_W);
+    const uint16_t *src = s_fb + (size_t)fb_row_y * UI_SCREEN_W;
     uint16_t cx0 = s_panel.colstart;
     uint16_t cx1 = (uint16_t)(s_panel.colstart + UI_SCREEN_W - 1);
 
     if (before_wrap) {
         err = st_set_window(cx0, cx1, y0, y1);
         if (err == ESP_OK) err = st_cmd(CMD_RAMWR);
-        if (err == ESP_OK) err = st_data(src, (size_t)before_wrap * UI_SCREEN_W * 2);
-        src += (size_t)before_wrap * UI_SCREEN_W * 2;
+        if (err == ESP_OK) err = st_pixels(src, (size_t)before_wrap * UI_SCREEN_W);
+        src += (size_t)before_wrap * UI_SCREEN_W;
     }
 
     uint8_t remainder = (uint8_t)(UI_ROW_H - before_wrap);
@@ -432,7 +469,7 @@ esp_err_t st7735_scroll_rows(int32_t delta_rows, uint8_t fb_row_y) {
         uint16_t top = s_panel.tfa;
         err = st_set_window(cx0, cx1, top, (uint16_t)(top + remainder - 1));
         if (err == ESP_OK) err = st_cmd(CMD_RAMWR);
-        if (err == ESP_OK) err = st_data(src, (size_t)remainder * UI_SCREEN_W * 2);
+        if (err == ESP_OK) err = st_pixels(src, (size_t)remainder * UI_SCREEN_W);
     }
 
     if (err == ESP_OK) {

@@ -115,15 +115,15 @@ const link_source_t *link_source_hardware(void) { return NULL; }
 /* ---- selection ---------------------------------------------------------- */
 
 const link_source_t *link_source_active(void) {
-#if defined(GBAGATE_QEMU)
+#if defined(GBAGATE_QEMU) || defined(GBAGATE_UART_BRIDGE)
     /*
-     * QEMU has no pins. Using the PHY here would busy-wait on a clock edge
-     * that never comes, and the failure would look like a hang rather than a
-     * missing peripheral.
+     * The UART bridge is the selected game-side source in both the normal
+     * QEMU image and the hybrid accurate-QEMU image. The latter still builds
+     * and initializes the physical PHY for peripheral coverage.
      */
     static bool announced;
     if (!announced) {
-        ESP_LOGI(TAG, "no PHY under emulation; taking transfers from the bridge");
+        ESP_LOGI(TAG, "taking transfers from the UART bridge");
         announced = true;
     }
     return link_source_bridge();

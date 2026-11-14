@@ -154,6 +154,15 @@ static inline bool rom_logo_known(const rom_catalog_t *cat) {
     return cat->logo_reference != 0;
 }
 
+/*
+ * Give image (a whole multiboot image, header first) the logo of donor (a
+ * header from a program the user owns, on the drive), and recompute the
+ * complement byte. For an image the firmware carries itself -- the memory
+ * agent -- which cannot ship Nintendo's bytes. False, and image untouched,
+ * if either is shorter than a header or the donor's logo area is blank.
+ */
+bool rom_borrow_logo(uint8_t *image, size_t image_len, const uint8_t *donor, size_t donor_len);
+
 /* Trailing 0x00/0xFF padding removed, rounded back up to 16 bytes. */
 uint32_t rom_effective_size(const uint8_t *data, uint32_t size);
 

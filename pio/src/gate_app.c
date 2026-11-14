@@ -19,14 +19,18 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"   /* vTaskDelay */
+#include "esp_rom_sys.h"     /* esp_rom_delay_us, for the memory agent */
 
 #include "chipdb.h"
 #include "chipgate.h"
+#include "board.h"
 #include "link_source.h"
 #include "ui_chipview.h"
 #include "ui_list.h"
-#include "ui_font.h"    /* UI_FONT_H, for centring the banner */
 #include "ui_render.h"
+#include "ui_screens.h"
+#include "printer_mode.h"
+#include "ui_event.h"
 #include "controls.h"
 #include "ir_cdz.h"
 #include "ui_romview.h"
@@ -39,16 +43,29 @@
 
 /* Supplied by port/esp32s3/mb_spi_esp32s3.c on hardware. QEMU has no SPI, so
  * Send Program is a hardware-only mode and says so rather than pretending. */
+/* mb_spi_ready_probe(): the memory agent's SI-ready probe; NULL clocks on
+ * the fixed gap alone. */
 #if defined(GBAGATE_QEMU)
 static mb_xfer_fn mb_spi_transfer(void) { return NULL; }
+static mb_ready_fn mb_spi_ready_probe(void) { return NULL; }
 #else
 /* Weak, because the link image has no multiboot and does not build
  * mb_spi_esp32s3.c; NULL is Send Program's "unavailable" path. */
 mb_xfer_fn mb_spi_transfer(void);
 __attribute__((weak)) mb_xfer_fn mb_spi_transfer(void) { return NULL; }
+mb_ready_fn mb_spi_ready_probe(void);
+__attribute__((weak)) mb_ready_fn mb_spi_ready_probe(void) { return NULL; }
 #endif
+/* The port for the length of a send: mb_spi_esp32s3.c borrows the pins from
+ * the link engine and sets the SPI up. Weak, for images without it. */
+esp_err_t mb_spi_acquire(void);
+void      mb_spi_release(void);
+__attribute__((weak)) esp_err_t mb_spi_acquire(void) { return ESP_OK; }
+__attribute__((weak)) void      mb_spi_release(void) {}
 #include "ui_shell.h"
 #include "app_modes.h"
+#include "applet.h"
+#include "esp_random.h"
 
 extern uint32_t tasks_ui_events_dropped(void);
 
@@ -68,6 +85,50 @@ __attribute__((weak)) uint32_t ir_aborted(void)      { return 0; }
 __attribute__((weak)) uint16_t ir_last_command(void) { return 0; }
 __attribute__((weak)) bool     ir_send(uint16_t c)   { (void)c; return false; }
 extern link_bridge_t *tasks_bridge(void);
+
+#if !defined(GBAGATE_QEMU)
+#include "gblink_port.h"
+extern bool app_gblink_running(void);
+extern bool app_usb_is_gblink(void);
+
+_Static_assert((int)GBLINK_HOST_USB == (int)UI_HOST_USB &&
+               (int)GBLINK_HOST_SERIAL == (int)UI_HOST_SERIAL &&
+               (int)GBLINK_HOST_BRIDGE == (int)UI_HOST_BRIDGE &&
+               (int)GBLINK_HOST_LOCAL == (int)UI_HOST_LOCAL &&
+               (int)GBLINK_HOST_NET == (int)UI_HOST_NET,
+               "ui_screens.h numbers the GB-Link hosts as gblink_port.h does");
+
+/* Link: USB's state, from GB-Link's firmware. False on an image without it. */
+static bool gblink_page_state(ui_gblink_t *g) {
+    if (!app_gblink_running()) {
+        return false;
+    }
+    gblink_state_t st;
+    gblink_state(&st);
+    *g = (ui_gblink_t){
+        .usb_is_gblink = app_usb_is_gblink(),
+        .configured    = st.usb_configured,
+        .mode          = st.mode,
+        .owner         = st.owner,
+        .status        = st.last_status,
+        .host_seen     = st.frames[GBLINK_HOST_USB] + st.frames[GBLINK_HOST_SERIAL] +
+                         st.frames[GBLINK_HOST_BRIDGE] + st.frames[GBLINK_HOST_NET] != 0,
+    };
+    return true;
+}
+#endif
+
+/* Link: Online, below with its handlers. */
+#if !defined(GBAGATE_QEMU)
+#include "celio.h"
+#include "net_esp32s3.h"
+#endif
+static void online_gather(ui_online_t *o);
+static void online_retry(void);
+static void online_restart(void);
+static int  s_local_players;   /* GBAs on this board's cable, as set (Link: Online) */
+static int  s_players;         /* ... and the session's size, 2-4                 */
+static int  s_online_row;      /* the row the encoder sets: UI_ONLINE_ROW_*       */
 
 #if !defined(GBAGATE_QEMU)
 #include "gbl_peer.h"
@@ -103,6 +164,7 @@ __attribute__((weak)) const chip_bus_io_t *chip_reader_bus(void) { return NULL; 
 __attribute__((weak)) void                *chip_reader_ctx(void) { return NULL; }
 #endif
 static uint16_t gate_scan_chip(bool advance, bool beast);
+static const char *chip_name_for(cg_game_t game, uint16_t id);
 #include "variant.h"
 
 static const char *TAG = "gate";
@@ -141,11 +203,8 @@ static const struct {
 /* ---- state ------------------------------------------------------------- */
 
 static chipgate_t  s_gate;
-static chipdb_t    s_db;
-static chipview_t  s_view;
-static ui_list_t   s_list;
-static uint16_t    s_view_storage[512];
-static bool        s_db_open;
+/* The chip list, its view and favourites are the Battle Chip applet's now
+ * (applets/battle_chip.c); this file keeps the gate it drives. */
 
 /*
  * The shell was compiled, tested and never drawn: ui_service() went straight
@@ -161,6 +220,8 @@ static bool        s_db_open;
  * ESP-IDF build with -Werror.
  */
 void gate_enter_mode(app_mode_t mode, cg_game_t game);
+void gate_note_input_mode(int actual);
+int  input_hw_set_mode(int mode);
 void gate_apply_display_settings(void);
 void gate_shell_start(uint32_t caps);
 bool gate_send_chip(uint16_t wire_id);
@@ -186,6 +247,7 @@ __attribute__((weak)) bool chip_reader_probe(void) { return false; }
 static rom_catalog_t s_cat;
 static romview_t     s_roms;
 static char          s_send_status[32];
+static const char   *s_send_advice = "";   /* the line under the status */
 static uint32_t      s_send_pct;
 
 /*
@@ -210,6 +272,29 @@ __attribute__((weak)) bool msc_rescan(rom_catalog_t *c, uint32_t logo) {
 __attribute__((weak)) const rom_io_t *msc_io(void) { return NULL; }
 #endif
 
+/*
+ * The SD card (port/esp32s3/sd_esp32s3.c), when there is no USB drive: the
+ * carriers and any board built without USB storage. It was written and never
+ * called, so no board read its card. Weak for the QEMU image, which has none.
+ */
+bool            sd_mounted(void);
+bool            sd_rescan(rom_catalog_t *cat, uint32_t logo_reference);
+const rom_io_t *sd_io(void);
+__attribute__((weak)) bool sd_mounted(void) { return false; }
+__attribute__((weak)) bool sd_rescan(rom_catalog_t *c, uint32_t logo) {
+    (void)c; (void)logo; return false;
+}
+__attribute__((weak)) const rom_io_t *sd_io(void) { return NULL; }
+
+/* Where programs come from: the USB drive if there is one, else the card. */
+static bool storage_available(void) { return msc_storage_available() || sd_mounted(); }
+static bool storage_rescan(rom_catalog_t *cat) {
+    return msc_storage_available() ? msc_rescan(cat, 0) : sd_rescan(cat, 0);
+}
+static const rom_io_t *storage_io(void) {
+    return msc_storage_available() ? msc_io() : sd_mounted() ? sd_io() : NULL;
+}
+
 /* ---- persistence -------------------------------------------------------- */
 
 static settings_t s_settings;
@@ -230,15 +315,8 @@ static bool s_settings_dirty;
 static void settings_touch(void) { s_settings_dirty = true; }
 
 static void settings_flush(void) {
-    /* Pick up anything the chip screen changed. chipview owns the live copy
-     * while a gate session is running; settings owns the stored one. */
-    if (s_view.favorites_dirty) {
-        memcpy(s_settings.favorites, s_view.favorites,
-               sizeof s_settings.favorites < sizeof s_view.favorites
-                   ? sizeof s_settings.favorites : sizeof s_view.favorites);
-        s_view.favorites_dirty = false;
-        s_settings_dirty = true;
-    }
+    /* Favourites arrive already in s_settings: the Battle Chip applet writes
+     * them through env.favorites and asks for a save (settings_touch). */
     if (!s_settings_dirty) {
         return;
     }
@@ -290,6 +368,14 @@ static const char *screen_controls(uint32_t wanted) {
     return controls_hint(&s_controls);
 }
 
+/* The board's two keys, for footers that say what each does here. */
+static ui_keys_t page_keys(void) {
+    /* Bound for its side effect: it sets which buttons need a long press.
+     * The footer itself is the page's, not the binding table's. */
+    (void)screen_controls(CTRL_BIT(CTRL_CONFIRM) | CTRL_BIT(CTRL_CANCEL));
+    return ui_keys_for((int)s_settings.input_mode);
+}
+
 /* What a plain page offers: confirm and back, nothing else. */
 #define CTRLS_PAGE   (CTRL_BIT(CTRL_CONFIRM) | CTRL_BIT(CTRL_CANCEL))
 
@@ -298,9 +384,6 @@ static const char *screen_controls(uint32_t wanted) {
                       CTRL_BIT(CTRL_PAGE_PREV) | CTRL_BIT(CTRL_PAGE_NEXT))
 
 /* The chip screen: everything. */
-#define CTRLS_CHIPS  (CTRLS_LIST | CTRL_BIT(CTRL_TAB_PREV) | \
-                      CTRL_BIT(CTRL_TAB_NEXT) | CTRL_BIT(CTRL_MARK) | \
-                      CTRL_BIT(CTRL_MENU))
 
 static ui_shell_t s_shell;
 static bool       s_shell_ready;
@@ -371,37 +454,27 @@ static uint32_t s_selftest_ready;
 
 /* ---- database ---------------------------------------------------------- */
 
+/*
+ * Give the gate a game's identity by database label. QEMU calls this at boot
+ * (tasks.c) so the emulated gate answers before any UI has run; on hardware
+ * the Battle Chip applet starts the gate through env.gate_start.
+ */
 bool gate_open_database(const char *label) {
 #if defined(GBAGATE_HAS_CHIPDB)
     for (unsigned i = 0; i < DB_COUNT; i++) {
         if (strcmp(k_databases[i].label, label) != 0) {
             continue;
         }
+        chipdb_t db;
         size_t size = (size_t)(k_databases[i].end - k_databases[i].start);
-        if (!chipdb_open(&s_db, k_databases[i].start, size)) {
+        if (!chipdb_open(&db, k_databases[i].start, size)) {
             ESP_LOGE(TAG, "%s failed to open (%u bytes) -- truncated embed?",
                      label, (unsigned)size);
             return false;
         }
         chipgate_init(&s_gate, k_databases[i].game);
-        chipview_init(&s_view, &s_db, s_view_storage,
-                      sizeof s_view_storage / sizeof s_view_storage[0]);
-        /*
-         * Restore favourites. settings.c has carried this array since it was
-         * written and nothing ever read it back, so starring a chip survived
-         * exactly until the next power cycle -- and looked like the save was
-         * broken rather than never loaded.
-         */
-        memcpy(s_view.favorites, s_settings.favorites,
-               sizeof s_view.favorites < sizeof s_settings.favorites
-                   ? sizeof s_view.favorites : sizeof s_settings.favorites);
-        chipview_rebuild(&s_view);
-        ui_list_init(&s_list, UI_ROWS, true);
-        ui_list_set(&s_list, s_view.view, s_view.view_count);
-        s_db_open = true;
-
         ESP_LOGI(TAG, "%s: %u chips, gate id %04X",
-                 label, chipdb_count(&s_db), s_gate.gate_id);
+                 label, chipdb_count(&db), s_gate.gate_id);
         return true;
     }
     ESP_LOGE(TAG, "no embedded database called '%s'", label);
@@ -496,17 +569,7 @@ bool gate_send_chip(uint16_t wire_id) {
 
 /* ---- the screen -------------------------------------------------------- */
 
-typedef enum {
-    UI_EVENT_ENCODER = 0, UI_EVENT_CHIP_IN, UI_EVENT_CHIP_OUT,
-    UI_EVENT_LINK_UP, UI_EVENT_LINK_DOWN, UI_EVENT_CHIP_SENT,
-    UI_EVENT_USB_ATTACHED, UI_EVENT_USB_DETACHED
-} ui_event_type_t;
-
-typedef struct {
-    ui_event_type_t type;
-    int32_t         a;
-    uint16_t        b;
-} ui_event_t;
+/* UI events: src/ui_event.h. */
 
 /*
  * A running mode that has no screen of its own used to render nothing at all,
@@ -521,78 +584,21 @@ static void render_mode_screen(void)
         return;
     }
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
+    const char *title = shell_chosen_name(&s_shell);
+    ui_keys_t   keys  = page_keys();
+    ui_page_t   page;
 
-    ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
-    ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
-    ui_text_clipped(&canvas, 3, (UI_HEADER_H - UI_FONT_H) / 2, UI_SCREEN_W - 6,
-                    shell_mode_name(s_shell.chosen_mode), COL_BG);
-
-    int y = UI_LIST_Y + 2;
-    char line[32];
-
-    if (s_shell.chosen_mode == APP_MODE_DIAGNOSTICS) {
-        /*
-         * Diagnostics is the mode you reach for when nothing else works, so it
-         * reports the things that are otherwise only visible in a serial log:
-         * which capabilities were detected, whether the link ever moved, and
-         * whether the UI is losing events.
-         */
-        char caps[64];
-        hw_caps_describe(s_shell.caps, caps, sizeof caps);
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, "detected:", COL_TEXT_DIM);
-        y += 10;
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, caps, COL_TEXT);
-        y += 14;
-
-        snprintf(line, sizeof line, "link   %s",
-                 chipgate_connected(&s_gate) ? "linked" : "waiting");
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, line, COL_TEXT);
-        y += 10;
-
-        snprintf(line, sizeof line, "xfers  %lu", (unsigned long)s_transfers);
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, line, COL_TEXT);
-        y += 10;
-
-        snprintf(line, sizeof line, "chips  %lu", (unsigned long)s_chips_sent);
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, line, COL_TEXT);
-        y += 10;
-
-        snprintf(line, sizeof line, "gate   %04X", s_gate.gate_id);
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, line, COL_TEXT);
-        y += 10;
-
-        snprintf(line, sizeof line, "uidrop %lu",
-                 (unsigned long)tasks_ui_events_dropped());
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, line, COL_TEXT);
-    } else if (!app_dispatch_running(&s_dispatch)) {
-        /*
-         * The shell is on the running screen with nothing behind it, which is
-         * what a refused enter() looks like. Naming the reason matters: the
-         * page used to read "no screen for this mode yet", which describes the
-         * firmware rather than the fault the user just hit.
-         */
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4,
-                        "mode did not start", COL_TEXT);
-        y += 14;
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4,
-                        app_dispatch_status_name(s_dispatch.last_status),
-                        COL_TEXT_DIM);
+    if (!app_dispatch_running(&s_dispatch)) {
+        /* The shell is on the running screen with nothing behind it, which is
+         * what a refused enter() looks like. */
+        ui_page_refused(&page, title, &keys, (int)s_dispatch.last_status);
     } else {
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4, s_status, COL_TEXT);
-        y += 14;
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4,
-                        "no screen for this", COL_TEXT_DIM);
-        y += 10;
-        ui_text_clipped(&canvas, 2, y, UI_SCREEN_W - 4,
-                        "mode yet", COL_TEXT_DIM);
+        /* A mode with no screen. app_mode_route() gives every mode the menu
+         * reaches one, and test_modes checks it; this is the last resort. */
+        ui_page_status(&page, title, &keys, s_status);
     }
 
-    int fy = UI_SCREEN_H - UI_FOOTER_H;
-    ui_fill(&canvas, 0, fy, UI_SCREEN_W, UI_FOOTER_H, COL_ROW_ALT);
-    ui_fill(&canvas, 0, fy, UI_SCREEN_W, 1, COL_HEADER);
-    ui_text_clipped(&canvas, 2, fy + (UI_FOOTER_H - UI_FONT_H) / 2,
-                    UI_SCREEN_W - 4, screen_controls(CTRLS_PAGE), COL_TEXT_DIM);
-
+    ui_render_page(&canvas, &page);
     st7735_mark_all_dirty();
     st7735_flush();
 }
@@ -627,7 +633,8 @@ static void send_program(void)
      */
     mb_xfer_fn xfer_fn = mb_spi_transfer();
     if (!xfer_fn) {
-        snprintf(s_send_status, sizeof s_send_status, "no link hardware");
+        snprintf(s_send_status, sizeof s_send_status, "no link port");
+        s_send_advice = "this board can't send";
         return;
     }
 
@@ -652,75 +659,53 @@ static void send_program(void)
     }
     if (!staging) {
         snprintf(s_send_status, sizeof s_send_status, "out of memory");
+        s_send_advice = "restart gbagate";
         return;
     }
 
     uint32_t len = 0;
 
-    snprintf(s_send_status, sizeof s_send_status, "staging");
+    /* The instruction comes first: the GBA has to be switched on with no
+     * cartridge while we wait, and saying so only after loading the file
+     * wasted the seconds the loading took. */
+    snprintf(s_send_status, sizeof s_send_status, "loading the file");
+    s_send_advice = "turn on the GBA, no cart";
     s_send_pct = 0;
 
-    const rom_io_t *io = msc_io();
+    const rom_io_t *io = storage_io();
     if (!io || !rom_stage(&s_cat, s_roms.cursor, io, NULL,
                           staging, MB_MAX_SIZE, &len)) {
-        snprintf(s_send_status, sizeof s_send_status, "stage failed");
+        snprintf(s_send_status, sizeof s_send_status, "can't read the file");
+        s_send_advice = "check it on the PC";
         heap_caps_free(staging);
         return;
     }
 
-    snprintf(s_send_status, sizeof s_send_status, "power on the GBA");
+    snprintf(s_send_status, sizeof s_send_status, "waiting for the GBA");
+    s_send_advice = "turn it on, no cart";
     s_send_pct = 0;
+
+    if (mb_spi_acquire() != ESP_OK) {
+        snprintf(s_send_status, sizeof s_send_status, "link port busy");
+        s_send_advice = "restart gbagate";
+        heap_caps_free(staging);
+        return;
+    }
 
     mb_session_t mb;
     mb_init(&mb, xfer_fn, NULL);
     mb.progress = send_progress;
 
     mb_result_t r = mb_send(&mb, staging, len);
+    mb_spi_release();
+    snprintf(s_send_status, sizeof s_send_status, "%s",
+             ui_send_result_text((int)r, &s_send_advice));
     if (r == MB_OK) {
-        snprintf(s_send_status, sizeof s_send_status, "sent");
         s_send_pct = 100;
-    } else {
-        snprintf(s_send_status, sizeof s_send_status, "%s", mb_result_name(r));
     }
+    ESP_LOGI(TAG, "send: %s", mb_result_name(r));
 
     heap_caps_free(staging);
-}
-
-/*
- * A titled page of lines. The link modes, Read Chip and USB Storage are all
- * "show a few facts and one instruction", and giving each its own renderer
- * would be four copies of the same layout drifting apart.
- */
-static void render_page(const char *title, const char *const *lines, int n,
-                        const char *footer)
-{
-    uint16_t *fb = st7735_framebuffer();
-    if (!fb) {
-        return;
-    }
-    ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
-
-    ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
-    ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
-    ui_text_clipped(&canvas, 3, (UI_HEADER_H - UI_FONT_H) / 2, UI_SCREEN_W - 6,
-                    title, COL_BG);
-
-    for (int i = 0; i < n && i < 8; i++) {
-        if (!lines[i]) {
-            continue;
-        }
-        ui_text_clipped(&canvas, 2, UI_LIST_Y + 4 + i * 11, UI_SCREEN_W - 4,
-                        lines[i], i == 0 ? COL_TEXT : COL_TEXT_DIM);
-    }
-
-    int fy = UI_SCREEN_H - UI_FOOTER_H;
-    ui_fill(&canvas, 0, fy, UI_SCREEN_W, UI_FOOTER_H, COL_ROW_ALT);
-    ui_fill(&canvas, 0, fy, UI_SCREEN_W, 1, COL_HEADER);
-    ui_text_clipped(&canvas, 2, fy + (UI_FOOTER_H - UI_FONT_H) / 2,
-                    UI_SCREEN_W - 4, footer ? footer : "", COL_TEXT_DIM);
-
-    st7735_mark_all_dirty();
-    st7735_flush();
 }
 
 /*
@@ -777,6 +762,14 @@ static void render_settings(const ui_event_t *e, bool have_event)
     if (uiset_dirty(&s_setedit)) {
         settings_touch();
         uiset_clear_dirty(&s_setedit);
+        static uint8_t applied_input = 0xFF;
+        if (applied_input == 0xFF) {
+            applied_input = s_settings.input_mode;
+        }
+        if (s_settings.input_mode != applied_input) {
+            gate_note_input_mode(input_hw_set_mode((int)s_settings.input_mode));
+            applied_input = s_settings.input_mode;
+        }
         /* Apply immediately: an offset you cannot see change is one you cannot
          * calibrate by eye, which is the only way it gets calibrated. */
         if (uiset_display_affected(&s_setedit)) {
@@ -789,119 +782,175 @@ static void render_settings(const ui_event_t *e, bool have_event)
         return;
     }
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
+    ui_keys_t keys = page_keys();
     ui_render_menu(&canvas, "Settings", uiset_label, &s_setedit,
-                   uiset_count(), s_setedit.cursor,
+                   uiset_rows(&s_setedit), s_setedit.cursor,
                    /* The editor's own hint says whether turning changes the
                     * value or the selection, which no binding table knows. */
-                   uiset_footer(&s_setedit));
+                   uiset_footer(&s_setedit, &keys));
     st7735_mark_all_dirty();
     st7735_flush();
 }
 
+/* ---- GB Printer ------------------------------------------------------------- */
+
+/*
+ * The board as a Game Boy Printer: GB-Link's printer mode as the local host
+ * (port/gblink/printer_glue.cpp); src/printer_mode.c decodes what it sends
+ * and stores each print as a PNG under PRINTS/ on the SD card, or on the
+ * board's own drive when there is no card (port/esp32s3/print_store_esp32s3.c).
+ * The page shows the print, the encoder scrolls a long one.
+ */
+static printer_mode_t *s_printer;   /* ~60 KB, only while the mode runs */
+static int             s_print_scroll;
+
+/* Weak: images (QEMU) with no drive to store prints on. */
+bool print_store_save(const uint8_t *png, size_t n, char *name, size_t cap);
+__attribute__((weak)) bool print_store_save(const uint8_t *png, size_t n, char *name, size_t cap) {
+    (void)png; (void)n; (void)name; (void)cap;
+    return false;
+}
+
+static size_t printer_read(void *ctx, uint8_t *out, size_t cap) {
+    (void)ctx;
+#if defined(GBAGATE_QEMU)
+    (void)out; (void)cap;
+    return 0;                  /* no adapter in the emulated board */
+#else
+    return gblink_printer_read(out, cap);
+#endif
+}
+
+static bool printer_save(void *ctx, const uint8_t *png, size_t n, char *name, size_t cap) {
+    (void)ctx;
+    return print_store_save(png, n, name, cap);
+}
+
+static void render_printer(const ui_event_t *e, bool have_event)
+{
+    const char *title = shell_chosen_name(&s_shell);
+    ui_keys_t   keys  = page_keys();
+    const gbp_t *pic  = s_printer ? &s_printer->gbp : NULL;
+    const char *note  = s_printer && s_printer->note[0] ? s_printer->note : NULL;
+    if (have_event && e && e->type == UI_EVENT_ENCODER && pic) {
+        const int max = ui_print_scroll_max(pic, note);
+        s_print_scroll += e->a > 0 ? 8 : -8;
+        s_print_scroll = s_print_scroll < 0 ? 0 : s_print_scroll > max ? max : s_print_scroll;
+    }
+    uint16_t *fb = st7735_framebuffer();
+    if (!fb) {
+        return;
+    }
+    ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
+    ui_render_print(&canvas, title, &keys, pic, s_print_scroll, note);
+    st7735_mark_all_dirty();
+    st7735_flush();
+}
+
+static bool mode_enter_printer(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    const printer_io_t io = { printer_read, printer_save, NULL };
+    /* PSRAM when the board has it: nothing here is timing-critical */
+    if (!s_printer) s_printer = heap_caps_malloc(sizeof *s_printer, MALLOC_CAP_SPIRAM);
+    if (!s_printer) s_printer = heap_caps_malloc(sizeof *s_printer, MALLOC_CAP_8BIT);
+    if (!s_printer) {
+        return false;          /* the menu says the mode did not start */
+    }
+    printer_mode_init(s_printer, &io, (uint32_t)(esp_timer_get_time() / 1000));
+    s_print_scroll = 0;
+#if !defined(GBAGATE_QEMU)
+    gblink_printer_start();
+#endif
+    return true;
+}
+
+static void mode_exit_printer(void *ctx) {
+    (void)ctx;
+#if !defined(GBAGATE_QEMU)
+    gblink_printer_stop();
+#endif
+    heap_caps_free(s_printer);
+    s_printer = NULL;
+}
+
+static void mode_tick_printer(void *ctx) {
+    (void)ctx;
+    if (s_printer && printer_mode_tick(s_printer, (uint32_t)(esp_timer_get_time() / 1000))) {
+        s_print_scroll = 0;    /* a new print: from its top */
+    }
+}
+
 static void render_simple_mode(const ui_event_t *e, bool have_event)
 {
-    char l0[32], l1[32], l2[32], l3[32];
-    const char *lines[4] = { l0, l1, l2, l3 };
-    const char *footer = NULL;
-    const char *title = shell_mode_name(s_shell.chosen_mode);
-
-    l0[0] = l1[0] = l2[0] = l3[0] = '\0';
+    const char *title = shell_chosen_name(&s_shell);
+    ui_keys_t   keys  = page_keys();
+    const ui_keys_t *footer = &keys;   /* the builders take it as footer */
+    ui_page_t   page;
+    ui_page_init(&page, title, NULL);
 
     switch (s_shell.chosen_mode) {
 
 #if !defined(GBAGATE_QEMU)
     case APP_MODE_LINK_WIRELESS: {
-        /* The wireless link cable: GB-Link's relay, run against another board
-         * over ESP-NOW (src/gbl_peer.c). Retransmits climbing while frames
-         * still flow is a noisy channel; frames stopping is the peer gone. */
-        const gbl_peer_t *p = gblink_peer_state();
         uint8_t mac[6];
-        snprintf(l0, sizeof l0, "%s%s", gbl_peer_state_name(p->state),
-                 p->state >= GBL_PEER_SETTLING ? (p->master ? " (M)" : " (S)") : "");
-        if (wireless_cable_peer_mac(mac)) {
-            snprintf(l1, sizeof l1, "%02X%02X%02X%02X%02X%02X",
-                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        } else if (p->mode_mismatch && p->state == GBL_PEER_SEARCHING) {
-            /* A board is there but set to another air link. */
-            snprintf(l1, sizeof l1, "peer: other link");
-        } else {
-            snprintf(l1, sizeof l1, "%s: no peer", air_link_name((air_link_t)s_settings.air_link));
-        }
-        if (p->mode == 0x07) {
-            /* Wireless Adapter: whether the game has found the adapter is the
-             * first question; the firmware's own telemetry answers it. */
-            const char *gba = !p->rfu.seen          ? "GBA: --"
-                            : p->rfu.found          ? "GBA: found adapter"
-                            : !p->rfu.transfers     ? "GBA: no clock"
-                            : !p->rfu.any_rx        ? "GBA: use GBC cable"
-                                                    : "GBA: looking";
-            snprintf(l2, sizeof l2, "%s", gba);
-            snprintf(l3, sizeof l3, "rst %u out %lu in %lu", p->rfu.resets,
-                     (unsigned long)p->data_out, (unsigned long)p->data_in);
-        } else {
-            snprintf(l2, sizeof l2, "out %lu in %lu", (unsigned long)p->data_out, (unsigned long)p->data_in);
-            snprintf(l3, sizeof l3, "resent %lu", (unsigned long)p->retransmits);
-        }
-        footer = screen_controls(CTRLS_PAGE);
+        bool locked = wireless_cable_peer_mac(mac);
+        ui_page_wireless(&page, title, footer, gblink_peer_state(),
+                         locked ? mac : NULL,
+                         air_link_name((air_link_t)s_settings.air_link));
         break;
     }
 #endif
 
-    case APP_MODE_LINK_USB:
-#if defined(GBAGATE_QEMU)
-    case APP_MODE_LINK_WIRELESS:   /* QEMU has no radio: the UART bridge */
-#endif
-    {
-        link_bridge_t *b = tasks_bridge();
-        snprintf(l0, sizeof l0, "%s", b ? bridge_state_name(b->state) : "no bridge");
-        snprintf(l1, sizeof l1, "sent   %lu", b ? (unsigned long)b->words_sent : 0ul);
-        snprintf(l2, sizeof l2, "recvd  %lu", b ? (unsigned long)b->words_received : 0ul);
-        /* Round trip is the number that says whether a wireless link is
-         * usable: under a millisecond is fine, tens are not. */
-        snprintf(l3, sizeof l3, "rtt    %lu us", b ? (unsigned long)b->rtt_us : 0ul);
-        footer = screen_controls(CTRLS_PAGE);
+    case APP_MODE_LINK_ONLINE: {
+        ui_online_t on;
+        online_gather(&on);
+        /* before the session links, the click moves between Players and
+         * Local Players and turning sets the one marked; a session not yet
+         * linked starts again for the new numbers (a Multi-Play link is
+         * created differently from a one-cable one). After a failed or
+         * finished session the click starts a new one. */
+        const bool setting = ui_online_setting(&on);
+        if (have_event && e && e->type == UI_EVENT_CHIP_SENT) {
+            if (setting) s_online_row = !s_online_row;
+            else online_retry();
+            on.row = s_online_row;
+        }
+        if (have_event && e && e->type == UI_EVENT_ENCODER && setting) {
+            const int players = s_players, local = s_local_players;
+            ui_online_step(&s_players, &s_local_players, s_online_row, e->a);
+            if (s_players != players || s_local_players != local) online_restart();
+            on.players = s_players;
+            on.local_players = s_local_players;
+        }
+        ui_page_online(&page, title, footer, &on);
         break;
     }
+
+#if defined(GBAGATE_QEMU)
+    case APP_MODE_LINK_USB:
+    case APP_MODE_LINK_WIRELESS:   /* QEMU has no radio: the UART bridge */
+        ui_page_link_usb(&page, title, footer, tasks_bridge());
+        break;
+#else
+    case APP_MODE_LINK_USB: {
+        /* The GB-Link adapter itself: what a PC's app is running on it. */
+        ui_gblink_t g;
+        bool have = gblink_page_state(&g);
+        ui_page_gblink(&page, title, footer, have ? &g : NULL);
+        break;
+    }
+#endif
 
     case APP_MODE_INFRARED: {
-        uint16_t last = ir_last_command();
-        snprintf(l0, sizeof l0, "%s", ir_ready() ? "IR ready" : "no IR fitted");
-        snprintf(l1, sizeof l1, "cmds   %lu", (unsigned long)ir_commands());
-        snprintf(l2, sizeof l2, "last   %03X  %X/%X/%X", (unsigned)last,
-                 cdz_category(last), cdz_motion(last), cdz_action(last));
-        /*
-         * Aborted trains is the number that tells you whether the timing is
-         * right. A decoder measuring the wrong thing aborts nearly everything
-         * while still looking alive, so a bare command count would not show it.
-         */
-        snprintf(l3, sizeof l3, "aborted %lu", (unsigned long)ir_aborted());
-        footer = screen_controls(CTRLS_PAGE);
-        if (have_event && e && e->type == UI_EVENT_CHIP_SENT && ir_ready()) {
-            ir_send(last);
-        }
-        break;
-    }
-
-    case APP_MODE_CHIP_SCAN: {
-        bool adv = false, beast = false;
-        bool ok = chip_reader_detect(&adv, &beast);
-        snprintf(l0, sizeof l0, ok ? "reader ready" : "no reader");
-        snprintf(l1, sizeof l1, "advance %s", adv ? "chip in" : "empty");
-        snprintf(l2, sizeof l2, "beast   %s", beast ? "chip in" : "empty");
-        if (ok && (adv || beast)) {
-            uint16_t id = gate_scan_chip(adv, beast);
-            if (id != CG_CHIP_NONE) {
-                snprintf(l3, sizeof l3, "id     %04X", id);
-            } else {
-                snprintf(l3, sizeof l3, "unreadable");
-            }
-        }
-        footer = screen_controls(CTRLS_PAGE);
-        if (have_event && e && e->type == UI_EVENT_CHIP_SENT && (adv || beast)) {
-            uint16_t id = gate_scan_chip(adv, beast);
-            if (id != CG_CHIP_NONE) {
-                gate_send_chip(id);
-            }
+        ui_ir_t ir = {
+            .ready    = ir_ready(),
+            .commands = ir_commands(),
+            .aborted  = ir_aborted(),
+            .last     = ir_last_command(),
+        };
+        ui_page_infrared(&page, title, footer, &ir);
+        if (have_event && e && e->type == UI_EVENT_CHIP_SENT && ir.ready) {
+            ir_send(ir.last);
         }
         break;
     }
@@ -914,29 +963,71 @@ static void render_simple_mode(const ui_event_t *e, bool have_event)
                 s_exposed = msc_release_to_host() == ESP_OK;
             }
         }
-        snprintf(l0, sizeof l0, s_exposed ? "drive is the PC's"
-                                          : "drive is ours");
-        snprintf(l1, sizeof l1, s_exposed ? "safe to copy files"
-                                          : "press to hand over");
-        /* One owner at a time, and saying which is the whole point of the
-         * mode -- guessing at it is what corrupts a FAT volume. */
-        snprintf(l2, sizeof l2, "%s", s_exposed ? "eject before back"
-                                                : "");
         /*
-         * The hint names the control; the line above already says what the
-         * action does, and which way round it is. Restating "enter" here was
-         * wrong on every board without a keyboard.
+         * The footer names the control; the page already says what the action
+         * does, and which way round it is. Restating "enter" there was wrong
+         * on every board without a keyboard.
          */
-        footer = screen_controls(CTRLS_PAGE);
+        ui_page_usb_storage(&page, title, footer, s_exposed);
         break;
 
-    case APP_MODE_SETTINGS:
-    default:
-        /* Handled by its own renderer: it is a list, not a page of facts. */
+    case APP_MODE_DIAGNOSTICS: {
+        /* Redrawn every call: the counters change on their own, and a screen
+         * that only updates on input is indistinguishable from one that has
+         * stopped. */
+        const link_source_t *src = link_source_active();
+        ui_diag_t d = {
+            .caps       = s_shell.caps,
+#if defined(GBAGATE_QEMU)
+            /* The emulator image: the panel is a framebuffer streamed out of a
+             * UART, the link port the UART bridge, the keys a UART too. */
+            .stand_in   = HW_CAP_DISPLAY | HW_CAP_LINK_PORT,
+            .input      = "UART keys",
+            .input_stand_in = true,
+#elif BOARD_HAS_TOUCH
+            /* On-screen keys, standing in for buttons until the UI is made
+             * for touch (doc/CARRIER.md). */
+            .input      = "touch keys",
+            .input_stand_in = true,
+#else
+            .input      = input_mode_name((input_mode_t)s_settings.input_mode),
+#endif
+            .link_via   = src ? src->name : NULL,
+            .link_via_stand_in = src && strcmp(src->name, "phy") != 0,
+            .linked     = chipgate_connected(&s_gate),
+            .transfers  = s_transfers,
+            .chips_sent = s_chips_sent,
+            .gate_id    = s_gate.gate_id,
+            .ui_dropped = tasks_ui_events_dropped(),
+        };
+        ui_page_diagnostics(&page, title, footer, &d);
         break;
     }
 
-    render_page(title, lines, 4, footer);
+    case APP_MODE_SELFTEST: {
+        ui_selftest_t t = {
+            .linked    = chipgate_connected(&s_gate),
+            .transfers = s_transfers,
+            .sent      = s_selftest_sent,
+        };
+        ui_page_selftest(&page, title, footer, &t);
+        break;
+    }
+
+    case APP_MODE_SETTINGS:
+    default:
+        /* Settings has its own renderer: it is a list, not a page of facts. */
+        break;
+    }
+
+    uint16_t *fb = st7735_framebuffer();
+    if (!fb) {
+        return;
+    }
+    ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
+    ui_render_page(&canvas, &page);
+    st7735_mark_all_dirty();
+    st7735_flush();
 }
 
 static void render_rom_browser(void)
@@ -949,55 +1040,30 @@ static void render_rom_browser(void)
 
     /* Mid-transfer the list is meaningless; show progress instead. */
     if (s_send_status[0]) {
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
-        ui_text_clipped(&canvas, 3, (UI_HEADER_H - UI_FONT_H) / 2,
-                        UI_SCREEN_W - 6, "Send Program", COL_BG);
-
         const rom_entry_t *e = romview_current(&s_roms);
-        ui_text_clipped(&canvas, 2, UI_LIST_Y + 4, UI_SCREEN_W - 4,
-                        e ? e->name : "", COL_TEXT);
-        ui_text_clipped(&canvas, 2, UI_LIST_Y + 22, UI_SCREEN_W - 4,
-                        s_send_status, COL_CURSOR);
-
-        /* A bar, because a percentage alone does not show that a transfer has
-         * stopped moving. */
-        int bw = UI_SCREEN_W - 8;
-        ui_fill(&canvas, 4, UI_LIST_Y + 40, bw, 8, COL_BAR_TRACK);
-        ui_fill(&canvas, 4, UI_LIST_Y + 40,
-                (int)((bw * (int)s_send_pct) / 100), 8, COL_BAR_THUMB);
-
-        char pct[12];   /* "100%" plus slack: %lu can print ten digits */
-        snprintf(pct, sizeof pct, "%lu%%", (unsigned long)s_send_pct);
-        ui_text_clipped(&canvas, 4, UI_LIST_Y + 54, 60, pct, COL_TEXT_DIM);
-
-        int fy = UI_SCREEN_H - UI_FOOTER_H;
-        ui_fill(&canvas, 0, fy, UI_SCREEN_W, UI_FOOTER_H, COL_ROW_ALT);
-        ui_fill(&canvas, 0, fy, UI_SCREEN_W, 1, COL_HEADER);
-        ui_text_clipped(&canvas, 2, fy + (UI_FOOTER_H - UI_FONT_H) / 2,
-                        UI_SCREEN_W - 4, screen_controls(CTRLS_PAGE), COL_TEXT_DIM);
+        char foot[UI_PAGE_TEXT];
+        ui_keys_t keys = page_keys();
+        ui_keys_hint(foot, sizeof foot, &keys, NULL);
+        ui_render_progress(&canvas, "Send Program", e ? e->name : "",
+                           s_send_status, s_send_advice, s_send_pct, foot);
         st7735_mark_all_dirty();
         st7735_flush();
         return;
     }
 
     if (romview_count(&s_roms) == 0) {
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
-        ui_text_clipped(&canvas, 3, (UI_HEADER_H - UI_FONT_H) / 2,
-                        UI_SCREEN_W - 6, "Send Program", COL_BG);
-        ui_text_clipped(&canvas, 2, UI_LIST_Y + 20, UI_SCREEN_W - 4,
-                        romview_empty_text(&s_roms), COL_TEXT);
+        ui_render_notice(&canvas, "Send Program", romview_empty_text(&s_roms));
         st7735_mark_all_dirty();
         st7735_flush();
         return;
     }
 
+    ui_keys_t keys = page_keys();
     ui_render_menu(&canvas, "Send Program", romview_label, &s_roms,
                    romview_count(&s_roms), (uint8_t)s_roms.cursor,
                    /* romview's hint explains why a rom cannot be sent, which
                     * is about the file rather than the buttons. */
-                   romview_hint(&s_roms));
+                   romview_hint(&s_roms, &keys));
     st7735_mark_all_dirty();
     st7735_flush();
 }
@@ -1024,8 +1090,7 @@ static void render_shell(void)
     }
     ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
 
-    const char *title = (s_shell.screen == SHELL_SCREEN_GAMES)
-                            ? "Choose game" : "gbagate";
+    const char *title = shell_screen_title(&s_shell);
 
     /*
      * A mode that refused to start says so here. Without it, being bounced
@@ -1033,16 +1098,22 @@ static void render_shell(void)
      * did nothing -- and "the gate never appears" with no explanation is the
      * bug report nobody can act on.
      */
-    const char *foot;
+    (void)screen_controls(CTRLS_LIST);
+    ui_keys_t keys = ui_keys_for((int)s_settings.input_mode);
+    char open[24], back[24], foot[48];
+    ui_key_verb(open, sizeof open, keys.confirm,
+                s_shell.screen == SHELL_SCREEN_MODES ? "open" : "pick");
     if (s_last_refusal != APP_DISPATCH_OK) {
-        foot = app_dispatch_status_name(s_last_refusal);
-    } else if (s_shell.screen == SHELL_SCREEN_GAMES) {
-        foot = "back: hold";
+        /* Why the mode just chosen did not start; the mode's page says more. */
+        ui_footer_join(foot, sizeof foot, app_dispatch_status_name(s_last_refusal), NULL);
+    } else if (s_shell.screen != SHELL_SCREEN_MODES) {
+        ui_key_verb(back, sizeof back, keys.back, "back");
+        ui_footer_join(foot, sizeof foot, open, back);
     } else {
-        foot = GBAGATE_VARIANT_NAME;
+        /* The top: nothing to go back to, so the image's name instead. */
+        ui_footer_join(foot, sizeof foot, open, GBAGATE_VARIANT_NAME);
     }
 
-    (void)screen_controls(CTRLS_LIST);
     ui_render_menu(&canvas, title, shell_label, NULL,
                    shell_item_count(&s_shell), shell_cursor(&s_shell), foot);
     st7735_mark_all_dirty();
@@ -1062,7 +1133,242 @@ static void leave_mode(void)
 {
     shell_back(&s_shell);
     app_dispatch_from_shell(&s_dispatch, &s_shell);
+    /* Deferred writes -- an applet's favourites among them -- go now that the
+     * mode has let go of the link. Nothing is written unless something
+     * changed. */
+    settings_flush();
     render_shell();
+}
+
+/* ---- applets ------------------------------------------------------------ */
+
+/*
+ * What applets get from the device. now_ms and the hint are refreshed before
+ * each frame; the game is filled in by the dispatcher's adapter on entry.
+ */
+static applet_env_t s_applet_env;
+
+static bool applet_open_db(cg_game_t game, chipdb_t *db) {
+#if defined(GBAGATE_HAS_CHIPDB)
+    for (unsigned i = 0; i < DB_COUNT; i++) {
+        /* BN6 JP has no database of its own; it shares the US one, as the
+         * Battle Chip mode does. */
+        cg_game_t want = game == CG_GAME_BN6_JP ? CG_GAME_BN6_US : game;
+        if (k_databases[i].game == want) {
+            return chipdb_open(db, k_databases[i].start,
+                               (size_t)(k_databases[i].end - k_databases[i].start));
+        }
+    }
+#else
+    (void)game; (void)db;
+#endif
+    return false;
+}
+
+/* A chip's name in a game, for Read Chip. NULL when unknown. The databases
+ * are in flash, so the name pointer outlives the chipdb_t. */
+static const char *chip_name_for(cg_game_t game, uint16_t id)
+{
+    chipdb_t db;
+    if (id == CG_CHIP_NONE || !applet_open_db(game, &db)) {
+        return NULL;
+    }
+    uint16_t slot = chipdb_slot_for_id(&db, id);
+    return slot == CHIPDB_NO_RECORD ? NULL : chipdb_name(&db, slot);
+}
+
+/* ---- what applets get from the device: the gate, the reader ----------- */
+
+static bool svc_gate_start(cg_game_t game) {
+    if (!link_source_active()) {
+        return false;            /* no link port in this image */
+    }
+    s_selftest = false;
+    chipgate_init(&s_gate, game);
+    snprintf(s_status, sizeof s_status, "WAITING");
+    return true;
+}
+
+static void svc_gate_stop(void) {
+    if (chipgate_busy(&s_gate)) {
+        chipgate_clear(&s_gate);
+    }
+}
+
+static bool svc_gate_send(uint16_t wire_id) {
+    return gate_send_chip(wire_id);
+}
+
+/* A chip staged against a link that never completes leaves the gate BUSY
+ * with no way for the user to clear it; Back clears it. */
+static bool svc_gate_cancel(void) {
+    if (!chipgate_busy(&s_gate)) {
+        return false;
+    }
+    chipgate_clear(&s_gate);
+    return true;
+}
+
+static bool svc_gate_linked(void) { return chipgate_connected(&s_gate); }
+
+/* The chip in a reader slot, or CG_CHIP_NONE. Read Chip used to be its own
+ * mode for this; it is the Battle Chip applet's reader now. */
+static uint16_t svc_read_chip(void) {
+    bool adv = false, beast = false;
+    if (!chip_reader_detect(&adv, &beast) || !(adv || beast)) {
+        return CG_CHIP_NONE;
+    }
+    return gate_scan_chip(adv, beast);
+}
+
+static void svc_favorites_changed(void) { settings_touch(); }
+
+/* ---- the memory agent (rom/agent.c, src/mbagent.h) ----------------------
+ *
+ * Sent like any program, but carried in the firmware: its logo is borrowed
+ * from the first playable program on the drive (rom_borrow_logo), since
+ * Nintendo's bytes cannot ship. The link port is held from the send until
+ * agent_stop(), so the agent's words are never mistaken for a game's.
+ */
+#include "gbagent_image.h"
+
+static mba_client_t s_agent;
+static bool         s_agent_up;     /* the agent answered PING  */
+static bool         s_agent_port;   /* the SPI is ours          */
+
+static void agent_wait(void *ctx, uint32_t us) {
+    (void)ctx;
+    if (us >= 2000) {
+        vTaskDelay(pdMS_TO_TICKS((us + 999) / 1000));
+    } else if (us) {
+        esp_rom_delay_us(us);
+    }
+}
+
+static void svc_agent_stop(void) {
+    if (s_agent_port) {
+        mb_spi_release();
+    }
+    s_agent_port = false;
+    s_agent_up = false;
+}
+
+static const char *svc_agent_start(void) {
+    static uint8_t image[4096];
+    mb_xfer_fn xfer_fn = mb_spi_transfer();
+    if (!xfer_fn) {
+        return "this board can't send";
+    }
+    if (gbagent_image_len > sizeof image) {
+        return "agent image too large";
+    }
+    memcpy(image, gbagent_image, gbagent_image_len);
+
+    /* A logo, from a program the user owns. */
+    const rom_io_t *io = storage_io();
+    if (io && s_cat.count == 0) {
+        storage_rescan(&s_cat);
+    }
+    bool logo = false;
+    for (uint16_t i = 0; io && i < s_cat.count && !logo; i++) {
+        uint8_t head[0xC0];
+        if (s_cat.entries[i].status == ROM_OK &&
+            io->read_head(NULL, s_cat.entries[i].name, head, sizeof head)) {
+            logo = rom_borrow_logo(image, gbagent_image_len, head, sizeof head);
+        }
+    }
+    if (!logo) {
+        return "put a program on the drive";   /* its logo is needed */
+    }
+
+    svc_agent_stop();
+    if (mb_spi_acquire() != ESP_OK) {
+        return "link port busy";
+    }
+    s_agent_port = true;
+    mb_session_t mb;
+    mb_init(&mb, xfer_fn, NULL);
+    mb_result_t r = mb_send(&mb, image, gbagent_image_len);
+    if (r != MB_OK) {
+        const char *advice;
+        const char *why = ui_send_result_text((int)r, &advice);
+        svc_agent_stop();
+        return why;
+    }
+    /* The agent copies its loop to IWRAM and arms the link within a few
+     * milliseconds of starting; give it half a second. */
+    mba_init(&s_agent, xfer_fn, agent_wait, NULL);
+    mba_set_ready(&s_agent, mb_spi_ready_probe());   /* GBATEK's SI handshake */
+    for (int tries = 0; tries < 20 && !s_agent_up; tries++) {
+        s_agent_up = mba_ping(&s_agent) == MBA_OK;
+        if (!s_agent_up) vTaskDelay(pdMS_TO_TICKS(25));
+    }
+    if (!s_agent_up) {
+        svc_agent_stop();
+        return "the agent did not answer";
+    }
+    ESP_LOGI(TAG, "memory agent v%lu, free from 0x%08lx", (unsigned long)s_agent.version,
+             (unsigned long)s_agent.free_start);
+    return NULL;
+}
+
+static mba_client_t *svc_agent(void) {
+    return s_agent_up ? &s_agent : NULL;
+}
+
+static void render_applet(const ui_event_t *e, bool have_event)
+{
+    s_applet_env.now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    const applet_t *a = applet_for_mode(s_shell.chosen_mode);
+    static char hint[UI_PAGE_TEXT];
+    /* The applet's own controls decide the long presses (sort is a hold on
+     * A on a two-switch board); a page applet gets confirm and back. */
+    (void)screen_controls(a && a->controls ? a->controls : CTRLS_PAGE);
+    ui_keys_t keys = ui_keys_for((int)s_settings.input_mode);
+    ui_keys_hint(hint, sizeof hint, &keys, NULL);
+    s_applet_env.hint    = hint;
+    s_applet_env.confirm = keys.confirm;
+
+    if (have_event && e) {
+        app_mode_t m = s_shell.chosen_mode;
+        switch (e->type) {
+        case UI_EVENT_ENCODER:
+            applet_input_to(m, APPLET_IN_MOVE, e->a);
+            break;
+        case UI_EVENT_CHIP_SENT:
+            applet_input_to(m, APPLET_IN_CONFIRM, 0);
+            break;
+        case UI_EVENT_TAB:
+            applet_input_to(m, APPLET_IN_TAB, e->a);
+            break;
+        case UI_EVENT_MARK:
+            applet_input_to(m, APPLET_IN_MARK, 0);
+            break;
+        case UI_EVENT_MENU:
+            applet_input_to(m, APPLET_IN_MENU, 0);
+            break;
+        case UI_EVENT_CHIP_OUT:
+            /* Back is the applet's first, so it can cancel something of its
+             * own; one it does not use leaves. */
+            if (!applet_input_to(m, APPLET_IN_BACK, 0)) {
+                leave_mode();
+                return;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    uint16_t *fb = st7735_framebuffer();
+    if (!fb) {
+        return;
+    }
+    ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
+    /* Every frame: an applet may animate, and its tick() runs regardless. */
+    applet_render(a, &s_applet_env, &canvas);
+    st7735_mark_all_dirty();
+    st7735_flush();
 }
 
 void ui_service(const ui_event_t *e, bool have_event) {
@@ -1079,14 +1385,7 @@ void ui_service(const ui_event_t *e, bool have_event) {
             return;
         }
         ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_SCREEN_H, COL_BG);
-        ui_fill(&canvas, 0, 0, UI_SCREEN_W, UI_HEADER_H, COL_HEADER);
-        ui_text(&canvas, 3, (UI_HEADER_H - UI_FONT_H) / 2, "NO INTERFACE", COL_BG);
-        ui_text(&canvas, 4, UI_LIST_Y + 6,  "shell not started", COL_TEXT);
-        ui_text(&canvas, 4, UI_LIST_Y + 20, "app_main must call", COL_TEXT_DIM);
-        ui_text(&canvas, 4, UI_LIST_Y + 32, "gate_shell_start()", COL_TEXT_DIM);
-        ui_text(&canvas, 4, UI_LIST_Y + 52, "display+uart are OK", COL_TEXT_DIM);
-        ui_text(&canvas, 4, UI_LIST_Y + 64, "if you can read this", COL_TEXT_DIM);
+        ui_render_no_interface(&canvas);
         st7735_mark_all_dirty();
         st7735_flush();
         return;
@@ -1153,13 +1452,21 @@ void ui_service(const ui_event_t *e, bool have_event) {
      */
     app_dispatch_tick(&s_dispatch);
 
-    /* ---- the modes that are a page plus one action ---- */
-    if (s_shell.chosen_mode == APP_MODE_LINK_USB ||
-        s_shell.chosen_mode == APP_MODE_LINK_WIRELESS ||
-        s_shell.chosen_mode == APP_MODE_CHIP_SCAN ||
-        s_shell.chosen_mode == APP_MODE_USB_STORAGE ||
-        s_shell.chosen_mode == APP_MODE_SETTINGS) {
+    app_route_t route = app_mode_route(s_shell.chosen_mode);
 
+    /* A mode that did not start says why, whatever its screen would be. */
+    if (!app_dispatch_running(&s_dispatch) || route == APP_ROUTE_NONE) {
+        if (have_event && e && e->type == UI_EVENT_CHIP_OUT) {
+            leave_mode();
+            return;
+        }
+        render_mode_screen();
+        return;
+    }
+
+    switch (route) {
+    case APP_ROUTE_PAGE:
+    case APP_ROUTE_SETTINGS:
         /* The claim-back and the settings flush that used to be written out
          * here are now this mode's exit handler, so they also run when the
          * mode is left any other way. */
@@ -1167,15 +1474,16 @@ void ui_service(const ui_event_t *e, bool have_event) {
             leave_mode();
             return;
         }
-        if (s_shell.chosen_mode == APP_MODE_SETTINGS) {
+        if (route == APP_ROUTE_SETTINGS) {
             render_settings(e, have_event);
+        } else if (s_shell.chosen_mode == APP_MODE_PRINTER) {
+            render_printer(e, have_event);
         } else {
             render_simple_mode(e, have_event);
         }
         return;
-    }
 
-    if (s_shell.chosen_mode == APP_MODE_MULTIBOOT) {
+    case APP_ROUTE_ROMS:
         if (have_event && e) {
             switch (e->type) {
             case UI_EVENT_ENCODER:
@@ -1193,100 +1501,20 @@ void ui_service(const ui_event_t *e, bool have_event) {
         }
         render_rom_browser();
         return;
-    }
 
-    if (s_shell.chosen_mode != APP_MODE_CHIP_GATE || !s_db_open ||
-        !app_dispatch_running(&s_dispatch)) {
-        if (have_event && e && e->type == UI_EVENT_CHIP_OUT) {
-            leave_mode();
-            return;
-        }
-        /* Redraw every call: the diagnostics counters change on their own, and
-         * a screen that only updates on input is indistinguishable from one
-         * that has stopped. */
+    case APP_ROUTE_APPLET:
+        render_applet(e, have_event);
+        return;
+
+    default:
         render_mode_screen();
         return;
     }
-
-    if (have_event && e) {
-        switch (e->type) {
-        case UI_EVENT_ENCODER:
-            ui_list_move(&s_list, e->a);
-            break;
-        case UI_EVENT_CHIP_SENT: {
-            uint16_t pos;
-            if (ui_list_selected(&s_list, &pos)) {
-                uint16_t slot = chipview_slot_at(&s_view, s_list.cursor);
-                chip_record_t rec;
-                if (chipdb_get(&s_db, slot, &rec)) {
-                    gate_send_chip(rec.index);
-                }
-            }
-            break;
-        }
-        case UI_EVENT_CHIP_OUT:
-            /*
-             * Back cancels a chip that is still going out, then leaves the
-             * mode. Without the cancel, a chip staged against a link that
-             * never completes leaves the gate BUSY with no way for the user
-             * to clear it.
-             */
-            if (chipgate_busy(&s_gate)) {
-                chipgate_clear(&s_gate);
-                snprintf(s_status, sizeof s_status, "CANCELLED");
-            } else {
-                /* The favourites flush is the mode's exit handler now. */
-                leave_mode();
-                return;
-            }
-            break;
-        case UI_EVENT_LINK_UP:
-            snprintf(s_status, sizeof s_status, "LINKED");
-            break;
-        case UI_EVENT_LINK_DOWN:
-            snprintf(s_status, sizeof s_status, "WAITING");
-            break;
-        default:
-            break;
-        }
-    }
-
-    /* The list must stay backed by this view or the renderer refuses to draw
-     * it -- see ui_render_list_matches(). */
-    if (s_list.items != s_view.view || s_list.count != s_view.view_count) {
-        ui_list_set(&s_list, s_view.view, s_view.view_count);
-    }
-
-    if (!s_list.dirty && !have_event) {
-        return;
-    }
-    s_list.dirty = false;
-
-    uint16_t *fb = st7735_framebuffer();
-    if (!fb) {
-        return;
-    }
-    ui_canvas_t canvas = { fb, UI_SCREEN_W, UI_SCREEN_H };
-    /* Bind the full set: the chip screen is the only one that uses tabs, the
-     * favourite mark and the sort menu, and binding is what tells ui_input
-     * whether A needs a hold on this hardware. */
-    (void)screen_controls(CTRLS_CHIPS);
-    ui_render_chip_screen(&canvas, &s_view, &s_db, &s_list, s_status);
-    st7735_mark_all_dirty();
-    st7735_flush();
 }
 
 /* Called when the shell hands control to a mode. */
 void gate_enter_mode(app_mode_t mode, cg_game_t game) {
     switch (mode) {
-    case APP_MODE_CHIP_GATE:
-        s_selftest = false;
-        gate_open_database(game == CG_GAME_BN4 ? "bn4r" :
-                           game == CG_GAME_BN5 ? "bn5p" :
-                           game == CG_GAME_BN6_JP ? "bn6g" : "bn6g");
-        chipgate_init(&s_gate, game);
-        snprintf(s_status, sizeof s_status, "WAITING");
-        break;
     case APP_MODE_MULTIBOOT: {
         /*
          * Rescan on entry rather than caching: the drive changes underneath us
@@ -1294,9 +1522,9 @@ void gate_enter_mode(app_mode_t mode, cg_game_t game) {
          * no longer there.
          */
         romview_state_t st = ROMVIEW_NO_STORAGE;
-        if (!msc_storage_available()) {
+        if (!storage_available()) {
             st = ROMVIEW_HOST_OWNS;
-        } else if (msc_rescan(&s_cat, 0)) {
+        } else if (storage_rescan(&s_cat)) {
             st = ROMVIEW_OK;
         }
         romview_init(&s_roms);
@@ -1332,6 +1560,8 @@ void gate_enter_mode(app_mode_t mode, cg_game_t game) {
  * whole persistence path mean anything.
  */
 void gate_apply_display_settings(void) {
+    /* The palette is ours to apply, panel or not; QEMU's framebuffer too. */
+    ui_theme_set((ui_theme_id_t)s_settings.theme);
 #if !defined(GBAGATE_QEMU)
     extern void st7735_set_offset(uint8_t colstart, uint8_t rowstart);
     extern void st7735_set_bgr(bool bgr);
@@ -1353,11 +1583,33 @@ void gate_settings_start(void) {
          * the ones most 128x128 modules want. */
         ESP_LOGI(TAG, "no stored settings; using defaults");
     }
+    ui_theme_set((ui_theme_id_t)s_settings.theme);
     s_settings_dirty = false;
     uiset_init(&s_setedit, &s_settings);
+#if BOARD_HAS_TOUCH
+    /* The ILI9341 has no glass offsets (they are the ST7735's), and touch is
+     * the only input: two fields that would do nothing, so not offered. */
+    uiset_hide(&s_setedit, (1u << SETFIELD_COLSTART) | (1u << SETFIELD_ROWSTART) |
+                           (1u << SETFIELD_INPUT));
+#endif
 }
 
 int gate_input_mode(void) { return (int)s_settings.input_mode; }
+
+/*
+ * The mode input actually started in. A board without an encoder runs its
+ * switches even when "encoder" is saved; Settings shows what is in use, not
+ * what was asked for, and the footers name the right keys.
+ */
+void gate_note_input_mode(int actual) {
+    if (actual >= 0 && actual != (int)s_settings.input_mode) {
+        s_settings.input_mode = (uint8_t)actual;
+    }
+}
+
+/* Settings changed the input mode: apply it now. Weak, for the QEMU image,
+ * whose keyboard has no pins to rewire. */
+__attribute__((weak)) int input_hw_set_mode(int mode) { return mode; }
 
 const settings_t *gate_settings(void) { return &s_settings; }
 
@@ -1377,24 +1629,6 @@ const settings_t *gate_settings(void) { return &s_settings; }
  * rather than only on the Back key.
  */
 
-static bool mode_enter_chip_gate(void *ctx, cg_game_t game, bool has_game) {
-    (void)ctx; (void)has_game;
-    gate_enter_mode(APP_MODE_CHIP_GATE, game);
-    /* A gate with no database has no identity to announce. Refuse rather than
-     * strand the user on a blank chip screen the encoder cannot escape. */
-    return s_db_open;
-}
-
-static void mode_exit_chip_gate(void *ctx) {
-    (void)ctx;
-    /* A chip staged against a link that never completed would leave the gate
-     * BUSY for ever; clear it on the way out. */
-    if (chipgate_busy(&s_gate)) {
-        chipgate_clear(&s_gate);
-    }
-    settings_flush();   /* deferred favourites, written now that nothing clocks */
-}
-
 static bool mode_enter_multiboot(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
     /* No game applies to Send Program; the rescan and browser reset live in
@@ -1407,12 +1641,6 @@ static void mode_exit_multiboot(void *ctx) {
     (void)ctx;
     s_send_status[0] = '\0';
     s_send_pct       = 0;
-}
-
-static bool mode_enter_chip_scan(void *ctx, cg_game_t game, bool has_game) {
-    (void)ctx; (void)has_game;
-    gate_enter_mode(APP_MODE_CHIP_SCAN, game);
-    return true;
 }
 
 static bool mode_enter_usb_storage(void *ctx, cg_game_t game, bool has_game) {
@@ -1445,10 +1673,165 @@ static void mode_exit_selftest(void *ctx) {
     s_selftest = false;   /* stop the automatic chip sends */
 }
 
+/* ---- Link: Online ------------------------------------------------------------ */
+
+static bool s_online;          /* the mode is up                       */
+
+/* How many GBAs answer on this board's own cable, or -1 while nothing can
+ * probe it: the four-player PHY (doc/MULTIPLAY.md) supplies it. */
+int gblink_cable_gbas(void);
+__attribute__((weak)) int gblink_cable_gbas(void) { return -1; }
+
+/* The last count the chain gave: while a link has the port it cannot be
+ * probed (-1), and the count from just before still holds. */
+static int s_local_found = -1;
+static int local_found(void) {
+    const int n = gblink_cable_gbas();
+    if (n >= 0) s_local_found = n;
+    return s_local_found;
+}
+static bool s_celio_started;   /* ... and the client has been started  */
+
+static void online_gather(ui_online_t *o) {
+    memset(o, 0, sizeof *o);
+#if defined(GBAGATE_QEMU)
+    o->net = UI_NET_NONE;      /* the emulated board has no radio */
+#else
+    static net_view_t nv;
+    static gblink_celio_view_t cv;
+    if (!(s_shell.caps & HW_CAP_WIFI)) {
+        return;
+    }
+    net_view(&nv);
+    gblink_celio_view(&cv);
+    static const ui_net_t map[] = {
+        [NET_OFF] = UI_NET_JOINING, [NET_SETUP] = UI_NET_SETUP, [NET_JOINING] = UI_NET_JOINING,
+        [NET_UP] = UI_NET_UP, [NET_FAILED] = UI_NET_FAILED,
+    };
+    o->net         = map[nv.state];
+    o->ssid        = nv.ssid;
+    o->ip          = nv.ip[0] ? nv.ip : NULL;
+    o->hotspot     = nv.hotspot[0] ? nv.hotspot : NULL;
+    o->celio       = s_celio_started ? cv.state : CELIO_CONNECTING;
+    o->session     = cv.session[0] ? cv.session : NULL;
+    o->error       = cv.error;
+    o->link_status = cv.link_status;
+    o->has_stats   = cv.state == CELIO_LINKED;
+    o->up          = cv.up;
+    o->down        = cv.down;
+    o->resent      = cv.resent;
+    o->lost        = cv.lost + cv.given_up;
+    o->max_rtt_ms  = cv.max_rtt_ms;
+    o->local_found   = local_found();
+    o->local_players = s_local_players;
+    o->players       = s_players;
+    o->row           = s_online_row;
+#endif
+}
+
+#if !defined(GBAGATE_QEMU)
+/* The settings as the rules see them (src/ui_screens.h). */
+static ui_online_t online_settings(void) {
+    ui_online_t on = { 0 };
+    on.players = s_players;
+    on.local_players = s_local_players;
+    on.local_found = local_found();
+    return on;
+}
+
+static void online_begin(void) {
+    const ui_online_t on = online_settings();
+    if (!ui_online_ready(&on)) {
+        return;               /* not every GBA set is on the chain: the page says so */
+    }
+    char session[40];
+    net_session(session, sizeof session);
+    if (ui_online_multi(&on)) {
+        /* a Multi-Play link: src/mp_online.c, the relay on the cable */
+        gblink_celio_start_multi(session, (uint8_t)s_players, (uint8_t)s_local_players);
+    } else {
+        gblink_celio_start(session);
+    }
+    s_celio_started = true;
+}
+#endif
+
+/* The local players changed before the link: the session starts again. */
+static void online_restart(void) {
+#if !defined(GBAGATE_QEMU)
+    if (s_celio_started) {
+        gblink_celio_stop();
+        s_celio_started = false;
+        online_begin();       /* now, or from the tick once it can */
+    }
+#endif
+}
+
+/* Confirm on a failed or finished session: start a new one. */
+static void online_retry(void) {
+#if !defined(GBAGATE_QEMU)
+    gblink_celio_view_t cv;
+    gblink_celio_view(&cv);
+    if (s_celio_started && (cv.state == CELIO_FAILED || cv.state == CELIO_CLOSED)) {
+        gblink_celio_stop();
+        s_celio_started = false;
+        online_begin();
+    }
+#endif
+}
+
+static bool mode_enter_online(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    s_online = true;
+    s_local_found = -1;
+    s_local_players = ui_online_local_default(local_found());
+    s_players = ui_online_players_default(s_local_players);
+    s_online_row = UI_ONLINE_ROW_PLAYERS;
+    s_celio_started = false;
+#if !defined(GBAGATE_QEMU)
+    if (s_shell.caps & HW_CAP_WIFI) {
+        net_start(false);   /* the hotspot too, when no network is stored */
+    }
+#endif
+    return true;           /* the page says what is missing */
+}
+
+static void mode_exit_online(void *ctx) {
+    (void)ctx;
+    s_online = false;
+#if !defined(GBAGATE_QEMU)
+    if (s_celio_started) {
+        gblink_celio_stop();   /* sessionLeft, and the adapter cancelled */
+    }
+#endif
+    s_celio_started = false;
+}
+
+static void mode_tick_online(void *ctx) {
+    (void)ctx;
+#if !defined(GBAGATE_QEMU)
+    net_view_t nv;
+    net_view(&nv);
+    if (!s_celio_started && nv.state == NET_UP) {
+        online_begin();   /* WiFi first, then Celio */
+    }
+    gblink_celio_view_t cv;
+    gblink_celio_view(&cv);
+    if (cv.state == CELIO_LINKED) {
+        net_clear_session();   /* a code joins once */
+    }
+#endif
+}
+
 static bool mode_enter_link(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
+#if defined(GBAGATE_QEMU)
     /* The bridge is created by tasks.c; a build without it cannot link. */
     return tasks_bridge() != NULL;
+#else
+    /* The page says why when there is no adapter: more use than a refusal. */
+    return true;
+#endif
 }
 
 /*
@@ -1485,10 +1868,12 @@ static void mode_tick_link(void *ctx) {
      * else calls bridge_ping(), so without this tick rtt_us stays the zero it
      * initialised to and the screen cannot tell a usable link from a dead one.
      */
+#if defined(GBAGATE_QEMU)
     link_bridge_t *b = tasks_bridge();
     if (b) {
         bridge_ping(b, (uint32_t)esp_timer_get_time());
     }
+#endif
 }
 
 static bool mode_enter_settings(void *ctx, cg_game_t game, bool has_game) {
@@ -1501,33 +1886,76 @@ static void mode_exit_settings(void *ctx) {
     settings_flush();   /* deferred save, flushed as the running screen is left */
 }
 
+/*
+ * Infrared needs nothing set up: the page reads the transmitter's state, and
+ * says "no IR fitted" when there is none -- more use than refusing a mode the
+ * menu shows. It had no entry here, so choosing it was refused with "no
+ * handler".
+ */
+static bool mode_enter_infrared(void *ctx, cg_game_t game, bool has_game) {
+    (void)ctx; (void)game; (void)has_game;
+    return true;
+}
+
 static bool mode_enter_diagnostics(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
     return true;   /* reads live state only; nothing to set up or refuse */
 }
 
 static const app_mode_handler_t k_handlers[] = {
-    { APP_MODE_CHIP_GATE,     mode_enter_chip_gate,   mode_exit_chip_gate,   NULL           },
-    { APP_MODE_LINK_USB,      mode_enter_link,        NULL,                  mode_tick_link },
-    { APP_MODE_LINK_WIRELESS, mode_enter_wireless,    mode_exit_wireless,    mode_tick_link },
-    { APP_MODE_MULTIBOOT,     mode_enter_multiboot,   mode_exit_multiboot,   NULL           },
-    { APP_MODE_CHIP_SCAN,     mode_enter_chip_scan,   NULL,                  NULL           },
-    { APP_MODE_USB_STORAGE,   mode_enter_usb_storage, mode_exit_usb_storage, NULL           },
-    { APP_MODE_SELFTEST,      mode_enter_selftest,    mode_exit_selftest,    NULL           },
-    { APP_MODE_SETTINGS,      mode_enter_settings,    mode_exit_settings,    NULL           },
-    { APP_MODE_DIAGNOSTICS,   mode_enter_diagnostics, NULL,                  NULL           },
+    { .mode = APP_MODE_LINK_USB, .enter = mode_enter_link, .exit = NULL, .tick = mode_tick_link },
+    { .mode = APP_MODE_LINK_WIRELESS, .enter = mode_enter_wireless, .exit = mode_exit_wireless, .tick = mode_tick_link },
+    { .mode = APP_MODE_LINK_ONLINE, .enter = mode_enter_online, .exit = mode_exit_online, .tick = mode_tick_online },
+    { .mode = APP_MODE_MULTIBOOT, .enter = mode_enter_multiboot, .exit = mode_exit_multiboot, .tick = NULL },
+    { .mode = APP_MODE_USB_STORAGE, .enter = mode_enter_usb_storage, .exit = mode_exit_usb_storage, .tick = NULL },
+    { .mode = APP_MODE_INFRARED, .enter = mode_enter_infrared, .exit = NULL, .tick = NULL },
+    { .mode = APP_MODE_PRINTER, .enter = mode_enter_printer, .exit = mode_exit_printer, .tick = mode_tick_printer },
+    { .mode = APP_MODE_SELFTEST, .enter = mode_enter_selftest, .exit = mode_exit_selftest, .tick = NULL },
+    { .mode = APP_MODE_SETTINGS, .enter = mode_enter_settings, .exit = mode_exit_settings, .tick = NULL },
+    { .mode = APP_MODE_DIAGNOSTICS, .enter = mode_enter_diagnostics, .exit = NULL, .tick = NULL },
 };
 #define HANDLER_COUNT (sizeof k_handlers / sizeof k_handlers[0])
 
+/* Every built-in mode, exactly once each. A mode the menu lists without a
+ * handler is refused with "no handler" -- how Infrared was shipped. */
+_Static_assert(HANDLER_COUNT == APP_MODE_COUNT,
+               "every built-in mode needs a handler in k_handlers");
+
+/* The built-in handlers, then one per applet (src/applet.c). */
+static app_mode_handler_t s_handlers[HANDLER_COUNT + APPLET_MAX];
+
 void gate_shell_start(uint32_t caps) {
     shell_init(&s_shell, caps);
+    applet_add_to_shell(&s_shell);   /* applets/applets.def, after the modes */
     /*
      * Bind the dispatcher to the handler table. caps is the same mask
      * shell_init() was given, which app_modes.h requires: the menu and the
      * dispatcher must agree about what each mode needs, or a mode lists but
      * refuses to start.
      */
-    app_dispatch_init(&s_dispatch, k_handlers, HANDLER_COUNT, caps, NULL);
+    memcpy(s_handlers, k_handlers, sizeof k_handlers);
+    size_t n = HANDLER_COUNT + applet_handlers(s_handlers + HANDLER_COUNT, APPLET_MAX);
+    s_applet_env.caps   = caps;
+    s_applet_env.open_db = applet_open_db;
+    s_applet_env.random  = esp_random;
+    if (caps & HW_CAP_LINK_PORT) {
+        s_applet_env.gate_start  = svc_gate_start;
+        s_applet_env.gate_stop   = svc_gate_stop;
+        s_applet_env.gate_send   = svc_gate_send;
+        s_applet_env.gate_cancel = svc_gate_cancel;
+        s_applet_env.gate_linked = svc_gate_linked;
+        s_applet_env.agent_start = svc_agent_start;
+        s_applet_env.agent       = svc_agent;
+        s_applet_env.agent_stop  = svc_agent_stop;
+    }
+    if (caps & HW_CAP_CHIP_READER) {
+        s_applet_env.read_chip = svc_read_chip;
+    }
+    s_applet_env.favorites         = s_settings.favorites;
+    s_applet_env.favorites_len     = sizeof s_settings.favorites;
+    s_applet_env.favorites_changed = svc_favorites_changed;
+    applet_bind_env(&s_applet_env);
+    app_dispatch_init(&s_dispatch, s_handlers, n, caps, NULL);
     s_shell_ready = true;
     ui_service(NULL, false);
 }
@@ -1541,5 +1969,4 @@ void gate_stats(uint32_t *transfers, uint32_t *chips, bool *linked) {
 }
 
 const chipgate_t *gate_state(void) { return &s_gate; }
-chipview_t       *gate_view(void)  { return &s_view; }
-ui_list_t        *gate_list(void)  { return &s_list; }
+

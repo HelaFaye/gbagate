@@ -1,0 +1,226 @@
+/*
+ * celio.h -- online play through Celio, from the board itself.
+ *
+ * Celio (github.com/Celio-Link) relays a Game Boy link between two GB-Link
+ * adapters over the internet: Celio-Client, a web page, drives each adapter
+ * over WebUSB and talks to Celio-Server over Socket.IO. This is Celio-Client's
+ * part, in C, so the board can play online with no PC: the WiFi connection
+ * replaces the browser, and GB-Link's local host (Transport's Local route,
+ * PATCHES.md P8) replaces WebUSB.
+ *
+ * It is a state machine with no I/O of its own. The caller feeds it what the
+ * WebSocket received, the status words and data packets the local GB-Link
+ * firmware reported, and the time; it calls back to send a WebSocket text
+ * frame or to hand the firmware a command or a data packet. So the same code
+ * runs on the board and in the simulator, where test/gblink_compat drives it
+ * against the real Celio-Server.
+ *
+ * What it speaks is Celio-Client's current protocol (since b057315), the one
+ * Celio-Link/Celio-Server answers (since 5ead974, both 2026-10-03): every
+ * deviceStatus and deviceData is emitted with a Socket.IO ack and resent
+ * until it is acknowledged, status one at a time in order, data as
+ * single-packet batches with up to CELIO_DATA_WINDOW in flight; the server
+ * drops duplicates (status by uuid, data by sequence). Whatever the server
+ * sends with an ack id -- commands, data batches, session events -- is
+ * acknowledged. (GB-Link/Celio-Server is a fork that stopped before this; it
+ * does not unwrap acked emits and is not a server to target.)
+ *
+ * The flow, as Celio-Client's onlineLink page runs it:
+ *   connect, then create a session (and show its id) or join one;
+ *   once both players are in, Cancel, 500 ms, SetMode 0x01, await DeviceReady;
+ *   then relay: the adapter's status words up as deviceStatus, its 64-byte
+ *   data packets up as deviceData with a sequence number; the server's
+ *   deviceCommand down as a one-byte command, its deviceData down in order.
+ *
+ * Multi-Play sessions (backport/Celio-Link-Server/0002): a session of 3 or
+ * 4 players, or a board bringing more than one GBA, is not relayed through
+ * the GB-Link firmware, which links two. Then the client is "multi": the
+ * session's commands go to io.mp_command with the board's link ID (the
+ * first of its slots), its data to io.mp_data marked with the sender's, each
+ * sender's in its own order; the caller (src/mp_online.c) runs the
+ * four-player relay and reports its statuses and data through
+ * celio_on_status and celio_on_data as the firmware would. AwaitMode, which
+ * the firmware would send on SetMode, the client queues itself.
+ */
+
+#ifndef CELIO_H
+#define CELIO_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define CELIO_SESSION_MAX 32
+#define CELIO_REORDER     64    /* data packets held while one is missing:
+                                 * the server pipelines its sends            */
+#define CELIO_SEEN_CMDS   16    /* command uuids remembered, for duplicates */
+#define CELIO_FRAME_MAX   512   /* the longest frame it sends               */
+#define CELIO_STATUS_QUEUE 16   /* status words waiting their turn          */
+#define CELIO_DATA_WINDOW 64    /* data packets sent and not yet acked, as
+                                 * Celio-Client's MAX_UNACKED_DATA           */
+#define CELIO_ACK_MS      1000  /* socket.timeout(1000): the least wait for
+                                 * an ack, and the first                     */
+#define CELIO_ACK_MAX_MS  8000  /* the most, however slow the line           */
+#define CELIO_RETRIES     5     /* resends before a packet is given up       */
+#define CELIO_SENDERS     4     /* a Multi-Play session's senders, by link ID */
+
+typedef struct {
+    /* One WebSocket text frame to the server. False if it could not be sent
+     * (not connected, buffer full); the frame is then lost, as socket.io
+     * would buffer and the server would time out. */
+    bool (*ws_send)(void *ctx, const char *text, size_t len);
+    /* A command to the local GB-Link firmware, [command, args...]. */
+    void (*gbl_command)(void *ctx, const uint8_t *cmd, size_t len);
+    /* A 64-byte data packet to it. */
+    void (*gbl_data)(void *ctx, const uint8_t data[64]);
+    /* 32 random bits, for uuids. */
+    uint32_t (*random)(void *ctx);
+    void *ctx;
+    /* Multi sessions only (see above): a session command (SetModeMaster
+     * 0x10, SetModeSlave 0x11, StartHandshake 0x12, ConnectLink 0x13; or
+     * Cancel 0x01 when the session ends) with this board's link ID, -1 if
+     * the server gave none; and another board's data, `from` its link ID. */
+    void (*mp_command)(void *ctx, uint8_t command, int link_id);
+    void (*mp_data)(void *ctx, uint8_t from, const uint8_t data[64]);
+} celio_io_t;
+
+typedef enum {
+    CELIO_IDLE = 0,
+    CELIO_CONNECTING,     /* waiting for the server's Socket.IO handshake */
+    CELIO_ENTERING,       /* sessionCreate / sessionJoin sent             */
+    CELIO_WAITING,        /* in a session, alone                          */
+    CELIO_STARTING,       /* partner here: Cancel, SetMode, DeviceReady   */
+    CELIO_LINKED,         /* relaying                                     */
+    CELIO_CLOSED,         /* the server ended the session                 */
+    CELIO_FAILED,         /* see celio_t.error                            */
+} celio_state_t;
+
+typedef struct {
+    celio_io_t    io;
+    celio_state_t state;
+    bool          joining;                     /* join `session`, not create */
+    bool          connected;                   /* Socket.IO namespace open   */
+    char          client_id[37];               /* auth.clientId, per start   */
+    char          session[CELIO_SESSION_MAX + 1];
+    char          error[40];                   /* why FAILED, for the screen */
+
+    uint32_t      next_ack;                    /* our emits' ack ids          */
+    uint32_t      enter_ack;                   /* the create/join awaiting its reply */
+    uint32_t      deadline;                    /* the current step's timeout  */
+    uint32_t      lost_since;                  /* when the socket dropped, 0 if up */
+    uint8_t       step;                        /* within STARTING             */
+
+    uint16_t      link_status;                 /* the adapter's last word     */
+    uint32_t      tx_seq;                      /* our next data sequence      */
+
+    /* Multi-Play: asked for at create, then as the server said */
+    uint8_t       players;                     /* GBAs on the link, 2..4      */
+    uint8_t       gbas;                        /* this board's own            */
+    bool          multi;                       /* not through the firmware    */
+
+    /* What arrived, put back in order: each sender numbers its own (a
+     * two-player session has one sender, index 0). */
+    struct celio_rx {
+        uint32_t  rx_seq;                      /* the next one we expect      */
+        bool      held[CELIO_REORDER];
+        uint32_t  held_seq[CELIO_REORDER];
+        uint8_t   held_data[CELIO_REORDER][64];
+    } rx[CELIO_SENDERS];
+
+    char          seen[CELIO_SEEN_CMDS][37];
+    uint8_t       seen_next;
+
+    /* What we sent that the server has not acknowledged. A slot is resent
+     * when `due`, with a fresh ack id, until CELIO_RETRIES are spent; each
+     * resend waits twice as long as the last. */
+    struct celio_status_out {
+        char     uuid[37];
+        uint16_t status;
+    } status_q[CELIO_STATUS_QUEUE];
+    uint8_t       status_head, status_count;
+    uint32_t      status_ack[CELIO_RETRIES + 1]; /* the head's ack id, per copy */
+    uint32_t      status_due;                  /* ... when the next copy goes */
+    uint32_t      status_sent;                 /* ... when it last went       */
+    uint8_t       status_tries;
+    bool          status_inflight;
+
+    struct celio_data_out {
+        bool     used;
+        uint32_t seq, due, sent;
+        uint32_t ack[CELIO_RETRIES + 1];       /* the id each copy went under:
+                                                * an ack for any of them counts */
+        uint8_t  tries;
+        uint8_t  data[64];
+    } data_out[CELIO_DATA_WINDOW];
+
+    /* counters, for the screen and for tests */
+    uint32_t      sent, received, dropped, duplicates, reconnects;
+    uint32_t      resent;      /* emits sent again for want of an ack   */
+    uint32_t      given_up;    /* packets dropped after every retry     */
+    uint32_t      rejected;    /* packets the server acked false        */
+    uint32_t      acked;       /* our emits the server acknowledged     */
+    uint32_t      max_rtt_ms;  /* the slowest ack seen                  */
+    uint32_t      srtt_ms;     /* smoothed round trip, from first sends  */
+    uint32_t      rto_ms;      /* how long an ack may take: 2 x srtt,
+                                * CELIO_ACK_MS..CELIO_ACK_MAX_MS        */
+} celio_t;
+
+/*
+ * Start: create a session (session NULL or empty) or join one. Expects
+ * celio_on_open() next, once the caller has the WebSocket connected to
+ * <server>/socket.io/?EIO=4&transport=websocket.
+ */
+void celio_start(celio_t *c, const celio_io_t *io, const char *session, uint32_t now_ms);
+
+/* The same for a Multi-Play link: `players` GBAs in all (2..4; when
+ * creating, ignored when joining), `gbas` of them on this board's cable
+ * (1..3). players 2 and gbas 1 is celio_start. */
+void celio_start_multi(celio_t *c, const celio_io_t *io, const char *session,
+                       uint8_t players, uint8_t gbas, uint32_t now_ms);
+
+/* Leave: sessionLeft if in one, Cancel to the adapter. The state is IDLE. */
+void celio_stop(celio_t *c);
+
+/* The WebSocket opened (or reopened: a reconnect keeps the session, as the
+ * server keeps a client's place for five seconds by its clientId). */
+void celio_on_open(celio_t *c, uint32_t now_ms);
+/* It closed. Reopen it; after CELIO_LOST_MS the session is given up. */
+void celio_on_close(celio_t *c, uint32_t now_ms);
+#define CELIO_LOST_MS 10000
+
+/* A text frame from the server. */
+void celio_on_text(celio_t *c, const char *text, size_t len, uint32_t now_ms);
+
+/* What the local firmware reported, from Transport's local sink. */
+void celio_on_status(celio_t *c, uint16_t status, uint32_t now_ms);
+void celio_on_data(celio_t *c, const uint8_t *data, size_t len, uint32_t now_ms);
+
+/* Timeouts and the Cancel-to-SetMode pause. Call every few milliseconds. */
+void celio_tick(celio_t *c, uint32_t now_ms);
+
+const char *celio_state_name(celio_state_t s);
+
+/* ---- the Socket.IO framing, exposed for its tests ------------------------ */
+
+typedef struct {
+    char        eio;        /* Engine.IO type: '0' open, '2' ping, '4' message... */
+    char        sio;        /* for '4': Socket.IO type, '0' connect, '2' event, '3' ack */
+    bool        has_id;
+    uint32_t    id;         /* the ack id, when has_id                     */
+    const char *json;       /* the payload after the header, may be empty  */
+    size_t      json_len;
+} sio_packet_t;
+
+/* Split a text frame. False if it is not one this client understands
+ * (another namespace, a binary placeholder). */
+bool sio_parse(const char *text, size_t len, sio_packet_t *out);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* CELIO_H */

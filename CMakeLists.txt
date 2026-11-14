@@ -47,15 +47,23 @@ endif()
 if(GBAGATE_QEMU)
   add_compile_definitions(GBAGATE_QEMU=1)
 endif()
+if(GBAGATE_UART_BRIDGE AND NOT GBAGATE_QEMU)
+  add_compile_definitions(GBAGATE_UART_BRIDGE=1)
+endif()
 if(DEFINED GBAGATE_BOARD AND GBAGATE_BOARD STREQUAL "supermini")
   add_compile_definitions(BOARD_SUPERMINI=1)
+elseif(DEFINED GBAGATE_BOARD AND GBAGATE_BOARD STREQUAL "carrier-touch")
+  add_compile_definitions(BOARD_CARRIER_TOUCH=1)
+elseif(DEFINED GBAGATE_BOARD AND GBAGATE_BOARD STREQUAL "carrier-knob")
+  add_compile_definitions(BOARD_CARRIER_KNOB=1)
 endif()
 # board.h's BOARD_HAS_* overrides, given as `idf.py -DBOARD_HAS_SD=0 build`
 # (or through tools/build_hw.sh's EXTRA). A -D to idf.py sets a CMake
 # variable, which the compiler never sees unless it is passed on like this.
 foreach(flag BOARD_HAS_DISPLAY BOARD_HAS_LINK BOARD_HAS_SD BOARD_HAS_BUTTONS
              BOARD_HAS_IR BOARD_HAS_READER BOARD_HAS_SD_ALT BOARD_HAS_RGB_LED
-             BOARD_HAS_VCC_SWITCH BOARD_HAS_BRIDGE)
+             BOARD_HAS_VCC_SWITCH BOARD_HAS_BRIDGE BOARD_HAS_GB_5V
+             GBAGATE_UART_TX_GPIO GBAGATE_UART_RX_GPIO)
   if(DEFINED ${flag})
     add_compile_definitions(${flag}=${${flag}})
   endif()

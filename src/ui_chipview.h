@@ -2,7 +2,7 @@
  * ui_chipview.h -- library tabs, favourites, sort and mode for the chip screen.
  *
  * Rebuilds the Battle Chip Gate Homebrew's chip screen behaviour on top of the
- * packed database: six tabs (star, Standrd, Mega, Giga, Dark, PA), sorting by
+ * packed database: six tabs (star, Standard, Mega, Giga, Dark, PA), sorting by
  * name, attack or element, favourites, and the Slot-In / Move mode split.
  *
  * Unavailable tabs are greyed and skipped rather than hidden. That is the

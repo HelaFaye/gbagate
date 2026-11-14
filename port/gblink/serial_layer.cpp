@@ -29,6 +29,12 @@ SerialLayer& SerialLayer::getBridgeInstance()
     return instance;
 }
 
+SerialLayer& SerialLayer::getNetInstance()
+{
+    static SerialLayer instance(Transport::Id::Net, gblink_net_write);
+    return instance;
+}
+
 SerialLayer::SerialLayer(Transport::Id id, Writer writer)
     : m_id(id), m_writer(writer)
 {

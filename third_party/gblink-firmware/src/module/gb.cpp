@@ -318,7 +318,7 @@ void GBModule::printerModeLoop()
         // USB streams every 64 bytes as before. WebSerial accumulates the
         // whole image and flushes once at PRINT to keep IRQs off the
         // bit-bang loop during clocking.
-        if (usbBufPos >= 64 && Transport::active() == Transport::Id::Usb) {
+        if (usbBufPos >= 64 && Transport::owner() == Transport::Id::Usb) {
             flushUsbBuf();
         }
     };
@@ -362,9 +362,10 @@ void GBModule::printerModeLoop()
             }
         }
 
-        // Clock is LOW — output our bit (LSB first)
-        gpio_put(PIN_SOUT, send_data & 0x1);
-        send_data = send_data >> 1;
+        // Clock is LOW — output our bit. gbagate (PATCHES.md P10): MSB first,
+        // as the Game Boy samples it (and as received_data is assembled).
+        gpio_put(PIN_SOUT, (send_data >> 7) & 0x1);
+        send_data = static_cast<uint8_t>(send_data << 1);
 
         // Wait for clock to go high
         while (!gpio_get(PIN_SCK)) {}
@@ -481,7 +482,7 @@ void GBModule::printerModeLoop()
                 if (command == 0x02) {  // PRINT command
                     bufferUsbByte(0xFE);  // Print marker
                     flushUsbBuf();        // Always flush at PRINT (both transports)
-                } else if (Transport::active() == Transport::Id::Usb) {
+                } else if (Transport::owner() == Transport::Id::Usb) {
                     // WebUSB: original behaviour, flush at every protocol packet.
                     flushUsbBuf();
                 }

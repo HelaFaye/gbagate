@@ -16,7 +16,7 @@
 # one at a time, several minutes apart.
 cd "$(dirname "$0")/.." || exit 1
 COMMON="-std=c11 -Wall -Wextra -Wshadow -Werror -fsyntax-only
-        -Iqemu/stubs -Isrc -Iport/esp32s3 -Ipio/src
+        -Iqemu/stubs -Isrc -Iport/esp32s3 -Ipio/src -Iport/gblink
         -DVARIANT=VARIANT_GATE -DGBAGATE_VARIANT_NAME=\"gate\"
         -DGBAGATE_HAS_CHIPDB=1"
 
@@ -24,11 +24,11 @@ COMMON="-std=c11 -Wall -Wextra -Wshadow -Werror -fsyntax-only
 # WiFi headers; stubbing those faithfully enough to be worth anything is a
 # bigger job than it sounds, and they are on the bench list anyway.
 #
-# gba_link_esp32s3.c (the PHY) and the GB-Link port files (usb_gblink_*,
-# gblink_hw_*, gblink_gbspi_*) touch the GPIO register block, RMT and
-# TinyUSB's class-driver API, which no stub here models. They are compiled for
-# real instead: tools/build_hw.sh builds every hardware image with ESP-IDF, and
-# that build is the check for them (see AUDIT.md, round 3).
+# The GB-Link port files (usb_gblink_*, gblink_hw_*, gblink_gbspi_*) touch
+# RMT and TinyUSB's class-driver API, which no stub here models. They are
+# compiled for real instead: tools/build_hw.sh builds every hardware image
+# with ESP-IDF, and that build is the check for them (see AUDIT.md, round 3).
+# gba_link_esp32s3.c (the PHY) is checked below, once per board.
 QEMU_FILES="pio/src/gate_app.c
             pio/src/link_source.c
             pio/src/tasks.c
@@ -48,9 +48,11 @@ HW_FILES="pio/src/gate_app.c
           port/esp32s3/buttons_esp32s3.c
           port/esp32s3/sd_esp32s3.c
           port/esp32s3/buttons_mcp.c
+          port/esp32s3/input_esp32s3.c
           port/esp32s3/transport_esp32s3.c
           port/esp32s3/i2c_esp32s3.c
-          port/esp32s3/mb_spi_esp32s3.c"
+          port/esp32s3/mb_spi_esp32s3.c
+          port/esp32s3/print_store_esp32s3.c"
 
 fail=0
 
@@ -70,6 +72,14 @@ check() {
 
 check qemu "-DGBAGATE_QEMU=1" $QEMU_FILES
 check hardware "" $HW_FILES
+
+# The Multi-Play PHY, once per board: its four-player path (src/mp_bus.c on
+# the carrier's chain) only exists where board.h has BOARD_LINK_PORTS > 1,
+# and no hardware image is built for those boards yet. soc/gpio_struct.h in
+# the stubs is the register block's shape and nothing more.
+for b in DEVKIT SUPERMINI CARRIER_TOUCH CARRIER_KNOB; do
+    check "$(echo $b | tr A-Z_ a-z-)" "-DBOARD_$b=1" port/esp32s3/gba_link_esp32s3.c
+done
 
 # The component CMakeLists as ESP-IDF evaluates it, including the script-mode
 # pass that forbids things a normal configure allows.
@@ -94,6 +104,33 @@ fi
 # Static allocations that will not fit in DRAM. A 256 KB array in a function
 # overflowed dram0_0_seg by 3 KB and the linker's message named the segment,
 # not the array.
+# Pins come from port/esp32s3/board.h and nowhere else. The display and the
+# buttons drivers each carried their own numbers, which board.h's collision
+# test could not see: CS and DC on the SD card's and I2C's pins, switches on
+# the display bus. A pin number defined in any other port file fails here.
+stray=$(grep -nE '^#define (PIN|GPIO)_?[A-Z0-9_]*[[:space:]]+\(?-?[0-9]+|\{ *BTN_[A-Z]+, *[0-9]+ *\}' \
+        port/esp32s3/*.c 2>/dev/null)
+if [ -z "$stray" ]; then
+    printf '%-39s %s\n' "pins only in board.h" "ok"
+else
+    printf '%-39s FAIL\n' "pins only in board.h"
+    printf '    %s\n' "$stray"
+    fail=1
+fi
+
+# Normal mode is one wiring, whoever drives it: the Wireless Adapter
+# (rfu_link) and Send Program (mb_spi) must transmit on the same pin. Send
+# Program used SD, which the GBA does not read in Normal mode.
+rfu_tx=$(sed -n 's/^#define PIN_TX[[:space:]]*\(PIN_LINK_[A-Z_]*\).*/\1/p' port/esp32s3/rfu_link_esp32s3.c)
+mb_tx=$(sed -n 's/^#define PIN_MOSI[[:space:]]*\(PIN_LINK_[A-Z_]*\).*/\1/p' port/esp32s3/mb_spi_esp32s3.c)
+if [ -n "$rfu_tx" ] && [ "$rfu_tx" = "$mb_tx" ]; then
+    printf '%-39s %s\n' "Normal-mode transmit pin" "ok ($mb_tx)"
+else
+    printf '%-39s FAIL\n' "Normal-mode transmit pin"
+    printf '    rfu_link sends on %s, mb_spi on %s\n' "${rfu_tx:-?}" "${mb_tx:-?}"
+    fail=1
+fi
+
 if python3 qemu/bsscheck.py > /tmp/bss.out 2>&1; then
     printf '%-39s %s\n' "DRAM budget" "$(tail -1 /tmp/bss.out | sed 's/^ *//')"
 else
@@ -108,6 +145,30 @@ if python3 qemu/capcheck.py > /tmp/capcheck.out 2>&1; then
 else
     printf '%-39s FAIL\n' "capability coverage"
     sed 's/^/    /' /tmp/capcheck.out
+    fail=1
+fi
+
+# The firmware builds at -Os with warnings as errors, and some warnings exist
+# only at -Os: -Wformat-truncation needs the inlining it does. Every hardware
+# image failed on two in ui_text.h while every host suite passed, at -O2.
+os_out=$(for f in src/*.c applets/*.c; do
+    ${CC:-cc} -std=gnu17 -Os -Wall -Wextra -Werror -Isrc -Iapplets -c "$f" -o /dev/null 2>&1
+done)
+if [ -z "$os_out" ]; then
+    printf '%-39s ok\n' "src/ at the firmware's -Os"
+else
+    printf '%-39s FAIL\n' "src/ at the firmware's -Os"
+    printf '%s\n' "$os_out" | grep -E 'error|warning' | head -20 | sed 's/^/    /'
+    fail=1
+fi
+
+# The firmware embeds the memory agent as a C array (it has no ARM
+# toolchain); the array must be the image its current sources build.
+if emb=$(python3 tools/mb_embed.py --check rom/agent.mb src/gbagent_image.c 2>&1); then
+    printf '%-39s ok\n' "embedded memory agent current"
+else
+    printf '%-39s FAIL\n' "embedded memory agent current"
+    printf '    %s\n' "$emb"
     fail=1
 fi
 

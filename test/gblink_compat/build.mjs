@@ -1,13 +1,16 @@
 // build.mjs -- bundle GB-Link's host software, unmodified, for the tests here.
 //
-//   node build.mjs <out-dir> <netplay-bridge> <celio-client> <celio-server>
+//   node build.mjs <out-dir> <netplay-bridge> <celio-client> <celio-server> [<patched-server>]
+//
+// <patched-server>: a copy of Celio-Server with backport/Celio-Link-Server
+// applied, bundled as celio_server_patched.mjs.
 //
 // Only packages that need a browser, Angular or libusb are swapped for stubs
 // (stubs/); every GB-Link source file is compiled as checked out.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const [out, bridge, client, server] = process.argv.slice(2);
+const [out, bridge, client, server, patched] = process.argv.slice(2);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const { build } = await import(path.join(out, 'node_modules/esbuild/lib/main.js'));
 
@@ -63,6 +66,15 @@ if (server) {
     ...common,
     entryPoints: [path.join(server, 'src/index.ts')],
     outfile: path.join(out, 'celio_server.mjs'),
+    packages: 'external',
+  });
+}
+
+if (patched) {
+  await build({
+    ...common,
+    entryPoints: [path.join(patched, 'src/index.ts')],
+    outfile: path.join(out, 'celio_server_patched.mjs'),
     packages: 'external',
   });
 }
