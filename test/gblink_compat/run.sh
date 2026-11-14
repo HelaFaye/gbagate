@@ -27,9 +27,17 @@ Celio-Server          8f509bdcf2a8383b936e0f2f31b2f6553ae421ce Celio-Link
 gblink-ereader        26fb65f7a54f142c5654651721d58e15b42300c2
 gb-pokemon-web        525b2fb4b62864d6d2f6a1b3cf0f9a4fb0212b0e
 gblink-distributor    afa48efcee7f4e5cdb4a2e0070d41e82023055a5
-gblink-launcher       bac443a78c05476a2b82ebab021ea58747966998
+gblink-launcher       HEAD                                     HelaFaye
 GB-Link-Switch-LDN    37c693b7f7689d8812a06e54018b5468ed4d8075
 "
+# The launcher is a private mirror. GB-Link/gblink-launcher stopped being
+# publicly clonable in November 2026 and has no licence file (all rights
+# reserved), so it is not republished: HelaFaye/gblink-launcher is a private
+# copy of upstream's 94b9a95, cloned with GBLINK_LAUNCHER_TOKEN (a read
+# token; CI's secret of that name), and tested at the mirror's head (HEAD).
+# Without the token only the launcher is missing, and test_launcher.mjs says
+# so (and fails, under GBLINK_NO_SKIP); the rest of the suite still runs.
+#
 # Celio is Celio-Link's: GB-Link/Celio-Server is a fork that stopped at
 # 9f02d3e (2026-06-17), before upstream answered the client's acks (Oct 3-6).
 # Testing against it made the two look incompatible when they are not.
@@ -55,15 +63,36 @@ clone_public_repo() {
     return 1
 }
 
+# The launcher mirror's token, as an auth header for one git command at a
+# time: never in a URL, a remote or .git/config.
+launcher_git() {
+    local auth
+    auth=$(printf 'x-access-token:%s' "$GBLINK_LAUNCHER_TOKEN" | base64 | tr -d '\n')
+    git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" "$@"
+}
+
 echo "$PINS" | while read -r repo pin owner; do
     [ -n "$repo" ] || continue
     url="https://github.com/${owner:-GB-Link}/$repo.git"
+    if [ "$repo" = gblink-launcher ] && [ ! -d "$SRC/$repo/.git" ]; then
+        if [ -z "${GBLINK_LAUNCHER_TOKEN:-}" ] ||
+           ! GIT_TERMINAL_PROMPT=0 launcher_git clone -q "$url" "$SRC/$repo"; then
+            rm -rf "$SRC/$repo"
+            echo "$repo: UNAVAILABLE -- the private mirror needs GBLINK_LAUNCHER_TOKEN; test_launcher will say so"
+            continue
+        fi
+    fi
     if [ ! -d "$SRC/$repo/.git" ] && [ ! -d "$SRC/$repo/src" ]; then
         clone_public_repo "$url" "$SRC/$repo"
     fi
     if [ -z "${GBLINK_SRC:-}" ]; then
         git -C "$SRC/$repo" remote set-url origin "$url"   # an older checkout may be the fork's
-        if [ -n "${GBLINK_COMPAT_HEADS:-}" ]; then
+        if [ "$repo" = gblink-launcher ]; then
+            # The mirror is frozen: its head is the pin, heads run or not.
+            if [ -n "${GBLINK_LAUNCHER_TOKEN:-}" ]; then launcher_git -C "$SRC/$repo" fetch -q origin || true; fi
+            git -C "$SRC/$repo" checkout -q --detach origin/HEAD
+            pin=$(git -C "$SRC/$repo" rev-parse HEAD)
+        elif [ -n "${GBLINK_COMPAT_HEADS:-}" ]; then
             git -C "$SRC/$repo" fetch -q origin && git -C "$SRC/$repo" checkout -q --detach origin/HEAD
         else
             git -C "$SRC/$repo" cat-file -e "$pin^{commit}" 2>/dev/null || git -C "$SRC/$repo" fetch -q origin
@@ -74,10 +103,9 @@ echo "$PINS" | while read -r repo pin owner; do
     note=""; [ "$at" = "$pin" ] || note=" (pinned: ${pin:0:7})"
     echo "$repo: $(git -C "$SRC/$repo" log -1 --format='%h %cd' --date=short 2>/dev/null || echo 'not a git checkout')$note"
 done
-# The launcher test patches this commit (backport/README.md's base).
-export GBLINK_LAUNCHER_BASE
-if [ -n "${GBLINK_COMPAT_HEADS:-}" ]; then GBLINK_LAUNCHER_BASE=origin/HEAD
-else GBLINK_LAUNCHER_BASE=bac443a78c05476a2b82ebab021ea58747966998; fi
+# The launcher test patches the mirror's head: upstream's 94b9a95, the base
+# backport/README.md gives.
+export GBLINK_LAUNCHER_BASE=origin/HEAD
 
 # esbuild pinned to the bridge's version; Celio's runtime deps at the ranges
 # its package.json files ask for; playwright-core for the launcher test, which

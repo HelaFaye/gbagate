@@ -104,14 +104,20 @@ jobs:
       - name: cache the GB-Link clones and npm
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
+          # Not the launcher: it is a private mirror, and a pull request
+          # from a fork can restore this branch's caches.
           path: |
             build/gblink_compat/src
+            !build/gblink_compat/src/gblink-launcher
             ~/.npm
           key: compat-${{ hashFiles('test/gblink_compat/run.sh', 'test/gblink_compat/build.mjs') }}
           restore-keys: compat-
       - run: make compat
         env:
           CHROMIUM: /usr/bin/google-chrome
+          # read access to the private launcher mirror (run.sh); empty in a
+          # fork's pull request, where only the launcher test then fails
+          GBLINK_LAUNCHER_TOKEN: ${{ secrets.GBLINK_LAUNCHER_TOKEN }}
 
   compat-heads:
     # The same against GB-Link's current heads, weekly: says when upstream
@@ -129,14 +135,20 @@ jobs:
       - name: cache the GB-Link clones and npm
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
+          # Not the launcher: it is a private mirror, and a pull request
+          # from a fork can restore this branch's caches.
           path: |
             build/gblink_compat/src
+            !build/gblink_compat/src/gblink-launcher
             ~/.npm
           key: compat-${{ hashFiles('test/gblink_compat/run.sh', 'test/gblink_compat/build.mjs') }}
           restore-keys: compat-
       - run: make compat
         env:
           CHROMIUM: /usr/bin/google-chrome
+          # read access to the private launcher mirror (run.sh); empty in a
+          # fork's pull request, where only the launcher test then fails
+          GBLINK_LAUNCHER_TOKEN: ${{ secrets.GBLINK_LAUNCHER_TOKEN }}
           GBLINK_COMPAT_HEADS: '1'
 
   hardware:

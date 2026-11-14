@@ -92,7 +92,9 @@ someone submits them.
 
 ## gblink-launcher
 
-Base: `main` at bac443a.
+Base: `main` at 94b9a95 (was bac443a; both patches apply unchanged). The
+upstream repository is no longer publicly clonable, so the compat suite
+tests a private mirror of 94b9a95 (`test/gblink_compat/run.sh`).
 
     git am backport/gblink-launcher/*.patch
 
