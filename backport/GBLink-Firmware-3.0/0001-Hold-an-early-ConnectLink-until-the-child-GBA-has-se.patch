@@ -1,4 +1,4 @@
-From ed235b8bf715a45f89feddc19ad06c612b60dd08 Mon Sep 17 00:00:00 2001
+From cb7b8816559928090524e35366849eb9939a8f49 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 14 Nov 2026 23:22:47 +0000
 Subject: [PATCH] Hold an early ConnectLink until the child GBA has seen the
@@ -10,25 +10,27 @@ handshake straight from 0xD15E to 0x8FFF. UsbSection::establishConncection()
 then waits for isHandshakeEnabled(), "the last word sent was 0xB9A0", which
 never becomes true: the link hangs before LinkConnected. It also hangs when
 0xB9A0 was sent for less than the 50 ms poll interval before 0x8FFF replaced
-it, and the GBA is sent 0x8FFF without having seen the handshake.
+it. Either way the GBA is sent 0x8FFF without having seen the handshake.
 
-The host apps avoid it with a delay: the netplay bridge waits 150 ms
-(CONNECT_GRACE_MS), Celio-Client's cable page 150 ms, gen3-poke-multiplayer
-350 ms. Celio-Client's local multi-adapter session has none: it sends
-ConnectLink to the other adapters as soon as seat 0 reports LinkConnected,
-about one handshake round after StartHandshake, which is inside the window.
+The host apps keep clear of it with a delay between StartHandshake and
+ConnectLink: the netplay bridge waits 150 ms (CONNECT_GRACE_MS, because the
+child GBA needs real 0xB9A0 rounds of ~16 ms), Celio-Client's cable page
+150 ms (CONNECT_DELAY_MS), gen3-poke-multiplayer 350 ms. A host that sends
+ConnectLink sooner hangs the link.
 
-ConnectLink is now held until eight 0xB9A0 rounds have gone out (about the
-bridge's measured 150 ms), then sent at once. A ConnectLink that comes later
+ConnectLink is now held until eight 0xB9A0 rounds have gone out (~130 ms),
+then sent at once. A ConnectLink that comes later, as from every host above,
 behaves as before.
 
 tests/host/handshakeTest.cpp runs the real PacketLayer and UsbSection
-against a modelled GBA, over host stand-ins for the Zephyr calls they use,
-with ConnectLink 0, 5, 30, 60 and 200 ms after StartHandshake (seat 1 of 2),
-0 ms in seat 2 of 4, and seat 0 of 2. Before this change the 0, 5 and 30 ms
-cases and the 4-player case hang (eight failed checks); after it every case
-connects, and the GBA sees eight 0xB9A0 before 0x8FFF. Also clean under
-ASan and UBSan. Not built with Zephyr or run on RP2040 hardware.
+against a modelled GBA in place of the PIO link layer, over host stand-ins
+for the Zephyr calls they use (tests/host/stubs; .gitignore's zephyr/ rule
+gets an exception for them). ConnectLink goes 0, 5, 30, 60 and 200 ms after
+StartHandshake in seat 1 of 2, 0 ms in seat 2 of 4, and seat 0 of 2 is
+covered too. Before this change the 0, 5 and 30 ms cases and the 4-player
+case hang (eight failed checks); after it every case connects, and the GBA
+sees eight 0xB9A0 before 0x8FFF. Also clean under ASan and UBSan;
+ThreadSanitizer reports no race on the fields this change adds.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
@@ -37,12 +39,12 @@ Claude-Session: https://claude.ai/code/session_014LvpUYFw94JkaNFyrbwJmK
  src/layers/packet/packetLayer.cpp      |   7 +
  src/layers/packet/packetLayer.hpp      |  18 +-
  tests/host/Makefile                    |  14 +-
- tests/host/handshakeTest.cpp           | 259 +++++++++++++++++++++++++
+ tests/host/handshakeTest.cpp           | 257 +++++++++++++++++++++++++
  tests/host/stubs/hardware/pio.h        |   3 +
  tests/host/stubs/syscalls/kernel.h     |   2 +
  tests/host/stubs/zephyr/drivers/gpio.h |   1 +
  tests/host/stubs/zephyr/kernel.h       | 115 +++++++++++
- 9 files changed, 420 insertions(+), 4 deletions(-)
+ 9 files changed, 418 insertions(+), 4 deletions(-)
  create mode 100644 tests/host/handshakeTest.cpp
  create mode 100644 tests/host/stubs/hardware/pio.h
  create mode 100644 tests/host/stubs/syscalls/kernel.h
@@ -82,7 +84,7 @@ index a0cf167..a110482 100644
              m_timingUs = timingHandshake[m_playerCount-2];
  
 diff --git a/src/layers/packet/packetLayer.hpp b/src/layers/packet/packetLayer.hpp
-index 497d20f..08e8da8 100644
+index 497d20f..5fa7891 100644
 --- a/src/layers/packet/packetLayer.hpp
 +++ b/src/layers/packet/packetLayer.hpp
 @@ -123,7 +123,21 @@ public:
@@ -90,10 +92,10 @@ index 497d20f..08e8da8 100644
      void enableHandshake() { m_handshakeState = HandShakeState::enabled; }
  
 -    void connectHandshake() { m_handshakeState = HandShakeState::connect; }
-+    // A child GBA needs some 0xB9A0 rounds before it takes the connect word
-+    // (the netplay bridge measured ~150 ms and waits that long before sending
-+    // ConnectLink). Hold a ConnectLink that arrives sooner until the adapter
-+    // has sent minSlaveHandshakes of them.
++    // A child GBA needs some 0xB9A0 rounds (~16 ms each) before it takes the
++    // connect word; the netplay bridge waits 150 ms (CONNECT_GRACE_MS) before
++    // sending ConnectLink for that reason. Hold a ConnectLink that arrives
++    // sooner until the adapter has sent minSlaveHandshakes of them.
 +    static constexpr uint16_t minSlaveHandshakes = 8;
 +
 +    void connectHandshake()
@@ -149,10 +151,10 @@ index fc3e013..dcda8d2 100644
  .PHONY: all run clean
 diff --git a/tests/host/handshakeTest.cpp b/tests/host/handshakeTest.cpp
 new file mode 100644
-index 0000000..506252f
+index 0000000..c890194
 --- /dev/null
 +++ b/tests/host/handshakeTest.cpp
-@@ -0,0 +1,259 @@
+@@ -0,0 +1,257 @@
 +// Host test for the link mode's handshake: the real PacketLayer and UsbSection,
 +// a modelled GBA on the other end of the cable, and the host's StartHandshake
 +// and ConnectLink sent at different distances from each other.
@@ -295,7 +297,6 @@ index 0000000..506252f
 +
 +static void wire()
 +{
-+    uint32_t waitCycles = 0;
 +    bool childrenReady = false;
 +    while (g_wireRun)
 +    {
@@ -325,9 +326,8 @@ index 0000000..506252f
 +                if (next.timingUs) cycles = next.timingUs;
 +            }
 +        }
-+        waitCycles = cycles;
 +        // One PIO cycle is ~0.5425 us.
-+        std::this_thread::sleep_for(std::chrono::microseconds(waitCycles * 5425 / 10000));
++        std::this_thread::sleep_for(std::chrono::microseconds(cycles * 5425 / 10000));
 +    }
 +}
 +

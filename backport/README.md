@@ -24,13 +24,14 @@ carries one word per simulated player. It adds a host test in upstream's own
 Zephyr calls they use, a modelled GBA for the PIO link layer, and ConnectLink
 at 0, 5, 30, 60 and 200 ms after StartHandshake in 2- and 4-player seats.
 Unpatched, the 0, 5 and 30 ms cases and the 4-player case hang (8 failed
-checks); patched, all pass, five runs under ASan and UBSan. From a clean clone
-of 0ffbcd5 the patch applies with `git am` and `make -C tests/host run`
-passes. Celio-Client's local multi-adapter session (`localLinkSession.ts`)
-sends ConnectLink about one handshake round after StartHandshake, inside the
-window; the netplay bridge, Celio-Client's cable page and gen3-poke-multiplayer
-avoid it with 150-350 ms delays. Not built with Zephyr or run on RP2040
-hardware. 2.2.7's wait-loop change is left out: with ConnectLink held for
+checks); patched, all pass, also under ASan and UBSan, and ThreadSanitizer
+finds no race on the fields it adds. From a clean clone of 0ffbcd5 the patch
+applies with `git am` and `make -C tests/host run` passes. The netplay
+bridge, Celio-Client's cable page and gen3-poke-multiplayer stay clear of
+the window with 150-350 ms delays; a host without one hangs the link. Tested
+first in HelaFaye/GBLink-Firmware (pull request 1, into the fork's copy of
+the upstream branch, whose fork-only workflow builds the firmware with Zephyr
+and runs the host tests); not yet run on RP2040 hardware. hardware. 2.2.7's wait-loop change is left out: with ConnectLink held for
 eight rounds, the 50 ms poll can no longer miss the window, and the test
 passes without it.
 
