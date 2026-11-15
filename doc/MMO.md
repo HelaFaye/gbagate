@@ -472,6 +472,161 @@ route. For each N, measure:
 The limit is the first N where any of these crosses its line. The table
 above says where to look first.
 
+## Custom maps: authoring, format, loading
+
+A server's overworld is its own maps, drawn in porymap
+(HelaFaye/porymap) and played on retail cartridges. This is the design; none
+of it is built. The facts it rests on are pokeemerald's (`src/fieldmap.c`,
+`src/overworld.c`), and step 1 below proves them on the emulator before
+anything else is built on them.
+
+### What the game allows
+
+- **The map buffer.** The overworld reads blocks from one RAM buffer,
+  `sBackupMapData` (`0x02032318`, 20 KB): the map with a 7-block margin, at
+  most (width + 15) x (height + 14) = 10240 blocks. So a map can be up to
+  about 86 x 86, or any shape inside that bound.
+- **When it is filled.** `InitMap` fills it from `gMapHeader.mapLayout->map`
+  on a warp (`LoadMapFromWarp`), across a map border
+  (`LoadMapFromCameraTransition`), and on loading a save
+  (`InitMapFromSavedGame`, which then restores the 15 x 14 view the save
+  kept). Returning from a battle, a menu or the bag does not refill it
+  (`ReturnToFieldLocal` resumes the map as it was). So a custom map written
+  into the buffer once, right after the warp, lasts until the next warp.
+- **The header is RAM.** `gMapHeader` (`0x02037318`) is a copy the game makes
+  from the ROM on each warp, with the layout pointer, music, weather, map
+  type, the running, cycling and escape flags, and the events. It can be
+  pointed at a layout in RAM for as long as the player is on that map.
+- **A block** is two bytes: metatile id (bits 0-9), collision (10-11),
+  elevation (12-15), exactly porymap's `map.bin`.
+- **Graphics** come from tilesets already in the cartridge: 75 named
+  `gTileset_*` symbols in Emerald (`build/ref/pokeemerald.sym`). A map uses
+  one primary and one secondary tileset, as every vanilla map does. New tiles
+  or palettes are out of scope (they need VRAM and palette work the game does
+  not do for us).
+
+### Loading: a host map, then a swap
+
+1. The server puts the player on a custom map by warping them, through the
+   agent, to its **host map**: a vanilla map the pack names (a map type,
+   music and region-map section to start from). The game does the warp its
+   own way: fade, load, object events.
+2. Before the screen fades in, the agent swaps the map in, with the game's
+   own functions: `gMapHeader.mapLayout` to a 24-byte `MapLayout` in free
+   RAM (the pack's width, height, border and tilesets), the header fields
+   the pack overrides, the host's connections cleared (a custom map's edges
+   are the server's, as its warps are), `gBackupMapLayout`'s size, the
+   blocks written into the
+   buffer, then the tilesets and palettes loaded (`CopyMapTilesetsToVram`,
+   `LoadMapTilesetPalettes`) and the view redrawn (`DrawWholeMapView`).
+3. The blocks are streamed from the board at that moment, not kept on the
+   GBA: free EWRAM is about 12 KB in all, which the agent shares, and a
+   64 x 64 map is 8 KB. At the agent's Normal-mode clock (115200 Hz,
+   `doc/AGENT.md`) that is about 14 KB/s before handshakes, so under a
+   second, about a fade's length. The Multi-Play words the step protocol
+   uses carry about 450 B/s (gen3-poke-multiplayer measured 226 words/s),
+   18 s for the same map, so the swap is a Normal-mode transfer. The board
+   keeps every map it was sent, so a warp never waits on the network.
+4. After a battle or a menu nothing needs doing (the buffer is untouched).
+   After loading a save, the agent repeats step 2 for the map the save is on.
+5. A save made on a custom map records the host map and a 15 x 14 view of
+   custom blocks. Booted later without NovaBoot, the player stands on the
+   host map with a patch of custom tiles around them until the next warp:
+   untidy, never corrupt. The server can avoid even that by choosing host
+   maps whose tilesets match the custom map's.
+
+Step 2's timing is the first experiment: the swap must land after
+`LoadMapFromWarp` and before the first frame is shown. If the agent's hook
+cannot reach that window, the fallback is to swap during the fade-in with
+the screen held black for those frames.
+
+### The map pack
+
+What a server publishes, made from the porymap project by a converter
+(`tools/mappack.py`, to come) that reads the files porymap saves (each map's
+`map.json`, `data/layouts/layouts.json`, the layouts' `map.bin` and
+`border.bin`). JSON with the block data in base64; one pack per server, and
+every map in it named by the SHA-256 of its canonical encoding, so a board's
+cache is keyed by content:
+
+```
+{"format": "novaboot-mappack", "version": 1,
+ "game": "BPEE",                 # Emerald; maps name tilesets, not addresses
+ "maps": {"<sha256>": {
+   "name": "MyTown",             # porymap's map name
+   "host": [0, 9],               # vanilla map group, num
+   "width": 32, "height": 24,
+   "tilesets": ["gTileset_General", "gTileset_Petalburg"],
+   "border": "<base64, 4 blocks>",
+   "blocks": "<base64, width x height blocks, u16 LE>",
+   "header": {"music": "MUS_LITTLEROOT", "weather": "WEATHER_SUNNY",
+              "map_type": "MAP_TYPE_TOWN", "allow_running": true,
+              "allow_cycling": true, "allow_escaping": false, "show_map_name": true},
+   "connections": [{"dir": "up", "offset": 0, "map": "<sha256>"}],
+   "warps": [{"x": 10, "y": 5, "elevation": 3, "to": "<sha256>", "warp": 0}],
+   "signs": [{"x": 4, "y": 7, "text": "MYTOWN"}],
+   "npcs": [{"gfx": "OBJ_EVENT_GFX_BOY_1", "x": 12, "y": 9,
+             "movement": "MOVEMENT_TYPE_WANDER_AROUND", "text": "..."}]}},
+ "start": {"map": "<sha256>", "x": 10, "y": 8}}
+```
+
+Constants (music, weather, graphics, movement types) are porymap's names;
+the board resolves them per cartridge from the symbol map, as it does
+tilesets. The converter refuses a pack that would not run: an unknown
+tileset or constant, a metatile id past its tilesets' count, a map past the
+buffer bound, a warp or connection to a map not in the pack.
+
+Warps, signs and NPCs are the server's, not the game's script engine's: the
+agent reports the player stepping on a warp or facing a sign or NPC (it
+already reports every step), and the server answers with the warp or the
+text, which the agent shows with the game's own message box. Connections
+work the same way at map edges. Scripts written in porymap's script files
+are out of scope for version 1.
+
+### Netcode for maps
+
+On the reliable command channel (section 4), between the server and the
+board (`src/mmo_net.h`), three messages:
+
+| message | when | carries |
+|---|---|---|
+| `MN_MAP` | on joining, and on every warp the server makes | the map's hash, its host map, the player's tile |
+| `MN_MAP_GET` | from the board, for a hash it has not cached | the hash |
+| `MN_MAP_DATA` | the answer, in chunks | the map's canonical encoding, checked against its hash |
+
+Between the board and the agent (`src/mmo_link.h`), the swap of step 2 as
+`MMO_MAP_BEGIN` (layout, header fields), `MMO_MAP_ROWS` (blocks, a few rows
+a frame) and `MMO_MAP_END`; the agent acknowledges with its next
+`MMO_STATE`. A board fetches a server's whole pack when it joins, so it
+has every map before the first warp; the hashes make a second visit free.
+
+Interest is per map instance, as it already is (`qemu/mmo_server.py`): the
+custom map's hash is its key, where a vanilla map's group and number are
+today.
+
+### In porymap
+
+Authors use porymap as it is, on a pokeemerald project: pick a host-like
+map type and tilesets, draw, place warps, signs and NPCs, save. The fork
+adds nothing the converter needs, since porymap's saved files are the
+input. What it can add, as a script in porymap's own scripting API
+(`utility.registerAction`), is a check run before publishing: the map's
+size against the buffer bound, its tilesets vanilla, its events of the
+kinds the server handles. That keeps the fork a plain porymap that follows
+upstream.
+
+### Order
+
+1. On the emulator: the swap of step 2 into a vanilla host map, from a
+   block array the test supplies; timing, redraw, a battle and a save in it.
+2. `tools/mappack.py` from a pokeemerald project as porymap saves it, with
+   the canonical encoding and the checks; tested on vanilla maps, whose
+   blocks it must reproduce exactly.
+3. The messages above in `mmo_net` and `mmo_link`, the board's cache, the
+   test server serving a pack.
+4. Warps, signs and NPCs through the server.
+5. The porymap check script.
+
 ## Order of work
 
 1. The agent hooked into a running game, on the emulator with a scripted
@@ -483,7 +638,7 @@ above says where to look first.
    adapters (above); next are the board's own network transport and the
    crowd, which is the scale test.
 5. Commands: interact, trainer card, battle through the existing link relay.
-6. Custom maps from existing tilesets.
+6. Custom maps from existing tilesets ("Custom maps" above).
 7. Packet inspection on the board (below), before anything is opened to
    players who do not know each other.
 
