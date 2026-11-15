@@ -215,7 +215,10 @@ namespace
         const uint32_t gen = g_wantedGen.fetch_add(1) + 1;
         irq_unlock(key);
         k_sem_give(&g_wake);
-        for (int i = 0; i < 500 && static_cast<int32_t>(g_doneGen.load() - gen) < 0; i++)
+        // celio_stop() may send sessionLeft through the WebSocket transport,
+        // whose bounded write timeout is 2 s. Allow that write and worker
+        // completion to finish before refusing the radio hand-off.
+        for (int i = 0; i < 3000 && static_cast<int32_t>(g_doneGen.load() - gen) < 0; i++)
             k_sleep(K_MSEC(1));
         return static_cast<int32_t>(g_doneGen.load() - gen) >= 0;
     }

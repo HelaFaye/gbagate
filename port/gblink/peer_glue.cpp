@@ -143,10 +143,8 @@ namespace
         irq_unlock(key);
         k_sem_give(&g_wake);
         // Bounded: the thread applies it on its next pass (5 ms at most).
-        /* celio_stop() may send sessionLeft through a transport write with a
-         * 2 s timeout. Give that bounded write time to finish before refusing
-         * an otherwise safe radio hand-off. */
-        for (int i = 0; i < 3000 && static_cast<int32_t>(g_doneGen.load() - gen) < 0; i++)
+        // The peer thread applies the requested state on its next pass.
+        for (int i = 0; i < 500 && static_cast<int32_t>(g_doneGen.load() - gen) < 0; i++)
             k_sleep(K_MSEC(1));
         return static_cast<int32_t>(g_doneGen.load() - gen) >= 0;
     }
