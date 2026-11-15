@@ -1,5 +1,78 @@
 # Project State — Battle Chip Gate / GBA Link Adapter
 
+## Status, 15 November 2026
+
+What is under way, what is proven, and what waits on what. Newest first.
+
+### GB-Link firmware 3.0 (in progress, not on this branch yet)
+
+The GB-Link host software now requires adapter firmware 3.0.0: Celio-Client
+(`MIN_FIRMWARE`), the netplay bridge (seats in the link mode's commands and
+data) and gba-mmo's web client. This branch still runs 2.2.7, so until the port
+lands those hosts refuse the board. The port is on a local branch
+(`gblink-3.0-wip`, rebuilt on this branch's head before it is pushed), and is
+pushed only when the firmware builds and every suite passes.
+
+| | state |
+|---|---|
+| Upstream 3.0 (`4-player-combined-refactor` 0ffbcd5) imported, pruned | done |
+| gbagate's patches re-merged | P2, P3 (the audited 3.0 fix), P7, P8, P11, P13-P16 carried; P1 fixed upstream; P4-P6, P9 gone with the trade emulator; P12's persist half gone with cable selection |
+| GBA link layer: 2-4 players, seats, SD-pin learning (`port/gblink/link_layer_core.cpp`) | done; unit test `link_core_check` |
+| Game Boy link layer: 3.0's passive and hybrid modes (`port/gblink/gb_link_core.c`) | done; the printer runs on it |
+| Simulator and the four GB-Link suites on 3.0's protocol | all pass: 36 + 8 + 9 + 6 checks, also under ASan/UBSan |
+| USB identity 1209:b011, version 3.0.0 | done; `usbdesc` |
+| ESP32 drivers: link (2 players one-word, 3-4 on `mp_bus`), Game Boy passive/hybrid on an SC-edge task | written; the hybrid image builds and `make lint` compiles the link driver for all four boards; not run under QEMU or on hardware yet |
+| The board's Celio client and 4-player glue on Celio-Server's player settings | not started |
+| `make compat` against Celio-Client 3.0, Celio-Server f4b92bc, the netplay bridge 80d7387 | not started |
+
+### Early ConnectLink fix, for GB-Link (waiting on hardware, then the PR)
+
+GB-Link 3.0 still hangs when ConnectLink reaches an adapter that stands in for
+the parent before it has sent any 0xB9A0 (gbagate's P3). The fix, with a host
+test in upstream's `tests/host`, is in `backport/GBLink-Firmware-3.0/`, was
+audited, and is merged into HelaFaye/GBLink-Firmware's copy of the upstream
+branch (pull request 1; the fork's CI built the firmware with Zephyr and ran the
+host tests, plain and sanitized). Tested against a modelled GBA only: not yet
+against Emerald in mGBA (needs the ROM), not on an RP2040. The pull request to
+GB-Link waits on that hardware test and on someone with access opening it from
+`HelaFaye:fix/early-connect-3.0`.
+
+### Shared overworld (NovaBoot)
+
+- The relay, link framing, server tunnel and test server run end to end
+  through two emulated adapters (`make mmo-adapter`); the Emerald run waits on
+  the ROM.
+- Custom maps from porymap: designed (`doc/MMO.md`, "Custom maps"), not built.
+  First step is an emulator experiment that needs the ROM.
+- The production server: see `doc/MMO.md`, "The server".
+- gen3-poke-multiplayer (Wired-Ariel) runs a shared Emerald overworld on retail
+  cartridges today. Its in-game payload, entry vector and field fixes are ahead
+  of our test agent; our 3-4 player Cable Club is ahead of its pairs. Running
+  NovaBoot on its payload, and offering it our 4-player relay, are proposed,
+  not started.
+
+### Emulator (qemu_esp32)
+
+Pinned at 21d8244 in `qemu/accurate.sh`. The fork's head (d9d9d0b) adds the
+four gbagate boards, both UARTs on TCP and Wi-Fi start-up (a station starts and
+scans; no frames, so no network and no ESP-NOW). Built and tried: on it the
+hybrid image's display does not come up (`lcd: no memory for the framebuffer`)
+and TinyUSB does not start, so the touch tests cannot reach the menu; whether
+that is the new emulator or the 3.0 firmware is not yet separated. The pin
+moves only once our QEMU tests pass on it.
+
+### Waiting on someone
+
+- **The Emerald ROM**, for the mGBA runs (shared overworld, link tests against
+  3.0, the custom-map experiment).
+- **pkhex-gba-multiboot**: HelaFaye/pkhex-gba-multiboot is upstream PKHeX's
+  master with no gbagate work; where the earlier work is, and what finishing it
+  means, is still to be said.
+- **The launcher mirror**: HelaFaye/gblink-launcher and its
+  `GBLINK_LAUNCHER_TOKEN` secret (`test/gblink_compat/run.sh`).
+
+---
+
 ## GB-Link adapter (October 2026, gbagate 0.4.0)
 
 Every hardware image is now a GB-Link adapter as well. It runs GB-Link's

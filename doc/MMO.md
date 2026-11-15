@@ -627,6 +627,34 @@ upstream.
 4. Warps, signs and NPCs through the server.
 5. The porymap check script.
 
+## The server
+
+`qemu/mmo_server.py` is the tests' server. The real one is proposed to grow
+out of Celio-Server, which already does what a board needs from a server:
+sessions keyed by a short code, clients that come and go, commands
+acknowledged and resent, data batched and ordered per receiver. The MMO adds
+what Celio does not have: a persistent world, map instances, interest
+management, the map packs.
+
+**Which Celio-Server.** Three lines exist:
+
+| | head | state |
+|---|---|---|
+| GB-Link/Celio-Server | main 9f02d3e (June), MULTI 368327e (July) | stopped |
+| HelaFaye/Celio-Server `gbagate-fixes` | 94c5dde | GB-Link's June code plus two of ours: Celio-Client's acknowledged protocol, and forgetting a client that leaves |
+| Celio-Link/Celio-Server | main = production f4b92bc (17 October) | acknowledged protocol since early October, 4-player sessions, 3.0's player settings; what Celio-Client 3.0 speaks |
+
+Both of `gbagate-fixes`' commits are already in Celio-Link's main: it speaks
+the acknowledged protocol natively, and its `removeClient()` forgets a
+leaving client's state (`clientState.delete`), as our second commit does. So
+`gbagate-fixes` is not where the MMO server should start: Celio-Link's main
+is, as a fork with the MMO in its own module beside the link sessions, so the
+link play the board already relies on keeps working on the same server. Its
+4-player sessions also supersede `backport/Celio-Link-Server/0002`. Fixes to
+the shared core go back as pull requests; GB-Link/Celio-Server would need
+Celio-Link's October work before any of ours applies there. MMO features stay
+in the fork.
+
 ## Order of work
 
 1. The agent hooked into a running game, on the emulator with a scripted
