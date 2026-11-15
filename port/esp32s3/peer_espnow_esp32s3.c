@@ -19,11 +19,9 @@
  *                      -- the link screen shows the peer's MAC so that is
  *                      visible.
  *
- * The previous ESP-NOW transport (transport_esp32s3.c) called esp_now_init()
- * without starting WiFi, which fails, and had no caller. This brings WiFi up
- * in station mode (radio_init(), shared with the board's network) on a fixed
- * channel, which is all ESP-NOW needs -- or on the network's, when the board
- * has joined one.
+ * The radio coordinator stops Online before this client starts. radio_init()
+ * then brings the Wi-Fi driver up in station mode; in this exclusive mode the
+ * peers use PEER_CHANNEL rather than sharing an active Online connection.
  *
  * NOT YET RUN ON HARDWARE.
  */
@@ -53,15 +51,18 @@ static uint8_t  s_peer[ESP_NOW_ETH_ALEN];
 static volatile bool s_locked;   /* s_peer is written before this is set */
 static volatile int64_t s_last_rx_us;
 static bool     s_up;
+static bool     s_peer_running;
+static uint8_t  s_mode = 0x01;
+static uint8_t  s_variant;
 
-static void add_peer(const uint8_t *mac) {
-    if (esp_now_is_peer_exist(mac)) return;
+static esp_err_t add_peer(const uint8_t *mac) {
+    if (esp_now_is_peer_exist(mac)) return ESP_OK;
     esp_now_peer_info_t p = { 0 };
     memcpy(p.peer_addr, mac, ESP_NOW_ETH_ALEN);
     p.channel = 0;   /* whatever channel the radio is on: 1, or the network's */
     p.ifidx = WIFI_IF_STA;
     p.encrypt = false;
-    esp_now_add_peer(&p);
+    return esp_now_add_peer(&p);
 }
 
 static void rx_cb(const esp_now_recv_info_t *info, const uint8_t *d, int len) {
@@ -82,7 +83,11 @@ void gblink_peer_radio_accepted(const uint8_t src[6]) {
         return;
     }
     memcpy(s_peer, src, ESP_NOW_ETH_ALEN);
-    add_peer(s_peer);
+    esp_err_t e = add_peer(s_peer);
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "could not add locked peer: %s", esp_err_to_name(e));
+        return;
+    }
     s_last_rx_us = esp_timer_get_time();
     __atomic_store_n(&s_locked, true, __ATOMIC_RELEASE);
     ESP_LOGI(TAG, "cable locked to " MACSTR, MAC2STR(s_peer));
@@ -93,27 +98,40 @@ bool gblink_peer_radio_send(const uint8_t *d, size_t n) {
     return esp_now_send(s_locked ? s_peer : BCAST, d, n) == ESP_OK;
 }
 
+esp_err_t wireless_cable_stop_checked(void);
+
 esp_err_t peer_espnow_start(void) {
-    if (!s_up) {
-        /* One bring-up for the radio, shared with the network (net_esp32s3.c). */
-        ESP_RETURN_ON_ERROR(radio_init(), TAG, "radio_init");
-        /*
-         * On a network, the channel is the access point's and cannot be set;
-         * both boards on the same WiFi share it anyway. Otherwise channel 1,
-         * which every regulatory domain has.
-         */
-        if (!radio_sta_connected()) {
-            ESP_RETURN_ON_ERROR(esp_wifi_set_channel(PEER_CHANNEL, WIFI_SECOND_CHAN_NONE), TAG,
-                                "esp_wifi_set_channel");
-        } else {
-            ESP_LOGI(TAG, "on WiFi: the cable uses the network's channel");
-        }
-        ESP_RETURN_ON_ERROR(esp_now_init(), TAG, "esp_now_init");
-        ESP_RETURN_ON_ERROR(esp_now_register_recv_cb(rx_cb), TAG, "esp_now_register_recv_cb");
-        add_peer(BCAST);
-        s_up = true;
+    if (s_up) {
+        s_locked = false;
+        return ESP_OK;
+    }
+
+    /* Online must have suspended before this client is entered. radio_init is
+     * idempotent and starts the already-initialized Wi-Fi driver when needed. */
+    esp_err_t e = radio_init();
+    if (e != ESP_OK) return e;
+    /* A connected station owns the channel; otherwise both peers use 1. */
+    if (!radio_sta_connected()) {
+        e = esp_wifi_set_channel(PEER_CHANNEL, WIFI_SECOND_CHAN_NONE);
+        if (e != ESP_OK) return e;
+    } else {
+        ESP_LOGI(TAG, "on WiFi: the cable uses the network's channel");
+    }
+
+    e = esp_now_init();
+    if (e != ESP_OK) return e;
+    s_up = true;  /* from here on the stop callback can unwind partial setup */
+    e = esp_now_register_recv_cb(rx_cb);
+    if (e == ESP_OK) e = add_peer(BCAST);
+    if (e != ESP_OK) {
+        esp_err_t cleanup = esp_now_deinit();
+        if (cleanup == ESP_OK) s_up = false;
+        else ESP_LOGE(TAG, "partial ESP-NOW setup cleanup failed: %s",
+                      esp_err_to_name(cleanup));
+        return e;
     }
     s_locked = false;
+    memset(s_peer, 0, sizeof s_peer);
     return ESP_OK;
 }
 
@@ -124,13 +142,65 @@ esp_err_t wireless_cable_start(uint8_t mode, uint8_t variant) {
         ESP_LOGE(TAG, "radio failed: %s", esp_err_to_name(e));
         return e;
     }
-    gblink_peer_start(mode, variant, esp_random() | 1u);
+    s_mode = mode;
+    s_variant = variant;
+    if (!gblink_peer_start_wait(mode, variant, esp_random() | 1u)) {
+        ESP_LOGE(TAG, "peer worker did not acknowledge start");
+        (void)wireless_cable_stop_checked();
+        return ESP_ERR_TIMEOUT;
+    }
+    s_peer_running = true;
+    return ESP_OK;
+}
+
+/* A failed stop must not permit a second radio owner. If deinit/driver stop
+ * fails, try to restore the same Wireless client before reporting failure. */
+esp_err_t wireless_cable_stop_checked(void) {
+    const bool restore_peer = s_peer_running;
+    if (!gblink_peer_stop_wait()) {
+        ESP_LOGE(TAG, "peer worker did not acknowledge stop");
+        return ESP_ERR_TIMEOUT;
+    }
+    s_peer_running = false;
+    s_locked = false;
+    memset(s_peer, 0, sizeof s_peer);
+    s_last_rx_us = 0;
+
+    if (s_up) {
+        esp_err_t e = esp_now_deinit();
+        if (e != ESP_OK) {
+            /* A failed deinit leaves s_up true: do not register a duplicate
+             * callback. The existing callback and broadcast peer remain live;
+             * restart only the protocol worker before returning the failure. */
+            if (!restore_peer) return e;  /* failed partial start: remain stopped */
+            if (gblink_peer_start_wait(s_mode, s_variant, esp_random() | 1u)) {
+                s_peer_running = true;
+                return e;  /* original owner is running again */
+            }
+            ESP_LOGE(TAG, "ESP-NOW deinit failed (%s); peer worker restore failed",
+                     esp_err_to_name(e));
+            return e;
+        }
+        s_up = false;
+    }
+
+    esp_err_t e = radio_stop();
+    if (e != ESP_OK) {
+        esp_err_t restore = peer_espnow_start();
+        if (restore == ESP_OK &&
+            (!restore_peer || gblink_peer_start_wait(s_mode, s_variant, esp_random() | 1u))) {
+            s_peer_running = restore_peer;
+            return e;  /* restore the old owner; do not start another client */
+        }
+        ESP_LOGE(TAG, "Wi-Fi stop failed (%s); Wireless restore failed (%s)",
+                 esp_err_to_name(e), esp_err_to_name(restore));
+        return restore != ESP_OK ? restore : ESP_ERR_TIMEOUT;
+    }
     return ESP_OK;
 }
 
 void wireless_cable_stop(void) {
-    gblink_peer_stop();
-    s_locked = false;
+    (void)wireless_cable_stop_checked();
 }
 
 bool wireless_cable_peer_mac(uint8_t mac[6]) {

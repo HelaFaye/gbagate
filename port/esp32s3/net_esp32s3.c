@@ -48,6 +48,7 @@
 
 #include "gblink_port.h"
 #include "net_esp32s3.h"
+#include "radio_mode_esp32s3.h"
 #include "settings.h"
 #include "wifi_cfg.h"
 
@@ -67,7 +68,15 @@ static net_state_t s_state;
 static char        s_ip[16];
 static char        s_hotspot[33];
 static bool        s_ap_on;
+static bool        s_ap_wanted;
 static bool        s_started;
+static volatile bool s_suspended = true;
+static bool        s_platform_ready;
+static bool        s_sta_netif_ready;
+static bool        s_ap_netif_ready;
+static bool        s_wifi_initialized;
+static bool        s_wifi_started;
+static bool        s_events_registered;
 static int         s_tries;
 static volatile bool s_sta_connected;
 static volatile bool s_import_wanted;
@@ -75,6 +84,8 @@ static TaskHandle_t s_task;
 
 static httpd_handle_t s_httpd;
 static volatile int   s_gblink_fd = -1;
+static volatile bool  s_ws_busy;  /* protected by s_ws_lock; includes connect/read */
+static volatile bool  s_retry_busy; /* network task is in esp_wifi_connect */
 
 static void lock(void)   { xSemaphoreTake(s_lock, portMAX_DELAY); }
 static void unlock(void) { xSemaphoreGive(s_lock); }
@@ -109,27 +120,80 @@ static bool cfg_save(const wifi_cfg_t *c) {
 
 /* ---- the radio --------------------------------------------------------------- */
 
-esp_err_t radio_init(void) {
-    static bool up;
-    static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
-    taskENTER_CRITICAL(&mux);
-    bool first = !up;
-    up = true;
-    taskEXIT_CRITICAL(&mux);
-    if (!first) {
-        return ESP_OK;
+static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data);
+
+/* IDF's netifs, default event loop and esp_wifi_init() are process-lifetime
+ * objects. A mode hand-off stops/starts the driver, never destroys those
+ * objects. These functions are called by the core-0 radio owner only. */
+static esp_err_t radio_prepare(void) {
+    esp_err_t e;
+    if (!s_platform_ready) {
+        e = esp_netif_init();
+        if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
+        e = esp_event_loop_create_default();
+        if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
+        s_platform_ready = true;
     }
-    esp_err_t e = esp_netif_init();
-    if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
-    e = esp_event_loop_create_default();
-    if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
-    esp_netif_create_default_wifi_sta();
-    esp_netif_create_default_wifi_ap();
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_RETURN_ON_ERROR(esp_wifi_init(&cfg), TAG, "esp_wifi_init");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "esp_wifi_set_storage");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "esp_wifi_set_mode");
-    ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "esp_wifi_start");
+    if (!s_sta_netif_ready) {
+        if (esp_netif_create_default_wifi_sta() == NULL) return ESP_FAIL;
+        s_sta_netif_ready = true;
+    }
+    if (!s_ap_netif_ready) {
+        if (esp_netif_create_default_wifi_ap() == NULL) return ESP_FAIL;
+        s_ap_netif_ready = true;
+    }
+    if (!s_wifi_initialized) {
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        e = esp_wifi_init(&cfg);
+        if (e != ESP_OK) return e;
+        s_wifi_initialized = true;
+    }
+    if (!s_wifi_started) {
+        e = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+        if (e != ESP_OK) return e;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t radio_driver_start(void) {
+    esp_err_t e = radio_prepare();
+    if (e != ESP_OK || s_wifi_started) return e;
+    e = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (e != ESP_OK) return e;
+    e = esp_wifi_start();
+    if (e == ESP_OK) s_wifi_started = true;
+    return e;
+}
+
+esp_err_t radio_init(void) {
+    return radio_driver_start();
+}
+
+esp_err_t radio_stop(void) {
+    if (!s_wifi_started) return ESP_OK;
+    /* A disconnect error is expected when STA was not associated. esp_wifi_stop
+     * is the ownership boundary and its result is authoritative. */
+    (void)esp_wifi_disconnect();
+    esp_err_t e = esp_wifi_stop();
+    if (e == ESP_OK) {
+        s_wifi_started = false;
+        s_sta_connected = false;
+    }
+    return e;
+}
+
+static esp_err_t register_wifi_events(void) {
+    if (s_events_registered) return ESP_OK;
+    esp_err_t e = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                             on_wifi, NULL);
+    if (e != ESP_OK) return e;
+    e = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                   on_wifi, NULL);
+    if (e != ESP_OK) {
+        (void)esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi);
+        return e;
+    }
+    s_events_registered = true;
     return ESP_OK;
 }
 
@@ -155,6 +219,7 @@ static void apply_sta(void) {
 }
 
 static void hotspot(bool on) {
+    s_ap_wanted = on;
     if (on == s_ap_on) {
         return;
     }
@@ -181,31 +246,41 @@ static void hotspot(bool on) {
 
 static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg;
+    if (s_suspended || !s_started) return;  /* fast rejection on hand-off */
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        s_sta_connected = false;
+        bool active;
         lock();
-        if (s_cfg.ssid[0]) {
-            s_tries++;
-            s_ip[0] = '\0';
-            if (s_tries >= JOIN_TRIES) {
-                s_state = NET_FAILED;
-                hotspot(true);
-            } else {
-                s_state = NET_JOINING;
+        active = !s_suspended && s_started;
+        if (active) {
+            s_sta_connected = false;
+            if (s_cfg.ssid[0]) {
+                s_tries++;
+                s_ip[0] = '\0';
+                if (s_tries >= JOIN_TRIES) {
+                    s_state = NET_FAILED;
+                    hotspot(true);
+                } else {
+                    s_state = NET_JOINING;
+                }
             }
         }
         unlock();
-        if (s_task) xTaskNotifyGive(s_task);   /* retry, after a pause, there */
+        if (active && s_task) xTaskNotifyGive(s_task);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
-        s_sta_connected = true;
+        lock();
+        if (!s_suspended && s_started) s_sta_connected = true;
+        unlock();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *e = data;
         lock();
-        snprintf(s_ip, sizeof s_ip, IPSTR, IP2STR(&e->ip_info.ip));
-        s_state = NET_UP;
-        s_tries = 0;
+        bool active = !s_suspended && s_started;
+        if (active) {
+            snprintf(s_ip, sizeof s_ip, IPSTR, IP2STR(&e->ip_info.ip));
+            s_state = NET_UP;
+            s_tries = 0;
+        }
         unlock();
-        ESP_LOGI(TAG, "on %s at %s", s_cfg.ssid, s_ip);
+        if (active) ESP_LOGI(TAG, "on %s at %s", s_cfg.ssid, s_ip);
     }
 }
 
@@ -253,7 +328,7 @@ static void import_wifi_txt(void) {
     bool net_changed = strcmp(c.ssid, s_cfg.ssid) || strcmp(c.pass, s_cfg.pass);
     s_cfg = c;
     cfg_save(&s_cfg);
-    if (s_started && net_changed && s_cfg.ssid[0]) {
+    if (s_started && !s_suspended && net_changed && s_cfg.ssid[0]) {
         apply_sta();
     }
     unlock();
@@ -310,7 +385,7 @@ static esp_err_t post_save(httpd_req_t *req) {
     bool net_changed = strcmp(c.ssid, s_cfg.ssid) || strcmp(c.pass, s_cfg.pass);
     s_cfg = c;
     bool saved = cfg_save(&s_cfg);
-    if (net_changed && s_cfg.ssid[0]) {
+    if (s_started && !s_suspended && net_changed && s_cfg.ssid[0]) {
         apply_sta();
     }
     unlock();
@@ -370,21 +445,33 @@ bool gblink_net_write(const uint8_t *data, size_t len) {
     return true;
 }
 
-static void start_httpd(void) {
+static esp_err_t start_httpd(void) {
+    if (s_httpd) return ESP_OK;
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.lru_purge_enable = true;
     c.core_id = 0;   /* core 1 is the link's */
-    if (httpd_start(&s_httpd, &c) != ESP_OK) {
-        ESP_LOGE(TAG, "http server failed");
-        return;
+    esp_err_t e = httpd_start(&s_httpd, &c);
+    if (e != ESP_OK) {
+        s_httpd = NULL;
+        ESP_LOGE(TAG, "http server failed: %s", esp_err_to_name(e));
+        return e;
     }
     const httpd_uri_t root = { .uri = "/", .method = HTTP_GET, .handler = get_root };
     const httpd_uri_t save = { .uri = "/save", .method = HTTP_POST, .handler = post_save };
     const httpd_uri_t gbl  = { .uri = "/gblink", .method = HTTP_GET, .handler = ws_gblink,
                                .is_websocket = true };
-    httpd_register_uri_handler(s_httpd, &root);
-    httpd_register_uri_handler(s_httpd, &save);
-    httpd_register_uri_handler(s_httpd, &gbl);
+    e = httpd_register_uri_handler(s_httpd, &root);
+    if (e == ESP_OK) e = httpd_register_uri_handler(s_httpd, &save);
+    if (e == ESP_OK) e = httpd_register_uri_handler(s_httpd, &gbl);
+    if (e != ESP_OK) {
+        esp_err_t cleanup = httpd_stop(s_httpd);
+        if (cleanup == ESP_OK) s_httpd = NULL;
+        else ESP_LOGE(TAG, "partial HTTP server cleanup failed: %s",
+                      esp_err_to_name(cleanup));
+        ESP_LOGE(TAG, "http route registration failed: %s", esp_err_to_name(e));
+        return cleanup == ESP_OK ? e : cleanup;
+    }
+    return ESP_OK;
 }
 
 /* ---- the Celio socket ------------------------------------------------------------------ */
@@ -395,8 +482,10 @@ static volatile bool s_celio_wanted;
 static TaskHandle_t s_ws_task;
 
 void gblink_celio_ws_connect(bool on) {
-    s_celio_wanted = on;
-    if (on && s_ws_task) xTaskNotifyGive(s_ws_task);
+    if (s_ws_lock) xSemaphoreTake(s_ws_lock, portMAX_DELAY);
+    s_celio_wanted = on && !s_suspended;
+    if (s_ws_lock) xSemaphoreGive(s_ws_lock);
+    if (s_ws_task) xTaskNotifyGive(s_ws_task);
 }
 
 bool gblink_celio_ws_send(const char *text, size_t len) {
@@ -485,16 +574,31 @@ static void ws_session(const char *url) {
 static void ws_task(void *arg) {
     (void)arg;
     for (;;) {
-        if (!s_celio_wanted || s_state != NET_UP) {
+        /* Reserve the session under the same lock that net_suspend uses to
+         * publish s_suspended. Once suspend sees !s_ws_busy, no late connect
+         * can start behind it. */
+        xSemaphoreTake(s_ws_lock, portMAX_DELAY);
+        bool reserved = s_celio_wanted && !s_suspended;
+        if (reserved) s_ws_busy = true;
+        xSemaphoreGive(s_ws_lock);
+        if (!reserved) {
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
             continue;
         }
         char url[WIFI_URL_MAX + 1];
         lock();
-        strcpy(url, s_cfg.celio);
+        bool run = s_started && !s_suspended && s_state == NET_UP && s_celio_wanted;
+        if (run) strcpy(url, s_cfg.celio);
         unlock();
-        ws_session(url);
-        vTaskDelay(pdMS_TO_TICKS(500));   /* socket.io's reconnection delay */
+        if (run) ws_session(url);
+        xSemaphoreTake(s_ws_lock, portMAX_DELAY);
+        s_ws_busy = false;
+        bool reconnect = s_celio_wanted && !s_suspended;
+        xSemaphoreGive(s_ws_lock);
+        if (reconnect) {
+            /* Notification makes this delay immediately interruptible. */
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
+        }
     }
 }
 
@@ -509,64 +613,212 @@ static void net_task(void *arg) {
             import_wifi_txt();
         }
         lock();
-        bool retry = s_started && s_cfg.ssid[0] && !s_sta_connected && s_state != NET_UP;
+        bool retry = s_started && !s_suspended && s_cfg.ssid[0] && !s_sta_connected && s_state != NET_UP;
         int tries = s_tries;
         unlock();
         if (retry) {
             /* 1, 2, 4, 8 s, then every 30: a network that comes back is found */
-            vTaskDelay(pdMS_TO_TICKS(tries < JOIN_TRIES ? 1000u << tries : 30000u));
-            if (!s_sta_connected) esp_wifi_connect();
+            /* Unlike vTaskDelay, a task-notification wait is interrupted by
+             * suspend. Recheck after waking before touching the radio. */
+            ulTaskNotifyTake(pdTRUE,
+                pdMS_TO_TICKS(tries < JOIN_TRIES ? 1000u << tries : 30000u));
+            lock();
+            retry = s_started && !s_suspended && s_cfg.ssid[0] &&
+                    !s_sta_connected && s_state != NET_UP;
+            unlock();
+            if (retry) {
+                s_retry_busy = true;
+                if (!s_suspended) esp_wifi_connect();
+                s_retry_busy = false;
+            }
         }
     }
 }
 
-static void ensure_tasks(void) {
+static esp_err_t ensure_tasks(void) {
     if (!s_lock) {
         s_lock = xSemaphoreCreateMutex();
-        s_ws_lock = xSemaphoreCreateMutex();
-        cfg_load(&s_cfg);
+        if (s_lock) cfg_load(&s_cfg);
     }
-    if (!s_task) {
-        xTaskCreatePinnedToCore(net_task, "net", 4096, NULL, 3, &s_task, 0);
+    if (!s_ws_lock) s_ws_lock = xSemaphoreCreateMutex();
+    if (!s_lock || !s_ws_lock) return ESP_FAIL;
+    if (!s_task && xTaskCreatePinnedToCore(net_task, "net", 4096, NULL, 3,
+                                           &s_task, 0) != pdPASS) {
+        s_task = NULL;
+        return ESP_FAIL;
     }
+    if (!s_ws_task && xTaskCreatePinnedToCore(ws_task, "celio_ws", 8192, NULL, 3,
+                                              &s_ws_task, 0) != pdPASS) {
+        s_ws_task = NULL;
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
-esp_err_t net_start(bool want_hotspot) {
-    ensure_tasks();
+/* Resume the Online client. The network and Celio tasks are persistent: only
+ * the HTTP server and Wi-Fi driver are cycled, so retries cannot survive a
+ * hand-off and task/event-handler duplicates cannot accumulate. */
+esp_err_t net_resume(bool want_hotspot) {
+    esp_err_t e = ensure_tasks();
+    if (e != ESP_OK) return e;
+
     lock();
-    if (!s_started) {
-        esp_err_t e = radio_init();
-        if (e != ESP_OK) {
-            unlock();
-            return e;
-        }
-        esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi, NULL, NULL);
-        esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi, NULL, NULL);
-        start_httpd();
-        xTaskCreatePinnedToCore(ws_task, "celio_ws", 8192, NULL, 3, &s_ws_task, 0);
-        s_started = true;
-        if (s_cfg.ssid[0]) {
-            apply_sta();
-        } else {
-            s_state = NET_SETUP;
-        }
+    if (s_started && !s_suspended) {
+        if (want_hotspot) hotspot(true);
+        unlock();
+        return ESP_OK;
     }
-    if (want_hotspot || !s_cfg.ssid[0] || s_state == NET_FAILED) {
+    unlock();
+
+    e = radio_prepare();
+    if (e != ESP_OK) return e;
+    e = register_wifi_events();
+    if (e != ESP_OK) return e;
+    e = radio_driver_start();
+    if (e != ESP_OK) return e;
+    e = start_httpd();
+    if (e != ESP_OK) return e;
+
+    xSemaphoreTake(s_ws_lock, portMAX_DELAY);
+    s_suspended = false;
+    xSemaphoreGive(s_ws_lock);
+    lock();
+    s_started = true;
+    s_sta_connected = false;
+    s_ip[0] = '\0';
+    s_gblink_fd = -1;
+    if (s_cfg.ssid[0]) {
+        apply_sta();
+    } else {
+        s_state = NET_SETUP;
+    }
+    if (want_hotspot || s_ap_wanted || !s_cfg.ssid[0] || s_state == NET_FAILED) {
         hotspot(true);
     }
     unlock();
+    if (s_task) xTaskNotifyGive(s_task);
+    if (s_ws_task) xTaskNotifyGive(s_ws_task);
+    ESP_LOGI(TAG, "Online services resumed");
+    return ESP_OK;
+}
+
+esp_err_t net_start(bool want_hotspot) {
+    return net_resume(want_hotspot);
+}
+
+/* Suspend the complete Online client before another protocol takes the PHY.
+ * The WebSocket worker may be inside an 8 s connect or a bounded read; wait for
+ * it to close and destroy its transport before stopping Wi-Fi. */
+esp_err_t net_suspend(void) {
+    if (!s_lock || !s_ws_lock) return radio_stop();
+
+    xSemaphoreTake(s_ws_lock, portMAX_DELAY);
+    if (s_suspended && !s_started && !s_httpd && !s_wifi_started) {
+        xSemaphoreGive(s_ws_lock);
+        return ESP_OK;
+    }
+    s_suspended = true;
+    xSemaphoreGive(s_ws_lock);
+    /* The suspension gate prevents a new reconnect. Stop the local Celio
+     * session next; its final session packet may still use the open socket. */
+    if (s_ws_task) xTaskNotifyGive(s_ws_task);
+    if (s_task) xTaskNotifyGive(s_task);  /* interrupt reconnect back-off */
+    if (!gblink_celio_stop_wait()) {
+        xSemaphoreTake(s_ws_lock, portMAX_DELAY);
+        s_suspended = false;  /* nothing else was released; keep Online usable */
+        xSemaphoreGive(s_ws_lock);
+        ESP_LOGE(TAG, "Celio worker did not acknowledge stop; radio hand-off refused");
+        return ESP_ERR_TIMEOUT;  /* keep ownership; do not start another radio client */
+    }
+    /* Drain any event callback that entered before s_suspended was published. */
+    lock();
+    unlock();
+
+    bool busy = true;
+    for (unsigned waited = 0; waited < 12000; waited += 10) {
+        xSemaphoreTake(s_ws_lock, portMAX_DELAY);
+        busy = s_ws_busy;
+        xSemaphoreGive(s_ws_lock);
+        busy = busy || s_retry_busy;
+        if (!busy) break;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (busy) {
+        /* No RF settings or HTTP state have changed yet; leave Online as the
+         * sole owner and allow the caller to retry the transition. */
+        xSemaphoreTake(s_ws_lock, portMAX_DELAY);
+        s_suspended = false;
+        xSemaphoreGive(s_ws_lock);
+        ESP_LOGE(TAG, "Celio WebSocket did not quiesce; radio hand-off refused");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    httpd_handle_t server = s_httpd;
+    s_gblink_fd = -1;
+    s_httpd = NULL;
+    if (server) {
+        esp_err_t e = httpd_stop(server);
+        if (e != ESP_OK) {
+            s_httpd = server;
+            xSemaphoreTake(s_ws_lock, portMAX_DELAY);
+            s_suspended = false;
+            xSemaphoreGive(s_ws_lock);
+            ESP_LOGE(TAG, "HTTP server stop failed: %s", esp_err_to_name(e));
+            return e;
+        }
+    }
+
+    esp_err_t e = radio_stop();
+    if (e != ESP_OK) {
+        /* Stop did not release the driver. Restore Online's server and station
+         * path before reporting failure to the coordinator. */
+        esp_err_t restore = server ? start_httpd() : ESP_OK;
+        if (restore == ESP_OK) {
+            xSemaphoreTake(s_ws_lock, portMAX_DELAY);
+            s_suspended = false;
+            xSemaphoreGive(s_ws_lock);
+            lock();
+            s_started = true;
+            if (s_cfg.ssid[0]) apply_sta();
+            else s_state = NET_SETUP;
+            if (s_ap_wanted) hotspot(true);
+            unlock();
+            if (s_task) xTaskNotifyGive(s_task);
+        }
+        ESP_LOGE(TAG, "Wi-Fi stop failed: %s (HTTP restore: %s)",
+                 esp_err_to_name(e), esp_err_to_name(restore));
+        return restore == ESP_OK ? e : restore;
+    }
+
+    lock();
+    s_started = false;
+    s_state = NET_OFF;
+    s_ip[0] = '\0';
+    s_sta_connected = false;
+    s_ap_on = false;
+    s_hotspot[0] = '\0';
+    unlock();
+    ESP_LOGI(TAG, "Online services suspended");
     return ESP_OK;
 }
 
 void net_boot(void) {
-    ensure_tasks();
+    if (ensure_tasks() != ESP_OK) {
+        ESP_LOGE(TAG, "network tasks could not be created");
+        return;
+    }
     s_import_wanted = true;          /* the drive may have mounted before us */
     xTaskNotifyGive(s_task);
     lock();
     bool have = s_cfg.ssid[0] != '\0';
     unlock();
     if (have) {
-        net_start(false);
+        radio_mode_esp32s3_init();
+        radio_mode_result_t result = radio_mode_esp32s3_select(RADIO_MODE_ONLINE);
+        if (result != RADIO_MODE_OK) {
+            ESP_LOGE(TAG, "boot Online start failed: %s",
+                     radio_mode_result_name(result));
+        }
     }
 }
 
@@ -576,7 +828,7 @@ void net_view(net_view_t *out) {
         return;
     }
     lock();
-    out->state = s_started ? s_state : NET_OFF;
+    out->state = (s_started && !s_suspended) ? s_state : NET_OFF;
     snprintf(out->ssid, sizeof out->ssid, "%s", s_cfg.ssid);
     snprintf(out->ip, sizeof out->ip, "%s", s_ip);
     snprintf(out->hotspot, sizeof out->hotspot, "%s", s_ap_on ? s_hotspot : "");

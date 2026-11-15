@@ -199,7 +199,7 @@ namespace
         }
     }
 
-    void request(bool run, const char* session, uint8_t players = 2, uint8_t gbas = 1)
+    bool request(bool run, const char* session, uint8_t players = 2, uint8_t gbas = 1)
     {
         if (!g_threadStarted.exchange(true))
         {
@@ -217,6 +217,7 @@ namespace
         k_sem_give(&g_wake);
         for (int i = 0; i < 500 && static_cast<int32_t>(g_doneGen.load() - gen) < 0; i++)
             k_sleep(K_MSEC(1));
+        return static_cast<int32_t>(g_doneGen.load() - gen) >= 0;
     }
 }
 
@@ -237,10 +238,15 @@ extern "C" void gblink_celio_start_multi(const char* session, uint8_t players, u
 extern "C" __attribute__((weak)) bool gblink_mp4_bus_start(const mp_bus_layout_t*, mp_link_t*) { return false; }
 extern "C" __attribute__((weak)) void gblink_mp4_bus_stop(void) {}
 
+extern "C" bool gblink_celio_stop_wait(void)
+{
+    if (!g_threadStarted) return true;
+    return request(false, nullptr);
+}
+
 extern "C" void gblink_celio_stop(void)
 {
-    if (!g_threadStarted) return;
-    request(false, nullptr);
+    (void)gblink_celio_stop_wait();
 }
 
 extern "C" void gblink_celio_ws_open(void) { if (g_running) postText(EV_OPEN, nullptr, 0); }

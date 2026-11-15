@@ -16,9 +16,9 @@ extern "C" {
 #endif
 
 /*
- * The radio, once, for whoever needs it first: the network here or the
- * wireless cable's ESP-NOW (peer_espnow_esp32s3.c). Station and AP netifs,
- * RAM storage. Idempotent.
+ * Prepare/start the shared Wi-Fi driver. The default netifs and event loop
+ * are process-lifetime objects; radio_stop releases the driver but retains
+ * them so Online and ESP-NOW can take turns. Idempotent.
  */
 esp_err_t radio_init(void);
 
@@ -26,13 +26,20 @@ esp_err_t radio_init(void);
  * ESP-NOW can choose)? */
 bool radio_sta_connected(void);
 
-/*
- * Bring the network up: join the stored network if there is one, and raise
- * the setup hotspot if there is none, or if hotspot is true, or if joining
- * fails. Starts the setup page and /gblink. Idempotent; a second call can
- * only add the hotspot.
+/* Compatibility entry point for Online start. net_resume() is the reversible
+ * start operation; net_suspend() quiesces the Celio/HTTP/reconnect clients
+ * and stops the driver before another radio mode is allowed to start.
  */
 esp_err_t net_start(bool hotspot);
+
+/* Reversible Online ownership: stop/restore services without destroying the
+ * process-global netif or event-loop objects. Both calls are idempotent. */
+esp_err_t net_suspend(void);
+esp_err_t net_resume(bool hotspot);
+
+/* Stop/start the initialized Wi-Fi driver while retaining its IDF objects.
+ * Call radio_stop only after the active protocol client has relinquished it. */
+esp_err_t radio_stop(void);
 
 /* At boot: a network is stored, so come up without being asked (and /gblink
  * is there for a PC on the same WiFi). */

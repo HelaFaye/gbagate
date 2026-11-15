@@ -9,6 +9,7 @@ typedef struct { uint8_t peer_addr[6]; uint8_t lmk[16]; uint8_t channel; int ifi
 typedef void (*esp_now_recv_cb_t)(const esp_now_recv_info_t *info, const uint8_t *data, int len);
 typedef void (*esp_now_send_cb_t)(const uint8_t *mac, int status);
 static inline esp_err_t esp_now_init(void) { return ESP_OK; }
+static inline esp_err_t esp_now_deinit(void) { return ESP_OK; }
 static inline esp_err_t esp_now_register_recv_cb(esp_now_recv_cb_t cb) { (void)cb; return ESP_OK; }
 static inline esp_err_t esp_now_register_send_cb(esp_now_send_cb_t cb) { (void)cb; return ESP_OK; }
 static inline esp_err_t esp_now_add_peer(const esp_now_peer_info_t *p) { (void)p; return ESP_OK; }

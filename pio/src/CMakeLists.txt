@@ -145,6 +145,7 @@ else()
         ../../port/esp32s3/print_store_esp32s3.c
         ../../port/esp32s3/net_esp32s3.c
         ../../port/esp32s3/peer_espnow_esp32s3.c
+        ../../port/esp32s3/radio_mode_esp32s3.c
         ../../port/esp32s3/usb_gblink_esp32s3.c
         ../../port/esp32s3/gblink_hw_esp32s3.c
         ../../port/esp32s3/gblink_gbspi_esp32s3.c

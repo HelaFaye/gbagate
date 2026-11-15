@@ -124,6 +124,7 @@ static bool gblink_page_state(ui_gblink_t *g) {
 #if !defined(GBAGATE_QEMU)
 #include "celio.h"
 #include "net_esp32s3.h"
+#include "radio_mode_esp32s3.h"
 #endif
 static void online_gather(ui_online_t *o);
 static void online_retry(void);
@@ -135,9 +136,7 @@ static int  s_online_row;      /* the row the encoder sets: UI_ONLINE_ROW_*     
 #if !defined(GBAGATE_QEMU)
 #include "gbl_peer.h"
 /* The wireless link cable (port/esp32s3/peer_espnow_esp32s3.c,
- * port/gblink/peer_glue.cpp). */
-esp_err_t        wireless_cable_start(uint8_t mode, uint8_t variant);
-void             wireless_cable_stop(void);
+ * port/gblink/peer_glue.cpp). The radio coordinator owns its lifecycle. */
 bool             wireless_cable_peer_mac(uint8_t mac[6]);
 const gbl_peer_t *gblink_peer_state(void);
 #endif
@@ -1890,7 +1889,15 @@ static bool mode_enter_online(void *ctx, cg_game_t game, bool has_game) {
     s_celio_started = false;
 #if !defined(GBAGATE_QEMU)
     if (s_shell.caps & HW_CAP_WIFI) {
-        net_start(false);   /* the hotspot too, when no network is stored */
+        radio_mode_esp32s3_init();
+        radio_mode_result_t result =
+            radio_mode_esp32s3_select(RADIO_MODE_ONLINE);
+        if (result != RADIO_MODE_OK) {
+            ESP_LOGE(TAG, "Online radio start refused: %s",
+                     radio_mode_result_name(result));
+            s_online = false;
+            return false;
+        }
     }
 #endif
     return true;           /* the page says what is missing */
@@ -1900,8 +1907,13 @@ static void mode_exit_online(void *ctx) {
     (void)ctx;
     s_online = false;
 #if !defined(GBAGATE_QEMU)
-    if (s_celio_started) {
-        gblink_celio_stop();   /* sessionLeft, and the adapter cancelled */
+    if (s_shell.caps & HW_CAP_WIFI) {
+        radio_mode_result_t result =
+            radio_mode_esp32s3_select(RADIO_MODE_OFF);
+        if (result != RADIO_MODE_OK) {
+            ESP_LOGE(TAG, "Online radio release failed: %s",
+                     radio_mode_result_name(result));
+        }
     }
 #endif
     s_celio_started = false;
@@ -1950,14 +1962,27 @@ static bool mode_enter_wireless(void *ctx, cg_game_t game, bool has_game) {
 #else
     uint8_t mode, variant;
     air_link_mode((air_link_t)s_settings.air_link, &mode, &variant);
-    return wireless_cable_start(mode, variant) == ESP_OK;
+    radio_mode_esp32s3_set_wireless(mode, variant);
+    radio_mode_result_t result =
+        radio_mode_esp32s3_select(RADIO_MODE_WIRELESS);
+    if (result != RADIO_MODE_OK) {
+        ESP_LOGE(TAG, "Wireless radio start refused: %s",
+                 radio_mode_result_name(result));
+        return false;
+    }
+    return true;
 #endif
 }
 
 static void mode_exit_wireless(void *ctx) {
     (void)ctx;
 #if !defined(GBAGATE_QEMU)
-    wireless_cable_stop();
+    radio_mode_result_t result =
+        radio_mode_esp32s3_select(RADIO_MODE_OFF);
+    if (result != RADIO_MODE_OK) {
+        ESP_LOGE(TAG, "Wireless radio release failed: %s",
+                 radio_mode_result_name(result));
+    }
 #endif
 }
 

@@ -1,18 +1,16 @@
 # ESP32-S3 exclusive radio mode switching
 
-**Baseline:** `claude/loving-clarke-gkv23y` at `00225faf7eddf731010586898819a0d5255f118b`  
-**Scope:** lifecycle contract and host-tested state machine; no ESP-IDF radio calls are changed by this overlay.
+**Baseline:** `claude/loving-clarke-gkv23y` at `f1d8786233b8f49910027f411dffb80f7935cb84`
+**Scope:** ESP-IDF Online/ESP-NOW ownership integration. SDR capture remains unavailable until a selected backend is implemented and validated.
 
 ## Why this is needed
 
 The Online and Wireless features use the ESP32-S3's one integrated Wi-Fi radio. Switching modes does not require simultaneous operation or a second radio, but the present lifecycle is not reversible:
 
-- `net_esp32s3.c::radio_init()` has a one-way static `up` guard and starts the Wi-Fi driver. It does not expose a matching radio stop/start lifecycle.
-- `net_start()` starts the HTTP server, Celio WebSocket task, and network retry task. There is no suspend API.
-- `net_task()` can retry station association after the Online screen has exited.
-- `mode_exit_online()` stops the Celio session but leaves the network service and radio running.
-- `peer_espnow_start()` calls `esp_now_init()` and sets `s_up`; `wireless_cable_stop()` stops the protocol and clears the peer lock, but does not call `esp_now_deinit()` or relinquish the radio.
-- `mode_exit_wireless()` therefore does not leave a clean hand-off point for Online or SDR capture.
+- `net_esp32s3.c` now separates process-lifetime IDF initialization from reversible Wi-Fi driver start/stop.
+- `net_resume()` and `net_suspend()` retain the network/reconnect tasks and event handlers, but quiesce the Celio socket, stop `/gblink` HTTP service, and stop the Wi-Fi driver before yielding ownership.
+- `peer_espnow_start()` unwinds partial initialization; `wireless_cable_stop_checked()` waits for the peer worker, calls `esp_now_deinit()`, and stops the Wi-Fi driver.
+- `radio_mode_esp32s3.c` binds Online and Wireless callbacks to the existing portable coordinator; the UI task on core 0 is the only transition caller.
 
 Relevant source baseline: `port/esp32s3/net_esp32s3.c`, `port/esp32s3/net_esp32s3.h`, `port/esp32s3/peer_espnow_esp32s3.c`, `pio/src/gate_app.c`, and `pio/src/app_main.c`.
 
@@ -88,7 +86,20 @@ Do not move radio transition logic, DSP, capture-buffer processing, or file I/O 
 
 ## This increment and its limits
 
-This overlay adds only the portable ownership state machine and its host test. It does **not** modify `net_esp32s3.c`, `peer_espnow_esp32s3.c`, `gate_app.c`, or the ESP-SDR receiver. Therefore it does not yet enable live mode switching. That is intentional: the next firmware integration increment must add and test the Online/ESP-NOW stop/resume APIs, wire the coordinator into the mode enter/exit paths, and only then add the SDR capture client.
+The Online and Wireless clients are now connected to the ownership coordinator. Live Online/Wireless switching is implemented in firmware source, but remains **unverified on physical hardware** until the ESP-IDF builds and repeated transition tests are run on the target boards.
+
+There is intentionally no `RADIO_MODE_SDR_RX` callback yet. The repository still has no selected ESP-SDR backend whose exact S3 revision, ESP-IDF compatibility, capture memory ownership, and shutdown/restore behavior have been validated. `radio_mode_capture_begin()` therefore returns `RADIO_MODE_MISSING_CALLBACK`; it does not reconfigure the radio or pretend to capture.
+
+The coordinator remains on core 0. No GBA RFU, Multi-Play timing, or core-1 link-task code is changed. The existing ESP-NOW path remains a separate peer transport, not an AGB-015 PHY implementation.
+
+## Validation expected for this increment
+
+- `make run-radio_mode`: portable ownership coordinator regression suite.
+- `make lint`: syntax checks the new ESP32-S3 coordinator adapter and the existing QEMU/hardware source sets.
+- `tools/build_hw.sh` (or the project's equivalent) under the pinned ESP-IDF version: required to compile the ESP-IDF-only network and ESP-NOW lifecycle changes.
+- On hardware, repeatedly switch Online → Wireless → Online → OFF, including no credentials, failed association, active `/gblink`, Celio reconnect, and peer-worker timeout cases. Confirm Wi-Fi and ESP-NOW reinitialize cleanly after each cycle.
+
+A host syntax pass is not a substitute for the IDF build or a physical radio transition test.
 
 ## Host validation
 

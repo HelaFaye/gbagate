@@ -88,6 +88,10 @@ void gblink_net_on_receive(const uint8_t *data, size_t len);
  * USB, serial or bridge host are refused (Transport::claim). */
 void gblink_peer_start(uint8_t mode, uint8_t variant, uint32_t nonce);
 void gblink_peer_stop(void);
+/* Checked forms used by radio ownership: true only after the peer thread has
+ * applied the requested state, not merely after the request was queued. */
+bool gblink_peer_start_wait(uint8_t mode, uint8_t variant, uint32_t nonce);
+bool gblink_peer_stop_wait(void);
 /* A datagram from the peer (radio callback context is fine). src, if not
  * NULL, is the sender's 6-byte address; gblink_peer_radio_accepted() hears it
  * back once the cable has accepted a datagram from it. */
@@ -110,6 +114,7 @@ void gblink_peer_observe_status(uint16_t status);
  * carried out on the client's own thread and return once it has. */
 void gblink_celio_start(const char *session);
 void gblink_celio_stop(void);
+bool gblink_celio_stop_wait(void);
 /* A Multi-Play session (src/mp_online.h): `players` GBAs in all when
  * creating, `gbas` of them on this board's chain (doc/MULTIPLAY.md). */
 void gblink_celio_start_multi(const char *session, uint8_t players, uint8_t gbas);

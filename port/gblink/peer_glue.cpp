@@ -130,7 +130,7 @@ namespace
         }
     }
 
-    void request(bool run, uint8_t mode, uint8_t variant, uint32_t nonce)
+    bool request(bool run, uint8_t mode, uint8_t variant, uint32_t nonce)
     {
         if (!g_threadStarted.exchange(true))
         {
@@ -143,8 +143,12 @@ namespace
         irq_unlock(key);
         k_sem_give(&g_wake);
         // Bounded: the thread applies it on its next pass (5 ms at most).
-        for (int i = 0; i < 500 && static_cast<int32_t>(g_doneGen.load() - gen) < 0; i++)
+        /* celio_stop() may send sessionLeft through a transport write with a
+         * 2 s timeout. Give that bounded write time to finish before refusing
+         * an otherwise safe radio hand-off. */
+        for (int i = 0; i < 3000 && static_cast<int32_t>(g_doneGen.load() - gen) < 0; i++)
             k_sleep(K_MSEC(1));
+        return static_cast<int32_t>(g_doneGen.load() - gen) >= 0;
     }
 }
 
@@ -163,15 +167,25 @@ extern "C" void gblink_peer_radio_rx_from(const uint8_t* d, size_t n, const uint
     if (g_running && n <= GBL_PEER_MAX_DATAGRAM) post(EV_RADIO, d, n, src);
 }
 
+extern "C" bool gblink_peer_start_wait(uint8_t mode, uint8_t variant, uint32_t nonce)
+{
+    return request(true, mode, variant, nonce);
+}
+
 extern "C" void gblink_peer_start(uint8_t mode, uint8_t variant, uint32_t nonce)
 {
-    request(true, mode, variant, nonce);
+    (void)gblink_peer_start_wait(mode, variant, nonce);
+}
+
+extern "C" bool gblink_peer_stop_wait(void)
+{
+    if (!g_threadStarted) return true;
+    return request(false, 0, 0, 0);
 }
 
 extern "C" void gblink_peer_stop(void)
 {
-    if (!g_threadStarted) return;
-    request(false, 0, 0, 0);
+    (void)gblink_peer_stop_wait();
 }
 
 extern "C" const gbl_peer_t* gblink_peer_state(void) { return &g_peer; }
