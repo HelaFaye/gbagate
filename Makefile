@@ -63,6 +63,7 @@ DEPS_mponline  = mp_online.c mp_link.c mp_relay.c mp_bus.c
 DEPS_printer_mode = printer_mode.c gbprinter.c gbp_png.c
 DEPS_touchpad  = touch_pad.c ui_theme.c ui_font.c
 DEPS_mmo       = mmo_link.c mmo_net.c mmo_relay.c
+DEPS_radio_mode = radio_mode.c
 DEPS_applets   = applet.c app_modes.c ui_shell.c hw_caps.c chipgate.c chipdb.c \
                  ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c \
                  ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c mbagent.c gbprinter.c
@@ -76,7 +77,7 @@ DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_
 EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay mpbus mponline gbprinter printer_mode touchpad mmo
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay mpbus mponline gbprinter printer_mode touchpad mmo radio_mode
 
 .PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image mgba-shim mgba-emerald mmo-adapter
 all: $(addprefix run-,$(SUITES)) gblink agent-emu
