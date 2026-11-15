@@ -1136,3 +1136,20 @@ only (`GPL-3.0-only`); the full text is in [LICENSE](LICENSE).
 - pret's decompiled librfu and GB-Link-Switch-LDN (AGPL-3.0) are not part of
   gbagate: the tests fetch them into `build/` and nothing of them is
   committed or shipped.
+
+## AGB-015 OEM RF interoperability status
+
+The OEM Wireless Adapter RF investigation is **reopened as experimental work**.
+The existing GBA-facing RFU command/link implementation remains in place; the
+missing layer is the AGB-015 air interface. The AGB-015 uses an MC13190 AM/ASK
+radio with Manchester-coded baseband at 4–6 Mbit/s (5 Mbit/s typical), nominally
+at 2432 MHz. The RF packet framing, synchronization, CRC, TDMA timing, retries
+and channel behavior still require capture-based reverse engineering.
+
+The nRF24L01+ is not a suitable OEM RF backend: it is GFSK with a fixed packet
+engine, rather than the AGB-015's AM/ASK physical layer. Keep it, where useful,
+as an independent peer radio. ESP-NOW remains the software-radio fallback until
+interoperability with original AGB-015 hardware is demonstrated. See
+[`doc/RFU-RF.md`](doc/RFU-RF.md) for the measurement and implementation plan.
+
+No original-adapter interoperability is claimed at this stage.

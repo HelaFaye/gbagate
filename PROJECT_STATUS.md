@@ -1470,3 +1470,17 @@ reader with no I2C pins, or buttons on an expander that is not there, and a
 Supermini cannot claim infrared or a reader at all because there are no pins
 left for either. Every combination of the flags still produces a valid map,
 which is checked across four builds.
+
+## Reopened: OEM Wireless Adapter RF interoperability (experimental)
+
+The GBA-facing RFU command/link protocol is an existing implementation. The
+unimplemented part is the AGB-015 air interface: MC13190 AM/ASK at 2.4 GHz,
+Manchester-coded at 4–6 Mbit/s (5 Mbit/s typical), nominally 2432 MHz. The
+nRF24 is not an OEM RF solution and remains only an optional independent peer
+radio. ESP-NOW remains the software-radio fallback while OEM RF work proceeds.
+
+The over-the-air framing, synchronization, CRC, TDMA schedule, retransmissions
+and channel behavior must be established from original-adapter captures. No
+OEM compatibility is claimed until a gbagate unit can discover, join and
+exchange game data with an original AGB-015. See `doc/RFU-RF.md` for the staged
+plan and acceptance criteria.
