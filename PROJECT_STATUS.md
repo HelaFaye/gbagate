@@ -32,9 +32,14 @@ the parent before it has sent any 0xB9A0 (gbagate's P3). The fix, with a host
 test in upstream's `tests/host`, is in `backport/GBLink-Firmware-3.0/`, was
 audited, and is merged into HelaFaye/GBLink-Firmware's copy of the upstream
 branch (pull request 1; the fork's CI built the firmware with Zephyr and ran the
-host tests, plain and sanitized). Tested against a modelled GBA only: not yet
-against Emerald in mGBA (needs the ROM), not on an RP2040. The pull request to
-GB-Link waits on that hardware test and on someone with access opening it from
+host tests, plain and sanitized). Against a real game too: Emerald on mGBA,
+on the simulated cable to the 3.0 simulator, StartHandshake and ConnectLink
+back to back -- with the fix the link comes up after eight 0xB9A0 rounds and
+the game counts two players with no link error; without it, 0x8FFF goes out
+first and the game never counts a second player; without it but with the
+hosts' 150 ms grace, it links (`test/mgba/early_connect.py`, on the 3.0
+branch). Not yet on an RP2040. The pull request to GB-Link waits on that
+hardware test and on someone with access opening it from
 `HelaFaye:fix/early-connect-3.0`.
 
 ### Shared overworld (NovaBoot)
@@ -63,8 +68,6 @@ moves only once our QEMU tests pass on it.
 
 ### Waiting on someone
 
-- **The Emerald ROM**, for the mGBA runs (shared overworld, link tests against
-  3.0, the custom-map experiment).
 - **pkhex-gba-multiboot**: HelaFaye/pkhex-gba-multiboot is upstream PKHeX's
   master with no gbagate work; where the earlier work is, and what finishing it
   means, is still to be said.

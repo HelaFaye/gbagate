@@ -31,7 +31,10 @@ bridge, Celio-Client's cable page and gen3-poke-multiplayer stay clear of
 the window with 150-350 ms delays; a host without one hangs the link. Tested
 first in HelaFaye/GBLink-Firmware (pull request 1, into the fork's copy of
 the upstream branch, whose fork-only workflow builds the firmware with Zephyr
-and runs the host tests); not yet run on RP2040 hardware.
+and runs the host tests). Emerald on mGBA, on the simulated cable to
+gbagate's 3.0 simulator with ConnectLink straight after StartHandshake: links
+with the fix, never counts a second player without it, links without it given
+the hosts' 150 ms grace. Not yet run on RP2040 hardware.
 2.2.7's wait-loop change is left out: with ConnectLink held for eight rounds, the 50 ms poll can no longer miss the window, and the test
 passes without it.
 
