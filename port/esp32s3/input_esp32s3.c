@@ -19,6 +19,7 @@
  */
 
 #include "board.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
@@ -116,8 +117,16 @@ int input_hw_set_mode(int mode_in) {
 
 int input_hw_start(int mode_in) {
     int m = input_hw_set_mode(mode_in);
-    if (m >= 0 && !s_task) {
-        xTaskCreatePinnedToCore(input_task, "input", 3072, NULL, 5, &s_task, 0);
+    if (m >= 0 && !s_task &&
+        xTaskCreatePinnedToCore(input_task, "input", 3072, NULL, 5, &s_task, 0) != pdPASS) {
+        /* Not silently: with no input task nothing can be pressed, and the
+         * screen looks exactly as if it could. */
+        s_task = NULL;
+        ESP_LOGE(TAG, "no memory for the input task (%u bytes free, %u in one block): "
+                 "nothing can be pressed",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        return -1;
     }
     return m;
 }

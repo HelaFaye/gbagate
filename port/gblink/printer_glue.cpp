@@ -21,9 +21,21 @@ extern "C" {
 #include "gblink_port.h"
 }
 
+#if defined(ESP_PLATFORM)
+#include "board.h"
+#endif
+
 namespace
 {
+#if defined(BOARD_HAS_GB_5V) && !BOARD_HAS_GB_5V
+    // No 5 V shifter, so the GB Printer is never offered (board.h): 16 KB of
+    // internal RAM for a ring nothing fills is what kept the touch carrier's
+    // bridge image from having an input task. A power of two, as below.
+    constexpr uint32_t RING = 64;
+#else
     constexpr uint32_t RING = 16384;            // the firmware's own buffer's size
+#endif
+    static_assert((RING & (RING - 1)) == 0, "the indexes wrap at 2^32");
     uint8_t g_ring[RING];
     std::atomic<uint32_t> g_head{0};            // written by the sink
     std::atomic<uint32_t> g_tail{0};            // by the reader

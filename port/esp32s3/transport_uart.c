@@ -40,7 +40,12 @@ static const char *TAG = "uart_tp";
 #define TP_TX_PIN    GBAGATE_UART_TX_GPIO
 #define TP_RX_PIN    GBAGATE_UART_RX_GPIO
 #define TP_BAUD      921600
-#define TP_BUF       2048
+/* RX keeps 2 KB: the ui task outranks the reader and can hold it off for a
+ * redraw (~1 KB arrives every 11 ms at this rate). TX carries a few words at
+ * a time, and internal RAM is short on the bridge image: its input task did
+ * not fit with 2 KB here. */
+#define TP_RX_BUF    2048
+#define TP_TX_BUF    512
 
 static link_bridge_t *s_bridge;
 
@@ -95,7 +100,7 @@ esp_err_t transport_uart_start(link_bridge_t *bridge) {
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    esp_err_t err = uart_driver_install(TP_UART, TP_BUF, TP_BUF, 0, NULL, 0);
+    esp_err_t err = uart_driver_install(TP_UART, TP_RX_BUF, TP_TX_BUF, 0, NULL, 0);
     if (err != ESP_OK) {
         return err;
     }
