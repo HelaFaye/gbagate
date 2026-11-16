@@ -207,7 +207,11 @@ for i in $(seq 1 300); do
 
     QEMU_CHILD="$(pgrep -P "$QEMU_PID" -f 'qemu-system-xtensa' | head -1)"
 
-    if grep -q 'shell started with caps 0x00000121' "$OUT/console.log" 2>/dev/null &&
+    # The shell's caps (src/hw_caps.h) must include 0x121; this image also
+    # sets the stand-in bit (0x2000: the bridge stands in for the network),
+    # so it says 0x00002121 and the exact 0x00000121 never matched.
+    CAPS="$(sed -n 's/.*shell started with caps 0x\([0-9a-fA-F]*\).*/\1/p' "$OUT/console.log" 2>/dev/null | tail -1)"
+    if [ -n "$CAPS" ] && [ $(( 0x$CAPS & 0x121 )) -eq $(( 0x121 )) ] &&
        [ -n "$QEMU_CHILD" ] &&
        port_listening "$LINK_PORT"; then
         BOOT_READY=1
