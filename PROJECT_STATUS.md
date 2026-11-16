@@ -38,9 +38,17 @@ back to back -- with the fix the link comes up after eight 0xB9A0 rounds and
 the game counts two players with no link error; without it, 0x8FFF goes out
 first and the game never counts a second player; without it but with the
 hosts' 150 ms grace, it links (`test/mgba/early_connect.py`, on the 3.0
-branch). Not yet on an RP2040. The pull request to GB-Link waits on that
-hardware test and on someone with access opening it from
-`HelaFaye:fix/early-connect-3.0`.
+branch). And the firmware itself on an emulated RP2040 (16 November): the
+Zephyr build on rp2040js, PIO clocked in step with the cores, its link pins
+wired to Emerald in mGBA and the host on USB CDC. Upstream's 0ffbcd5 with
+ConnectLink at once sends 0x8FFF on the third transfer and Emerald never links
+(13.7 s emulated); with the 150 ms grace it links (9 rounds of 0xB9A0); the
+fix with ConnectLink at once links after exactly 8 rounds, LinkConnected
+151 ms after ConnectLink, two players, no link error. The harness (rp2040js
+with SysTick, ROSC and PIO-clock fixups) is not in the tree: it needs the ROM.
+A physical RP2040 board is still untried. The pull request to GB-Link is
+written and waits on someone opening it from `HelaFaye:fix/early-connect-3.0`
+(this project's sessions cannot reach GB-Link's repository).
 
 ### Shared overworld (NovaBoot)
 
