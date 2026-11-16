@@ -342,6 +342,7 @@ jobs:
           path: |
             ${{ runner.temp }}/gbagate-accurate-mgba/**
             ${{ runner.temp }}/gbagate-accurate-mgba-state/**
+            ${{ runner.temp }}/mmo-adapter/**
             build/hw-gate-carrier-touch-mgba/flash-qemu.bin
             build/mgba-headless-build/CMakeCache.txt
           if-no-files-found: ignore

@@ -1833,9 +1833,11 @@ static void online_retry(void) {
 
 static bool mode_enter_novaboot(void *ctx, cg_game_t game, bool has_game) {
     (void)ctx; (void)game; (void)has_game;
+    ESP_LOGI(TAG, "novaboot: entry requested");
     if (!s_mmo_lock) {
         s_mmo_lock = xSemaphoreCreateMutex();
         if (!s_mmo_lock) {
+            ESP_LOGE(TAG, "novaboot: failed to allocate relay mutex");
             return false;
         }
     }

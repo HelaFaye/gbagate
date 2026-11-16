@@ -92,13 +92,31 @@ class Adapter:
         time.sleep(gap)
 
     def start_novaboot(self):
-        """Link, then the chooser's NovaBoot, by touch. The menu opens on
-        Link (row 0); the chooser lists Wireless, Online, NovaBoot here."""
-        self.tap('A')
-        self.tap('DOWN')
-        self.tap('DOWN')
-        self.tap('A')
-        return self.wait_log("novaboot: the agent's words to the server", 10)
+        """Link, then the chooser's NovaBoot, by touch.
+
+        Save each UI state so a failed navigation can be distinguished from a
+        rejected mode handler. The images and console tails are uploaded by CI.
+        """
+        self.shot(os.path.join(self.out, 'novaboot-00-before.ppm'))
+        keys = ('A', 'DOWN', 'DOWN', 'A')
+        labels = ('open-link', 'move-once', 'move-twice', 'confirm-novaboot')
+        for i, key in enumerate(keys, 1):
+            self.tap(key)
+            self.shot(os.path.join(self.out, 'novaboot-%02d-%s.ppm' % (i, labels[i - 1])))
+
+        ok = self.wait_log("novaboot: the agent's words to the server", 10)
+        if not ok:
+            print('board %d: NovaBoot entry was not observed; console tail:' % self.i)
+            print('\n'.join('    ' + line for line in self.log().splitlines()[-100:]))
+            qemu_log = os.path.join(self.out, 'qemu.log')
+            try:
+                with open(qemu_log, errors='replace') as f:
+                    tail = f.read().splitlines()[-40:]
+                print('board %d: QEMU log tail:' % self.i)
+                print('\n'.join('    ' + line for line in tail))
+            except OSError:
+                print('board %d: QEMU log unavailable' % self.i)
+        return ok
 
     def connect_link(self, timeout=30):
         """The bridge: link_proto over UART1, the host side of the cable."""
