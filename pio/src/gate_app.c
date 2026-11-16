@@ -222,6 +222,8 @@ static chipgate_t  s_gate;
  */
 void gate_enter_mode(app_mode_t mode, cg_game_t game);
 void gate_note_input_mode(int actual);
+/* The input mode the hardware was last brought up in (0xFF: none yet). */
+static uint8_t s_applied_input = 0xFF;
 int  input_hw_set_mode(int mode);
 void gate_apply_display_settings(void);
 void gate_shell_start(uint32_t caps);
@@ -802,13 +804,15 @@ static void render_settings(const ui_event_t *e, bool have_event)
     if (uiset_dirty(&s_setedit)) {
         settings_touch();
         uiset_clear_dirty(&s_setedit);
-        static uint8_t applied_input = 0xFF;
-        if (applied_input == 0xFF) {
-            applied_input = s_settings.input_mode;
-        }
-        if (s_settings.input_mode != applied_input) {
-            gate_note_input_mode(input_hw_set_mode((int)s_settings.input_mode));
-            applied_input = s_settings.input_mode;
+        /* Against the mode the hardware has (s_applied_input), not the
+         * setting as it stood when this first ran: by then the edit had
+         * already changed it, and the first change was never applied. */
+        if (s_settings.input_mode != s_applied_input) {
+            const int got = input_hw_set_mode((int)s_settings.input_mode);
+            gate_note_input_mode(got);
+            if (got < 0) {
+                s_applied_input = s_settings.input_mode;   /* not again each redraw */
+            }
         }
         /* Apply immediately: an offset you cannot see change is one you cannot
          * calibrate by eye, which is the only way it gets calibrated. */
@@ -1653,9 +1657,13 @@ int gate_input_mode(void) { return (int)s_settings.input_mode; }
  * what was asked for, and the footers name the right keys.
  */
 void gate_note_input_mode(int actual) {
-    if (actual >= 0 && actual != (int)s_settings.input_mode) {
+    if (actual < 0) {
+        return;
+    }
+    if (actual != (int)s_settings.input_mode) {
         s_settings.input_mode = (uint8_t)actual;
     }
+    s_applied_input = (uint8_t)actual;
 }
 
 /* Settings changed the input mode: apply it now. Weak, for the QEMU image,
