@@ -311,7 +311,19 @@ jobs:
         run: |
           set -euo pipefail
           GBAGATE_HYBRID_FLASH="$GITHUB_WORKSPACE/build/hw-gate-carrier-touch-mgba/flash-qemu.bin" \
-            python3 -I qemu/test_mmo_adapter.py "$RUNNER_TEMP/mmo-adapter"
+            python3 -I qemu/test_mmo_adapter.py build/mmo-adapter
+
+      - name: upload MMO adapter diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: mmo-adapter-diagnostics-${{ github.run_id }}
+          path: |
+            build/mmo-adapter/board*/console.log
+            build/mmo-adapter/board*/qemu.log
+            build/mmo-adapter/board*/novaboot-*.ppm
+          if-no-files-found: error
+          retention-days: 14
 
       - name: run accurate carrier-touch mGBA regression
         timeout-minutes: 10
@@ -342,7 +354,6 @@ jobs:
           path: |
             ${{ runner.temp }}/gbagate-accurate-mgba/**
             ${{ runner.temp }}/gbagate-accurate-mgba-state/**
-            ${{ runner.temp }}/mmo-adapter/**
             build/hw-gate-carrier-touch-mgba/flash-qemu.bin
             build/mgba-headless-build/CMakeCache.txt
           if-no-files-found: ignore
