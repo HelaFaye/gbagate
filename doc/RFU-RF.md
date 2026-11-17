@@ -1,6 +1,6 @@
 # AGB-015 RF interoperability
 
-**Status:** experimental investigation; no OEM RF interoperability is claimed yet.
+**Status:** experimental investigation; no OEM RF interoperability is claimed yet. RF-0 capture tooling and the RF-1 baseband exist and pass synthetic tests (see "Status, 17 November 2026").
 
 This work adds a real AGB-015-compatible radio path to gbagate's existing
 Wireless Adapter (GB-Link mode `0x07`) implementation. It does not replace the
@@ -186,6 +186,50 @@ mixed-device interoperability tests.
 - Bridge decoded radio frames into the existing gbagate RFU core.
 - Test all combinations: gbagate↔gbagate, gbagate↔original AGB-015, and
   original↔original as a control. Use retail GBA games for the end-to-end test.
+
+## Status, 17 November 2026: RF-0 tooling and RF-1 baseband, on synthetic signals
+
+Nothing below has seen a real adapter. It is what can be built and checked
+without one, ready for the first captures.
+
+**RF-0: `tools/rfu_capture.py`.** Drives an ESP32-S3 running ESPARGOS/esp-sdr
+(a spare board, not gbagate) over its serial protocol: `SYNC` (discarding
+what a reset left), `INFO`, `LIMITS?`, `VERSION?`, `FREQ`, `BANDWIDTH`, manual
+gain sweeps or AGC, `CAP20` snapshots, `RELEASE`. Every snapshot is saved
+untouched (`<label>-<n>-g<gain>.cap20`) beside a JSON record: the state label,
+board, firmware INFO and VERSION, frequency, bandwidth, gain, rate code and
+MS/s, sample count, the DATA line's CRC and capture time, whether the CRC
+matched (a mismatch is kept and marked, and the run exits 1), and wall-clock
+time. Receive only. For the first session:
+
+    tools/rfu_capture.py --port /dev/ttyACM0 --label idle --gain 10 20 30 40 --count 3
+    tools/rfu_capture.py --port /dev/ttyACM0 --label discovery --gain 20 --count 50
+
+**RF-1: `src/rfu_rf.c`** (portable C, no allocation) and
+`build/rfu_rf_analyze` (`make rfu-rf-analyze`) over a saved snapshot: CAP20
+unpacking with Q's sign restored; I^2 + Q^2 with clipped samples counted; a
+box filter a quarter-bit long; bursts against the noise floor, with AM lows
+bridged; per burst, the two AM levels and the depth, a slice that follows a
+fading carrier (steady lead-in and tail excluded), edges placed where the
+envelope crosses it, the half-bit clock fitted to the edges within 4-6 Mbit/s,
+and Manchester bits with the cell pairing chosen by fewest violations. IEEE
+or Thomas polarity. A TX side makes the burst envelope (lead, data, tail,
+depth, rise time) for tests and, later, replay.
+
+`test/test_rfu_rf.c` (in `make`) runs the whole chain through CAP20 packing:
+at 80 and 40 MS/s, 4, 5 and 6 Mbit/s, depths 50/60/88%, both polarities, a
+carrier offset of up to 200 kHz, noise, a carrier fading to half its
+amplitude across the burst, a transmitter 3% fast, a weak 60-LSB carrier and
+an overdriven one (clipping reported): every case recovers the rate within
+1%, the depth within 0.1, and all 256 bits. Noise alone decodes nothing. At
+16 MS/s (1.6 samples a half-bit) the decoder says it cannot decode cleanly
+rather than giving wrong bits, as the sampling table above predicts.
+`make rfu-capture-test` puts a stand-in ESP-SDR on a pty and checks the
+capture script's protocol, records and CRC handling, then decodes the saved
+snapshot with the analyzer.
+
+What the bits mean -- preamble, sync word, CRC, the TDMA schedule -- waits
+on captures of real adapters (RF-0), as before.
 
 ## Acceptance criteria
 

@@ -64,6 +64,7 @@ DEPS_printer_mode = printer_mode.c gbprinter.c gbp_png.c
 DEPS_touchpad  = touch_pad.c ui_theme.c ui_font.c
 DEPS_mmo       = mmo_link.c mmo_net.c mmo_relay.c
 DEPS_radio_mode = radio_mode.c
+DEPS_rfu_rf    = rfu_rf.c
 DEPS_applets   = applet.c app_modes.c ui_shell.c hw_caps.c chipgate.c chipdb.c \
                  ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c \
                  ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c mbagent.c gbprinter.c
@@ -77,10 +78,10 @@ DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_
 EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay mpbus mponline gbprinter printer_mode touchpad mmo radio_mode
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay mpbus mponline gbprinter printer_mode touchpad mmo radio_mode rfu_rf
 
 .PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image mgba-shim mgba-emerald mmo-adapter
-all: $(addprefix run-,$(SUITES)) gblink agent-emu
+all: $(addprefix run-,$(SUITES)) gblink agent-emu rfu-capture-test
 	@./qemu/lint.sh
 
 # The memory agent's compiled image (rom/agent.mb, what the board sends) on
@@ -330,3 +331,11 @@ qemu-display:
 qemu-clean:
 	@rm -rf build/qemu-* build/rom-test
 	@$(MAKE) -C rom clean 2>/dev/null || true
+
+# The AGB-015 RF work (doc/RFU-RF.md): the snapshot analyzer, and the
+# capture script and analyzer against a stand-in ESP-SDR.
+rfu-rf-analyze: | $(BUILD)
+	@$(CC) $(CFLAGS) -o $(BUILD)/rfu_rf_analyze tools/rfu_rf_analyze.c src/rfu_rf.c -lm
+rfu-capture-test: rfu-rf-analyze
+	@python3 test/test_rfu_capture.py $(BUILD)/rfu_rf_analyze
+.PHONY: rfu-rf-analyze rfu-capture-test
