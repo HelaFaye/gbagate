@@ -26,7 +26,7 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FORK_URL="${FORK_URL:-https://github.com/HelaFaye/qemu_esp32}"
-FORK_REV="${FORK_REV:-48c77fc75c62d3e1f842c70f8fc34ba284e3143c}"   # branch claude/determined-cray-ubv8bw
+FORK_REV="${FORK_REV:-662e627420cdd131e717d2018eaf184c3dcebc2f}"   # branch claude/determined-cray-ubv8bw
 FORK="$ROOT/build/qemu_esp32"
 QDIR="$ROOT/build/esp-qemu"
 QEMU="$QDIR/build/qemu-system-xtensa"
