@@ -26,7 +26,7 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FORK_URL="${FORK_URL:-https://github.com/HelaFaye/qemu_esp32}"
-FORK_REV="${FORK_REV:-21d8244667a0242d6ab10e80148a9c510c4ff747}"   # branch claude/determined-cray-ubv8bw
+FORK_REV="${FORK_REV:-48c77fc75c62d3e1f842c70f8fc34ba284e3143c}"   # branch claude/determined-cray-ubv8bw
 FORK="$ROOT/build/qemu_esp32"
 QDIR="$ROOT/build/esp-qemu"
 QEMU="$QDIR/build/qemu-system-xtensa"
@@ -47,12 +47,20 @@ build() {
     # an earlier commit would keep that commit's configure options (it was
     # how screendump went missing: --enable-pixman came later). A new
     # commit gets a fresh build directory.
-    if [ "$(cat "$QDIR/.fork-rev" 2>/dev/null)" != "$FORK_REV" ]; then
+    # The marker lives in build/, which QEMU's .gitignore covers: since
+    # 48c77fc, qemu_esp32's build.sh refuses a workspace with untracked files,
+    # and $QDIR/.fork-rev (where this kept it) is one. Moved, not lost: a
+    # workspace from before keeps its build.
+    if [ -f "$QDIR/.fork-rev" ]; then
+        mkdir -p "$QDIR/build"
+        mv -f "$QDIR/.fork-rev" "$QDIR/build/.fork-rev"
+    fi
+    if [ "$(cat "$QDIR/build/.fork-rev" 2>/dev/null)" != "$FORK_REV" ]; then
         rm -rf "$QDIR/build"
     fi
     say "Espressif QEMU with its patches, in $QDIR"
     sh "$FORK/patches/espressif-qemu/build.sh" "$QDIR"
-    echo "$FORK_REV" > "$QDIR/.fork-rev"
+    echo "$FORK_REV" > "$QDIR/build/.fork-rev"
     "$QEMU" -machine help | grep -q esp32s3 || die "no esp32s3 machine in $QEMU"
     say "built: $QEMU"
 }
