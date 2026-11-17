@@ -56,6 +56,8 @@ typedef enum {
     APPLET_IN_MENU,       /* sort, or the applet's own menu (Start)        */
 } applet_input_t;
 
+#define APPLET_FILE_NAME 48   /* a name in file_list(), with its NUL */
+
 typedef struct {
     uint32_t    now_ms;
     uint32_t    caps;       /* hw_caps of this board                        */
@@ -109,11 +111,31 @@ typedef struct {
     const char *(*agent_start)(void);
     mba_client_t *(*agent)(void);
     void (*agent_stop)(void);
+
+    /*
+     * Files on the board's microSD card, by path from its root ('/'
+     * separated, as "saves/BPEE-001.sav"). NULL when the image has no card.
+     * Read and written in pieces, so an applet needs no buffer the size of
+     * the file.
+     *   file_size   bytes, or -1 if there is no such file
+     *   file_read   up to n bytes from offset into buf; how many, -1 on error
+     *   file_write  n bytes at offset; offset 0 creates the file afresh
+     *               (and its directory), later offsets extend it
+     *   file_list   the names (not paths) in dir ending in suffix, at most
+     *               max of them, sorted; how many
+     */
+    long   (*file_size)(const char *path);
+    long   (*file_read)(const char *path, uint32_t offset, void *buf, size_t n);
+    bool   (*file_write)(const char *path, uint32_t offset, const void *buf, size_t n);
+    size_t (*file_list)(const char *dir, const char *suffix, char names[][APPLET_FILE_NAME], size_t max);
 } applet_env_t;
 
 typedef struct applet {
     const char *name;         /* menu label and page title                  */
     uint32_t    requires;     /* hw_caps bits, all needed to be listed      */
+    /* A file on the card the applet needs, or NULL: without it the applet
+     * is not in the menu at all (an add-on its user puts on the card). */
+    const char *needs_file;
     const char *absent_hint;  /* why it is hidden, for Diagnostics          */
     bool        needs_game;   /* ask which game first, like Battle Chip     */
     /*

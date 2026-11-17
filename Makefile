@@ -65,11 +65,13 @@ DEPS_touchpad  = touch_pad.c ui_theme.c ui_font.c
 DEPS_mmo       = mmo_link.c mmo_net.c mmo_relay.c
 DEPS_radio_mode = radio_mode.c
 DEPS_rfu_rf    = rfu_rf.c
+DEPS_save_tool = $(DEPS_applets)
 DEPS_applets   = applet.c app_modes.c ui_shell.c hw_caps.c chipgate.c chipdb.c \
                  ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c \
                  ir_cdz.c gbl_peer.c link_bridge.c link_proto.c link_session.c mbagent.c gbprinter.c
 # The example applets live outside src/, like any applet would.
 EXTRA_applets  = -Iapplets $(wildcard applets/*.c)
+EXTRA_save_tool = -Iapplets $(wildcard applets/*.c)
 DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_list.c chipdb.c \
                  ui_shell.c hw_caps.c chipgate.c ir_cdz.c gbl_peer.c link_bridge.c \
                  link_proto.c link_session.c ui_settings.c settings.c ui_input.c \
@@ -78,7 +80,7 @@ DEPS_screens   = ui_screens.c ui_theme.c ui_render.c ui_font.c ui_chipview.c ui_
 EXTRA_screens  = -Iapplets $(wildcard applets/*.c)
 
 SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
-          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay mpbus mponline gbprinter printer_mode touchpad mmo radio_mode rfu_rf
+          render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay mpbus mponline gbprinter printer_mode touchpad mmo radio_mode rfu_rf save_tool
 
 .PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image mgba-shim mgba-emerald mmo-adapter
 all: $(addprefix run-,$(SUITES)) gblink agent-emu rfu-capture-test
@@ -118,6 +120,8 @@ mgba-emerald: mgba-shim
 	@python3 -I test/mgba/link4_online.py "$(EMERALD_ROM)" $(BUILD)/emerald || [ $$? -eq 77 ]
 	@python3 -I test/mgba/overworld_sync.py "$(EMERALD_ROM)" $(BUILD)/emerald
 	@python3 -I test/mgba/crowd_capacity.py "$(EMERALD_ROM)" $(BUILD)/emerald
+	@$(MAKE) -s -C rom savetool
+	@python3 -I test/mgba/savetool_emerald.py "$(EMERALD_ROM)" rom/savetool.bin
 
 # The shared overworld through two emulated adapters: the hybrid touch
 # carrier image on qemu_esp32 (./qemu/accurate.sh build, then the hybrid

@@ -16,6 +16,9 @@
 
 #include <stdarg.h>
 
+/* The library's build flags first: struct mCore has fields only under some
+ * (USE_DEBUGGERS), and without them every member after those is misplaced. */
+#include <mgba/flags.h>
 #include <mgba/core/core.h>
 #include <mgba/core/log.h>
 #include <mgba/core/config.h>
@@ -76,6 +79,21 @@ void t_screen(uint8_t *rgb) {
 }
 
 size_t t_state_size(void) { return g_core->stateSize(g_core); }
+
+/* The cartridge's save memory (SRAM, flash, EEPROM) as mGBA holds it: up
+ * to cap bytes into out; returns its size. Never a file: t_open loads no save. */
+size_t t_savedata_get(uint8_t *out, size_t cap) {
+    void *p = NULL;
+    const size_t n = g_core->savedataClone(g_core, &p);
+    if (p && out) memcpy(out, p, n < cap ? n : cap);
+    free(p);
+    return n;
+}
+
+/* Replace it (not written back to any file). */
+int t_savedata_put(const uint8_t *in, size_t n) {
+    return g_core->savedataRestore(g_core, in, n, false) ? 0 : -1;
+}
 int t_save_state(void *buf) { return g_core->saveState(g_core, buf) ? 0 : -1; }
 int t_load_state(const void *buf) { return g_core->loadState(g_core, buf) ? 0 : -1; }
 

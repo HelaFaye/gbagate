@@ -139,6 +139,15 @@ def make_card(out):
         f.truncate(32 << 20)
     subprocess.run(['mformat', '-i', img, '::'], check=True)       # FAT16 at this size
     subprocess.run(['mcopy', '-i', img, os.path.join(ROOT, 'rom/tester.gba'), '::TESTER.GBA'], check=True)
+    # GBAGATE_CARD_ADD="host/file:dir/name,...": more files, as an add-on
+    # applet's (savetool/savetool.bin)
+    for item in filter(None, os.environ.get('GBAGATE_CARD_ADD', '').split(',')):
+        src, dst = item.split(':', 1)
+        parts = dst.split('/')[:-1]
+        for k in range(len(parts)):
+            subprocess.run(['mmd', '-D', 's', '-i', img, '::' + '/'.join(parts[:k + 1])], check=False,
+                           stderr=subprocess.DEVNULL)
+        subprocess.run(['mcopy', '-i', img, src, '::' + dst], check=True)
     return img
 
 

@@ -26,7 +26,7 @@ static void check(const char *what, long got, long want) {
     }
 }
 
-extern const applet_t applet_gba_memory;
+extern const applet_t applet_gba_memory, applet_save_tool;
 extern const applet_t applet_hello, applet_test_pattern, applet_chip_dice,
                       applet_battle_chip;
 extern uint16_t battle_chip_row_slot(uint16_t row);
@@ -96,13 +96,14 @@ static uint32_t counting_random(void) { return g_seq++ * 2654435761u; }
 static void test_registry(void) {
     printf("registry\n");
     /* applets/applets.def: battle_chip, test_pattern, chip_dice,
-     * gba_memory; hello is commented out. */
-    check("four listed", applet_count(), 4);
+     * gba_memory, save_tool; hello is commented out. */
+    check("five listed", applet_count(), 5);
     check("Battle Chip first", applet_at(0) == &applet_battle_chip, 1);
     check("then Test Pattern", applet_at(1) == &applet_test_pattern, 1);
     check("then Chip Dice", applet_at(2) == &applet_chip_dice, 1);
     check("then GBA Memory", applet_at(3) == &applet_gba_memory, 1);
-    check("past the end", applet_at(4) == NULL, 1);
+    check("then Save Tool", applet_at(4) == &applet_save_tool, 1);
+    check("past the end", applet_at(5) == NULL, 1);
     check("Battle Chip is valid", applet_valid(&applet_battle_chip), 1);
 
     check("examples are valid", applet_valid(&applet_hello) &&
@@ -149,7 +150,7 @@ static void test_env(void) {
 static void test_handlers(void) {
     printf("handlers\n");
     app_mode_handler_t h[APPLET_MAX + 2];
-    check("one per applet", applet_handlers(h, APPLET_MAX + 2), 4);
+    check("one per applet", applet_handlers(h, APPLET_MAX + 2), 5);
     check("modes from APP_MODE_APPLET_FIRST", h[0].mode, APP_MODE_APPLET_FIRST);
     check("in order", h[2].mode, APP_MODE_APPLET_FIRST + 2);
     check("ctx is the applet", h[2].ctx == &applet_chip_dice, 1);
@@ -175,13 +176,15 @@ typedef struct {
 static void host_init(host_t *t, uint32_t caps) {
     memset(t, 0, sizeof *t);
     shell_init(&t->shell, caps);
-    applet_add_to_shell(&t->shell);
-    size_t n = applet_handlers(t->h, APPLET_MAX);
     t->env.caps    = caps;
     t->env.hint    = "click: next";
     t->env.open_db = open_db;
     t->env.random  = counting_random;
+    /* bound first, as gate_app.c does: the menu asks it about add-ons'
+     * files, and the last test's host is gone */
     applet_bind_env(&t->env);
+    applet_add_to_shell(&t->shell);
+    size_t n = applet_handlers(t->h, APPLET_MAX);
     app_dispatch_init(&t->d, t->h, n, caps, NULL);
 }
 

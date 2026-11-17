@@ -100,6 +100,10 @@ applet_env_t *applet_env(void) { return s_env; }
 void applet_add_to_shell(ui_shell_t *s) {
     for (uint8_t i = 0; i < applet_count(); i++) {
         const applet_t *a = applet_at(i);
+        /* an add-on whose file is not on the card is not in the menu */
+        if (a->needs_file && !(s_env->file_size && s_env->file_size(a->needs_file) >= 0)) {
+            continue;
+        }
         shell_add_entry(s, (app_mode_t)(APP_MODE_APPLET_FIRST + i), a->name,
                         a->requires, a->absent_hint, a->needs_game);
     }

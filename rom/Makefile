@@ -160,3 +160,16 @@ clean:
 	rm -f agent.o agent.elf agent.map
 	rm -f $(OBJS) crt0_mb.o tester.elf tester_mb.elf tester.gba tester.mb \
 	      tester.gba.bak tester.mb.bak tester.map tester_mb.map
+
+# The Save Tool blob (doc/SAVETOOL.md): Thumb, run from EWRAM at SVT_BASE.
+SVT_CFLAGS := -mcpu=arm7tdmi -mthumb -mthumb-interwork -Os -ffreestanding -fno-builtin -fno-jump-tables \
+              -std=c11 -Wall -Wextra -I.
+savetool: savetool.bin
+savetool_head.o savetool.o: %.o: %.c savetool.h
+	$(CC) $(SVT_CFLAGS) -c $< -o $@
+savetool.elf: savetool_head.o savetool.o savetool.ld
+	$(CC) $(SVT_CFLAGS) -nostdlib -nostartfiles -T savetool.ld -Wl,--gc-sections \
+	    savetool_head.o savetool.o -o $@
+savetool.bin: savetool.elf
+	$(OBJCOPY) -O binary $< $@
+.PHONY: savetool

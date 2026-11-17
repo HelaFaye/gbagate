@@ -11,6 +11,10 @@
  */
 
 #include <string.h>
+#include <dirent.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <sys/stat.h>
 
 /* esp_err.h does not exist in ESP-IDF; error types are defined in esp_system.h */
 #include "esp_system.h"
@@ -1278,6 +1282,69 @@ static uint16_t svc_read_chip(void) {
 
 static void svc_favorites_changed(void) { settings_touch(); }
 
+/* ---- files on the microSD card, for applets (applet.h) -----------------
+ * Paths are from the card's root; the card is FAT with long names, mounted
+ * at /sd (port/esp32s3/sd_esp32s3.c). Every call checks it is still there. */
+#define CARD_ROOT "/sd"
+
+static bool card_path(char *out, size_t cap, const char *path) {
+    if (!sd_mounted() || !path || strstr(path, "..")) return false;
+    return snprintf(out, cap, CARD_ROOT "/%s", path) < (int)cap;
+}
+
+static long svc_file_size(const char *path) {
+    char p[160];
+    struct stat st;
+    if (!card_path(p, sizeof p, path) || stat(p, &st) != 0 || !S_ISREG(st.st_mode)) return -1;
+    return (long)st.st_size;
+}
+
+static long svc_file_read(const char *path, uint32_t off, void *buf, size_t n) {
+    char p[160];
+    if (!card_path(p, sizeof p, path)) return -1;
+    FILE *f = fopen(p, "rb");
+    if (!f) return -1;
+    long got = -1;
+    if (fseek(f, (long)off, SEEK_SET) == 0) got = (long)fread(buf, 1, n, f);
+    fclose(f);
+    return got;
+}
+
+static bool svc_file_write(const char *path, uint32_t off, const void *buf, size_t n) {
+    char p[160];
+    if (!card_path(p, sizeof p, path)) return false;
+    char *slash = strrchr(p, '/');
+    if (slash && slash > p + sizeof CARD_ROOT - 1) {          /* its directory, if new */
+        *slash = '\0';
+        mkdir(p, 0775);
+        *slash = '/';
+    }
+    FILE *f = fopen(p, off ? "r+b" : "wb");
+    if (!f) return false;
+    bool ok = fseek(f, (long)off, SEEK_SET) == 0 && fwrite(buf, 1, n, f) == n;
+    ok = fclose(f) == 0 && ok;                               /* FAT writes on close */
+    return ok;
+}
+
+static int name_order(const void *a, const void *b) { return strcmp(a, b); }
+
+static size_t svc_file_list(const char *dir, const char *suffix, char names[][APPLET_FILE_NAME], size_t max) {
+    char p[160];
+    if (!card_path(p, sizeof p, dir)) return 0;
+    DIR *d = opendir(p);
+    if (!d) return 0;
+    const size_t sl = strlen(suffix);
+    size_t n = 0;
+    for (struct dirent *e; n < max && (e = readdir(d)) != NULL;) {
+        const size_t l = strlen(e->d_name);
+        if (l < APPLET_FILE_NAME && l >= sl && strcasecmp(e->d_name + l - sl, suffix) == 0)
+            memcpy(names[n++], e->d_name, l + 1);
+    }
+    closedir(d);
+    qsort(names, n, APPLET_FILE_NAME, name_order);
+    return n;
+}
+
 /* ---- the memory agent (rom/agent.c, src/mbagent.h) ----------------------
  *
  * Sent like any program, but carried in the firmware: its logo is borrowed
@@ -2062,7 +2129,21 @@ static app_mode_handler_t s_handlers[HANDLER_COUNT + APPLET_MAX];
 
 void gate_shell_start(uint32_t caps) {
     shell_init(&s_shell, caps);
+    /* The card's files first: an add-on applet is listed only when its file
+     * is on the card (applet_t.needs_file), which the shell asks below. */
+    s_applet_env.file_size  = svc_file_size;
+    s_applet_env.file_read  = svc_file_read;
+    s_applet_env.file_write = svc_file_write;
+    s_applet_env.file_list  = svc_file_list;
+    applet_bind_env(&s_applet_env);
     applet_add_to_shell(&s_shell);   /* applets/applets.def, after the modes */
+    for (uint8_t i = 0; i < applet_count(); i++) {
+        const applet_t *a = applet_at(i);
+        if (a->needs_file) {
+            ESP_LOGI(TAG, "%s: %s", a->name, svc_file_size(a->needs_file) >= 0
+                     ? "on the card, in the menu" : "not on the card");
+        }
+    }
     /*
      * Bind the dispatcher to the handler table. caps is the same mask
      * shell_init() was given, which app_modes.h requires: the menu and the

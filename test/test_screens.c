@@ -860,6 +860,14 @@ static bool fake_gate_linked(void) { return true; }
 
 #include "fake_agent.h"
 
+/* A card with nothing on it, for applets that use files. */
+static long empty_size(const char *p) { (void)p; return -1; }
+static long empty_read(const char *p, uint32_t o, void *b, size_t n) { (void)p; (void)o; (void)b; (void)n; return -1; }
+static bool empty_write(const char *p, uint32_t o, const void *b, size_t n) { (void)p; (void)o; (void)b; (void)n; return false; }
+static size_t empty_list(const char *d, const char *s, char names[][APPLET_FILE_NAME], size_t max) {
+    (void)d; (void)s; (void)names; (void)max; return 0;
+}
+
 static void test_applet_screens(const char *db_path) {
     printf("applets\n");
     FILE *f = db_path ? fopen(db_path, "rb") : NULL;
@@ -876,7 +884,10 @@ static void test_applet_screens(const char *db_path) {
                          .open_db = open_db, .gate_start = fake_gate_start,
                          .gate_send = fake_gate_send, .gate_linked = fake_gate_linked,
                          .confirm = "click", .agent_start = fake_agent_start,
-                         .agent = fake_agent, .agent_stop = fake_agent_stop };
+                         .agent = fake_agent, .agent_stop = fake_agent_stop,
+                         /* an empty card: the Save Tool says what it lacks */
+                         .file_size = empty_size, .file_read = empty_read,
+                         .file_write = empty_write, .file_list = empty_list };
     applet_bind_env(&env);
 
     for (uint8_t i = 0; i < applet_count(); i++) {
