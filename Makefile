@@ -117,6 +117,7 @@ mgba-emerald: mgba-shim
 	@# through the real Celio-Server: needs test/gblink_compat/run.sh's bundle (77: skipped without it)
 	@python3 -I test/mgba/link4_online.py "$(EMERALD_ROM)" $(BUILD)/emerald || [ $$? -eq 77 ]
 	@python3 -I test/mgba/overworld_sync.py "$(EMERALD_ROM)" $(BUILD)/emerald
+	@python3 -I test/mgba/crowd_capacity.py "$(EMERALD_ROM)" $(BUILD)/emerald
 
 # The shared overworld through two emulated adapters: the hybrid touch
 # carrier image on qemu_esp32 (./qemu/accurate.sh build, then the hybrid

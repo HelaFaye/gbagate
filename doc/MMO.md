@@ -415,6 +415,76 @@ and collision ahead of the player, chunk by chunk (Netcode, above), and
 the loader writes them into the map buffer before the player can see
 them.
 
+## Raising the player limit: gba-mmo, and two tiers in Emerald
+
+**What gba-mmo is** (maciel310/gba-mmo, GB-Link/gba-mmo at 7b7e69e;
+maciel310/gba-mmo-server is archived into the former; all GPL-3.0, as
+gbagate is). A homebrew GBA game with its own engine and world, multibooted
+over the cable, and a Node server. The GBA is a Normal-mode 32-bit SIO child.
+Each server message is a `0xBEEF`+length word, a nanopb `ServerUpdate` and a
+`0xDEADBEEF` terminator into a 512-byte buffer. The GBA answers with a
+`PlayerStatus` (position, facing, interaction) of under 30 bytes. Other
+players, NPCs, trees and chests are all `WorldObject`s: an id, x, y, a sprite
+and a size, drawn as plain sprites.
+
+How it scales, from `server/index.mjs` and `server/update_cap.mjs`:
+- a 5 Hz tick;
+- every object on the player's map re-sent in full every tick, with removed
+  ids listed so the GBA can free them;
+- the encoded update capped at 508 bytes, the GBA's buffer: past it,
+  removed ids and then objects are dropped from the end of the list, so
+  beyond roughly 25-30 objects on one map, who disappears is arbitrary;
+- no interest management beyond the map, and no priority by distance.
+
+**What we take from it.**
+- Other players can be drawn as plain sprites, which the game does not
+  otherwise know about. That is how Emerald goes past its object events
+  (below).
+- Object ids are reused, and their removal is announced.
+- Login is a stored token; the server owns warps (its teleporters).
+
+**What we do not take.**
+- Re-sending the whole map every tick, and truncating by bytes. This design
+  sends steps, prioritises the nearest, and tells the GBA only what changed
+  (Netcode).
+- Its engine. gba-mmo is not Emerald and cannot run inside it; what carries
+  over is the shape of the server, not code.
+
+**Two tiers, measured in Emerald** (`test/mgba/crowd_capacity.py`, in
+`make mgba-emerald`). In Littleroot Town, quieted:
+
+| tier | what it is | how many | what it can do |
+|---|---|---|---|
+| 1. object events | `SpawnSpecialObjectEventParameterized`, as `overworld_sync.py` | **15** (16 slots, the player holds one; a map's NPCs take more) | walk, face, collide, be talked to, start a battle or trade |
+| 2. sprite-only figures | `CreateObjectGraphicsSprite` with the same graphics, `coordOffsetEnabled` set so the camera scrolls them | **44 more**, until the game's 64 sprites are all in use | be seen, and animate; the agent moves them itself |
+
+That is **59 other players** on one screen. The game keeps every frame (60
+counted in 60), the player still walks among them, and a sprite-only figure
+stays where it stands in the world: it is drawn 48 px higher after the player
+walks 48 px down. The hardware draws every figure that is on screen (OBJ
+entries in OAM against `gOamLimit`, 64 in the overworld). What runs out is
+sprites, not OAM or tile VRAM.
+
+So the agent shows the nearest 15 or so as object events, the ones you can
+interact with, and the next ones as figures. A figure is promoted to an
+object event when it comes near or a slot frees, and demoted when it leaves.
+
+Still to do:
+- **Headroom.** Weather, field effects (grass, footprints, the surf blob) and
+  menus take sprites too. Leave some, perhaps ten, and count what a map
+  actually uses before choosing the figure budget.
+- **Depth.** A figure is drawn over a roof. It needs the BG priority and
+  subpriority by y that object events get (the object event code's own
+  priority update, or the same arithmetic in the agent).
+- **Walking.** The agent plays a figure's step: `StartSpriteAnim` for the
+  direction and 16 frames of x/y (8 running, 4 on a bike), as the game moves
+  an object event.
+- **The link.** At walking pace, 15 players are about one step a frame,
+  which a word a frame carries (`test_mmo`). 59 are about four. Figures can
+  take a cheaper message than tier 1 -- a 1-byte index and 2 bits of
+  direction, or position snapshots every few frames -- or the agent takes
+  more words a frame. Measure it in the scale test below before choosing.
+
 ## How many players in sight: the scale test
 
 Once the player limit is raised and the link protocol changed, the question
