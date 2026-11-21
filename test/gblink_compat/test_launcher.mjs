@@ -28,8 +28,10 @@ const LAUNCHER = path.join(SRC, 'gblink-launcher');
 const CHROMIUM = process.env.CHROMIUM || '/opt/pw-browsers/chromium';
 
 // GBLINK_NO_SKIP (set in CI): a test that cannot run is a failure.
-const skip = (why) => {
-  const required = !!process.env.GBLINK_NO_SKIP;
+// The private launcher mirror alone may be absent while its token is unavailable.
+const skip = (why, launcherUnavailable = false) => {
+  const optional = launcherUnavailable && !!process.env.GBLINK_LAUNCHER_OPTIONAL;
+  const required = !!process.env.GBLINK_NO_SKIP && !optional;
   console.log(`launcher            ${required ? 'FAILED: required, but' : 'skipped:'} ${why}`);
   process.exit(required ? 1 : 0);
 };
@@ -40,7 +42,7 @@ try {
   skip('playwright-core not installed');
 }
 if (!fs.existsSync(CHROMIUM)) skip(`no Chromium at ${CHROMIUM} (set CHROMIUM)`);
-if (!fs.existsSync(path.join(LAUNCHER, 'index.html'))) skip('no gblink-launcher checkout');
+if (!fs.existsSync(path.join(LAUNCHER, 'index.html'))) skip('no gblink-launcher checkout', true);
 
 /** A worktree of the launcher at upstream's head, optionally with our patches. */
 function tree(name, patched) {

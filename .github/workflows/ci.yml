@@ -18,7 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 # A test that cannot run (no librfu, no browser) fails here instead of
-# passing as a skip.
+# passing as a skip. The private launcher mirror has a narrow, explicit
+# optional mode below while its access token is unavailable.
 env:
   GBLINK_NO_SKIP: '1'
 
@@ -88,8 +89,9 @@ jobs:
       - run: make gblink-asan
 
   compat:
-    # GB-Link's netplay bridge, Celio, the web apps, the launcher (in Chrome)
-    # and GB-Link-Switch-LDN's link task, at the commits run.sh pins.
+    # GB-Link's netplay bridge, Celio, the web apps, the launcher (in Chrome
+    # when its private mirror is available) and GB-Link-Switch-LDN's link
+    # task, at the commits run.sh pins.
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
@@ -118,6 +120,7 @@ jobs:
           # read access to the private launcher mirror (run.sh); empty in a
           # fork's pull request, where only the launcher test then fails
           GBLINK_LAUNCHER_TOKEN: ${{ secrets.GBLINK_LAUNCHER_TOKEN }}
+          GBLINK_LAUNCHER_OPTIONAL: '1'
 
   compat-heads:
     # The same against GB-Link's current heads, weekly: says when upstream
@@ -149,6 +152,7 @@ jobs:
           # read access to the private launcher mirror (run.sh); empty in a
           # fork's pull request, where only the launcher test then fails
           GBLINK_LAUNCHER_TOKEN: ${{ secrets.GBLINK_LAUNCHER_TOKEN }}
+          GBLINK_LAUNCHER_OPTIONAL: '1'
           GBLINK_COMPAT_HEADS: '1'
 
   hardware:
