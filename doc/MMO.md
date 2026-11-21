@@ -515,6 +515,8 @@ the devkit, the ST7735.
 
 qemu/README.md lists the bugs this has found.
 
+The current pin is `14147077e6a2961a0e92013948186252ea794720`. Since `662e627`, QEMU adds the ICM-45686 model correction (patch 0027): 20-bit gyro sensitivity scaling and FIFO data becoming available from power-up. Its SlimeVR SuperMini test verifies two sensors' calibration and rotation independently. The gbagate carrier-touch and devkit integration checks are rerun against this pin by CI.
+
 **Still needed before the test can run.** First, from the emulator (watch
 the fork for these):
 - A GBA on the link pins: a device on SC, SD, SI and SO, wired with
