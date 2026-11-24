@@ -119,6 +119,16 @@ Not yet tested:
 ## With PKHeX
 
 PKHeX opens a `.sav` as it is: it needs no plugin to edit what this tool
-backs up. A PKHeX plugin that talks to the board directly (back up, open,
-save, restore without moving files) is the next step, in
-HelaFaye/PKHeX-GBA-Multiboot.
+backs up.
+
+To edit without a computer, there is an editor on the GBA itself:
+HelaFaye/pkhex-gba-multiboot, `gba/` (branch `gba-editor`).
+- Put its `editor.mb` on the card, and send it with **Send Program**, with
+  the cartridge in.
+- It shows the trainer, the party and the boxes. It edits nicknames,
+  levels, items, moves, IVs and EVs.
+- It writes the save back the way the game does, into the slot the game
+  did not load last, and reads it back to check.
+- It is tested on Emerald in mGBA, not yet on a real GBA.
+
+Back the save up with this tool first.
