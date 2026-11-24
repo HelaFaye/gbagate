@@ -28,9 +28,13 @@ const LAUNCHER = path.join(SRC, 'gblink-launcher');
 const CHROMIUM = process.env.CHROMIUM || '/opt/pw-browsers/chromium';
 
 // GBLINK_NO_SKIP (set in CI): a test that cannot run is a failure.
-// The private launcher mirror alone may be absent while its token is unavailable.
+// The private launcher mirror alone may be absent while its token is unavailable:
+// only then. With a token, a missing checkout means the clone failed (an expired
+// or revoked token, a renamed mirror), and that must stay a failure, or CI would
+// go green with the launcher untested for as long as nobody looks.
 const skip = (why, launcherUnavailable = false) => {
-  const optional = launcherUnavailable && !!process.env.GBLINK_LAUNCHER_OPTIONAL;
+  const optional = launcherUnavailable && !!process.env.GBLINK_LAUNCHER_OPTIONAL &&
+    !process.env.GBLINK_LAUNCHER_TOKEN;
   const required = !!process.env.GBLINK_NO_SKIP && !optional;
   console.log(`launcher            ${required ? 'FAILED: required, but' : 'skipped:'} ${why}`);
   process.exit(required ? 1 : 0);

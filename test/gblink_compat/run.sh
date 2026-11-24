@@ -36,8 +36,9 @@ GB-Link-Switch-LDN    37c693b7f7689d8812a06e54018b5468ed4d8075
 # copy of upstream's 94b9a95, cloned with GBLINK_LAUNCHER_TOKEN (a read
 # token; CI's secret of that name), and tested at the mirror's head (HEAD).
 # Without the token only the launcher is missing. test_launcher.mjs reports
-# that as an optional skip when GBLINK_LAUNCHER_OPTIONAL=1 (CI); without that
-# opt-out it remains required under GBLINK_NO_SKIP.
+# that as an optional skip when GBLINK_LAUNCHER_OPTIONAL=1 (CI) and no token is
+# set; without that opt-out, or with a token whose clone failed, it remains
+# required under GBLINK_NO_SKIP.
 #
 # Celio is Celio-Link's: GB-Link/Celio-Server is a fork that stopped at
 # 9f02d3e (2026-06-17), before upstream answered the client's acks (Oct 3-6).
