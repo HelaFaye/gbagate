@@ -83,7 +83,7 @@ SUITES := chipgate link bridge hw ui chipdb encoder panel slot chipview \
           render multiboot catalog variant menu mbe2e mcp romview settings uiset ir input controls board modes frame usbdesc peer screens applets events wificfg json celio mbagent mprelay mpbus mponline gbprinter printer_mode touchpad mmo radio_mode rfu_rf save_tool
 
 .PHONY: all strict lint clean chipdb gblink gblink-asan compat screens agent-emu agent-image mgba-shim mgba-emerald mmo-adapter
-all: $(addprefix run-,$(SUITES)) gblink agent-emu rfu-capture-test
+all: $(addprefix run-,$(SUITES)) gblink agent-emu rfu-capture-test rmt-link-host
 	@./qemu/lint.sh
 
 # The memory agent's compiled image (rom/agent.mb, what the board sends) on
@@ -344,3 +344,12 @@ rfu-rf-analyze: | $(BUILD)
 rfu-capture-test: rfu-rf-analyze
 	@python3 test/test_rfu_capture.py $(BUILD)/rfu_rf_analyze
 .PHONY: rfu-rf-analyze rfu-capture-test
+
+# The RMT link test firmware's host half (hw-test/rmt_link): its waveforms and
+# decoders, and the logic analyzer check, without the board.
+rmt-link-host: | $(BUILD)
+	$(CC) -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Ihw-test/rmt_link/main \
+	    -o $(BUILD)/test_rmt_link hw-test/rmt_link/test/test_codec.c hw-test/rmt_link/main/rl_codec.c
+	$(BUILD)/test_rmt_link
+	python3 -I hw-test/rmt_link/test/test_la_check.py
+.PHONY: rmt-link-host
